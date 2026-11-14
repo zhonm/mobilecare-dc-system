@@ -186,16 +186,17 @@ export default function FixablyInventoryDashboard({
 
   // 2. 3-Slot File Ingestion State (User Uploads Only)
   const [slots, setSlots] = useState({
-    site_stock: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, validationDetails: null },
-    kgb_used: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, validationDetails: null },
-    stock_transfer: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, validationDetails: null }
+    site_stock: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, validationDetails: null, updatedAt: null, pendingUpload: false },
+    kgb_used: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, validationDetails: null, updatedAt: null, pendingUpload: false },
+    stock_transfer: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, validationDetails: null, updatedAt: null, pendingUpload: false }
   });
   const [activeSlotDrag, setActiveSlotDrag] = useState(null);
 
-  // Hidden file inputs for each of the 3 slots
+  // Hidden file inputs for each of the 3 slots + multi-file picker
   const siteStockInputRef = useRef(null);
   const kgbInputRef = useRef(null);
   const stockTransferInputRef = useRef(null);
+  const multiFileInputRef = useRef(null);
 
   // 3. All Stocks Master Table Filters
   const [masterSearch, setMasterSearch] = useState('');
@@ -1048,7 +1049,95 @@ export default function FixablyInventoryDashboard({
     sites
   ]);
 
-  // Handle slot file assignment, validation, persistent storage, and real-time auto-reconciliation
+  // Handle multiple files selected or dropped simultaneously across slots
+  const handleMultipleFiles = async (fileList) => {
+    if (!fileList || fileList.length === 0) return;
+    const files = Array.from(fileList);
+    const assignedSlots = {};
+    const unassignedFiles = [];
+    const errors = [];
+
+    for (const file of files) {
+      try {
+        let textContent = await extractTextContent(file, null);
+        let validation = await validateFixablyFile(textContent, null);
+
+        // Fallback to filename hints if content-based auto-detection needs help (e.g., custom workbook headers)
+        if (!validation.valid || !validation.detectedType) {
+          const lowerName = (file.name || '').toLowerCase();
+          let fallbackType = null;
+          if (lowerName.includes('transfer')) fallbackType = 'stock_transfer';
+          else if (lowerName.includes('kgb')) fallbackType = 'kgb_used';
+          else if (lowerName.includes('site') || lowerName.includes('stock') || lowerName.includes('output')) fallbackType = 'site_stock';
+
+          if (fallbackType) {
+            textContent = await extractTextContent(file, fallbackType);
+            validation = await validateFixablyFile(textContent, fallbackType);
+          }
+        }
+
+        if (!validation.valid || !validation.detectedType) {
+          unassignedFiles.push({ file, error: validation.error || 'Unrecognized Fixably file structure' });
+          continue;
+        }
+
+        const slotKey = validation.detectedType;
+        const nowIso = new Date().toISOString();
+        const slotData = {
+          name: file.name,
+          size: file.size,
+          rowCount: validation.rowCount,
+          valid: true,
+          error: null,
+          validationDetails: validation.validationDetails || null,
+          content: textContent,
+          updatedAt: nowIso,
+          pendingUpload: true
+        };
+
+        assignedSlots[slotKey] = {
+          ...slotData,
+          file
+        };
+
+        // Persist slot data to IndexedDB so selection survives accidental refresh
+        await dbStorage.setItem('mdc_uploaded_slot_' + slotKey, slotData);
+        try {
+          localStorage.setItem('mdc_uploaded_slot_' + slotKey + '_ts', nowIso);
+        } catch (_) {}
+      } catch (err) {
+        errors.push(`${file.name}: ${err.message}`);
+      }
+    }
+
+    if (Object.keys(assignedSlots).length > 0) {
+      setSlots(prev => ({
+        ...prev,
+        ...assignedSlots
+      }));
+
+      const count = Object.keys(assignedSlots).length;
+      const slotLabels = Object.keys(assignedSlots).map(k => {
+        if (k === 'site_stock') return 'Slot 1: Site Stocks';
+        if (k === 'kgb_used') return 'Slot 2: GSX KGB Used';
+        if (k === 'stock_transfer') return 'Slot 3: Stock Transfers';
+        return k;
+      }).join(', ');
+
+      showToast?.(`Selected and verified ${count} file${count === 1 ? '' : 's'} (${slotLabels}). Click "Upload" to start processing.`, 'success');
+    }
+
+    if (unassignedFiles.length > 0) {
+      const errNames = unassignedFiles.map(u => `${u.file.name} (${u.error})`).join('; ');
+      showToast?.(`Could not match ${unassignedFiles.length} file(s): ${errNames}`, 'warning');
+    }
+
+    if (errors.length > 0) {
+      showToast?.(`Error validating files: ${errors.join(', ')}`, 'error');
+    }
+  };
+
+  // Handle slot file assignment and validation without automatically processing immediately
   const handleSlotFileChange = async (slotKey, file) => {
     if (!file) return;
     try {
@@ -1066,7 +1155,8 @@ export default function FixablyInventoryDashboard({
             error: validation.error,
             validationDetails: null,
             content: null,
-            updatedAt: null
+            updatedAt: null,
+            pendingUpload: false
           }
         }));
         await appendActivityLog({
@@ -1090,7 +1180,8 @@ export default function FixablyInventoryDashboard({
         error: null,
         validationDetails: validation.validationDetails || null,
         content: textContent,
-        updatedAt: nowIso
+        updatedAt: nowIso,
+        pendingUpload: true
       };
 
       const nextSlots = {
@@ -1109,48 +1200,9 @@ export default function FixablyInventoryDashboard({
         localStorage.setItem('mdc_uploaded_slot_' + slotKey + '_ts', nowIso);
       } catch (_) {}
 
-      // Realtime cross-module broadcast to FIFO & DC Aging Stocks Audit
-      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-        try {
-          const bc = new BroadcastChannel('mdc_fifo_audit_sync');
-          bc.postMessage({ type: 'FIFO_AUDIT_UPDATED', slotKey, updatedAt: nowIso });
-          bc.close();
-        } catch (_) {}
-      }
-      if (typeof broadcastCloudEvent === 'function') {
-        broadcastCloudEvent('FIFO_AUDIT_UPDATED', { slotKey, updatedAt: nowIso });
-      }
-
       const vDetails = validation.validationDetails;
       const warnSuffix = vDetails?.warnings?.length ? ` (${vDetails.warnings.join(' ')})` : '';
-      await appendActivityLog({
-        actionType: `FILE_UPLOADED (${slotKey.toUpperCase()})`,
-        status: vDetails?.warnings?.length ? 'WARNING' : 'SUCCESS',
-        fileName: file.name,
-        fileSize: file.size,
-        summary: `Uploaded & validated ${file.name}: ${validation.rowCount.toLocaleString()} valid records${vDetails?.siteToSiteCount ? `, ${vDetails.siteToSiteCount.toLocaleString()} site-to-site transfers` : ''}.${warnSuffix}`,
-        affectedRecords: validation.rowCount,
-        siteToSiteCount: vDetails?.siteToSiteCount || 0,
-        validationSummary: vDetails || null
-      });
-
-      showToast?.(`Verified & saved ${file.name} (${validation.rowCount.toLocaleString()} rows)${warnSuffix}`, 'success');
-
-      // Automatically process and sync in real time whenever Site Stock or Stock Transfer is uploaded!
-      const effectiveSiteStockText =
-        nextSlots.site_stock?.content ||
-        (snapshot?.items?.length > 0 ? serializeSnapshotItemsToCsv(snapshot.items) : null);
-
-      if (effectiveSiteStockText) {
-        await executeReconciliationAndSync({
-          siteStockText: effectiveSiteStockText,
-          kgbText: nextSlots.kgb_used?.content || null,
-          transferText: nextSlots.stock_transfer?.content || null,
-          sourceLabel: `Auto-Sync on ${slotKey === 'stock_transfer' ? 'Stock Transfer' : slotKey === 'site_stock' ? 'Site Stock' : 'KGB Used'} Upload`,
-          uploadedFileName: file.name,
-          closeDropzoneOnSuccess: false
-        });
-      }
+      showToast?.(`Selected & verified ${file.name} (${validation.rowCount.toLocaleString()} rows)${warnSuffix}. Click "Upload" to process.`, 'success');
     } catch (err) {
       setSlots(prev => ({
         ...prev,
@@ -1163,7 +1215,8 @@ export default function FixablyInventoryDashboard({
           error: err.message,
           validationDetails: null,
           content: null,
-          updatedAt: null
+          updatedAt: null,
+          pendingUpload: false
         }
       }));
       await appendActivityLog({
@@ -1190,11 +1243,16 @@ export default function FixablyInventoryDashboard({
         valid: false,
         error: null,
         content: null,
-        updatedAt: null
+        validationDetails: null,
+        updatedAt: null,
+        pendingUpload: false
       }
     }));
     try {
       await dbStorage.removeItem('mdc_uploaded_slot_' + slotKey);
+      try {
+        localStorage.removeItem('mdc_uploaded_slot_' + slotKey + '_ts');
+      } catch (_) {}
       if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
         try {
           const bc = new BroadcastChannel('mdc_fifo_audit_sync');
@@ -1208,9 +1266,9 @@ export default function FixablyInventoryDashboard({
   // Clear all slots from state and IndexedDB
   const handleClearAllSlots = async () => {
     setSlots({
-      site_stock: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, updatedAt: null },
-      kgb_used: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, updatedAt: null },
-      stock_transfer: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, updatedAt: null }
+      site_stock: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, validationDetails: null, updatedAt: null, pendingUpload: false },
+      kgb_used: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, validationDetails: null, updatedAt: null, pendingUpload: false },
+      stock_transfer: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, validationDetails: null, updatedAt: null, pendingUpload: false }
     });
     try {
       await Promise.all([
@@ -1218,6 +1276,11 @@ export default function FixablyInventoryDashboard({
         dbStorage.removeItem('mdc_uploaded_slot_kgb_used'),
         dbStorage.removeItem('mdc_uploaded_slot_stock_transfer')
       ]);
+      try {
+        localStorage.removeItem('mdc_uploaded_slot_site_stock_ts');
+        localStorage.removeItem('mdc_uploaded_slot_kgb_used_ts');
+        localStorage.removeItem('mdc_uploaded_slot_stock_transfer_ts');
+      } catch (_) {}
       if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
         try {
           const bc = new BroadcastChannel('mdc_fifo_audit_sync');
@@ -1296,7 +1359,7 @@ export default function FixablyInventoryDashboard({
     }
   };
 
-  // Process & Reconcile Multi-File Sync
+  // Process & Reconcile Multi-File Upload when user clicks the "Upload" button
   const handleProcessMultiFile = async () => {
     const effectiveSiteStock =
       slots.site_stock.file ||
@@ -1312,14 +1375,76 @@ export default function FixablyInventoryDashboard({
       return;
     }
 
+    const nowIso = new Date().toISOString();
+    const activeSlots = ['site_stock', 'kgb_used', 'stock_transfer'];
+    const uploadedNames = [];
+
+    // Persist and log activity for all valid slots being uploaded
+    for (const key of activeSlots) {
+      const s = slots[key];
+      if (s?.valid && s?.content) {
+        uploadedNames.push(s.name);
+        const slotData = {
+          name: s.name,
+          size: s.size,
+          rowCount: s.rowCount,
+          valid: true,
+          error: null,
+          validationDetails: s.validationDetails || null,
+          content: s.content,
+          updatedAt: nowIso
+        };
+        await dbStorage.setItem('mdc_uploaded_slot_' + key, slotData);
+        try {
+          localStorage.setItem('mdc_uploaded_slot_' + key + '_ts', nowIso);
+        } catch (_) {}
+
+        // Broadcast cross-module update for stock transfers if present
+        if (key === 'stock_transfer') {
+          if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+            try {
+              const bc = new BroadcastChannel('mdc_fifo_audit_sync');
+              bc.postMessage({ type: 'FIFO_AUDIT_UPDATED', slotKey: key, updatedAt: nowIso });
+              bc.close();
+            } catch (_) {}
+          }
+          if (typeof broadcastCloudEvent === 'function') {
+            broadcastCloudEvent('FIFO_AUDIT_UPDATED', { slotKey: key, updatedAt: nowIso });
+          }
+        }
+
+        const vDetails = s.validationDetails;
+        const warnSuffix = vDetails?.warnings?.length ? ` (${vDetails.warnings.join(' ')})` : '';
+        await appendActivityLog({
+          actionType: `FILE_UPLOADED (${key.toUpperCase()})`,
+          status: vDetails?.warnings?.length ? 'WARNING' : 'SUCCESS',
+          fileName: s.name,
+          fileSize: s.size,
+          summary: `Uploaded & validated ${s.name}: ${s.rowCount.toLocaleString()} valid records${vDetails?.siteToSiteCount ? `, ${vDetails.siteToSiteCount.toLocaleString()} site-to-site transfers` : ''}.${warnSuffix}`,
+          affectedRecords: s.rowCount,
+          siteToSiteCount: vDetails?.siteToSiteCount || 0,
+          validationSummary: vDetails || null
+        });
+      }
+    }
+
+    const uploadedFileName = uploadedNames.join(', ') || 'Multi-File Upload';
+
     await executeReconciliationAndSync({
       siteStockText: effectiveSiteStock,
       kgbText: slots.kgb_used.file || slots.kgb_used.content || null,
       transferText: slots.stock_transfer.file || slots.stock_transfer.content || null,
-      sourceLabel: 'Manual Multi-File Reconciliation',
-      uploadedFileName: slots.stock_transfer?.name || slots.site_stock?.name || 'Multi-File Upload',
-      closeDropzoneOnSuccess: true
+      sourceLabel: `Admin Multi-File Upload & Reconciliation (${uploadedNames.length} file${uploadedNames.length === 1 ? '' : 's'})`,
+      uploadedFileName,
+      closeDropzoneOnSuccess: false
     });
+
+    // Clear pendingUpload flags on slots
+    setSlots(prev => ({
+      site_stock: { ...prev.site_stock, pendingUpload: false },
+      kgb_used: { ...prev.kgb_used, pendingUpload: false },
+      stock_transfer: { ...prev.stock_transfer, pendingUpload: false }
+    }));
   };
 
   // Drag and drop helper for individual slots
@@ -1341,9 +1466,20 @@ export default function FixablyInventoryDashboard({
     setActiveSlotDrag(null);
     const files = e.dataTransfer.files;
     if (files && files.length > 0) {
-      handleSlotFileChange(slotKey, files[0]);
+      if (files.length > 1) {
+        handleMultipleFiles(files);
+      } else {
+        handleSlotFileChange(slotKey, files[0]);
+      }
     }
   };
+
+  // Number of valid files currently loaded or staged across the 3 slots
+  const selectedFilesCount = useMemo(() => {
+    return ['site_stock', 'kgb_used', 'stock_transfer'].filter(
+      k => slots[k]?.valid && (slots[k]?.content || slots[k]?.file)
+    ).length;
+  }, [slots]);
 
   // Filtered Master Items for All Stocks Page
   const filteredMasterItems = useMemo(() => {
@@ -2231,15 +2367,47 @@ export default function FixablyInventoryDashboard({
       {isDropzoneOpen && (
         <div
           className="card"
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setActiveSlotDrag('all');
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setActiveSlotDrag(null);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setActiveSlotDrag(null);
+            const files = e.dataTransfer?.files;
+            if (files && files.length > 0) {
+              handleMultipleFiles(files);
+            }
+          }}
           style={{
             padding: '24px',
             background: '#ffffff',
-            border: '2px solid #0284c7',
+            border: activeSlotDrag === 'all' ? '2px dashed #0284c7' : '2px solid #0284c7',
             borderRadius: '12px',
             boxShadow: '0 8px 24px rgba(2, 132, 199, 0.12)'
           }}
         >
           {/* Hidden file inputs */}
+          <input
+            type="file"
+            ref={multiFileInputRef}
+            multiple
+            onChange={(e) => {
+              if (e.target.files && e.target.files.length > 0) {
+                handleMultipleFiles(e.target.files);
+              }
+              e.target.value = '';
+            }}
+            accept=".csv,.xlsx,.xls,.txt"
+            style={{ display: 'none' }}
+          />
           <input
             type="file"
             ref={siteStockInputRef}
@@ -2272,7 +2440,7 @@ export default function FixablyInventoryDashboard({
           />
 
           {/* Header of Upload Center */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #e2e8f0', paddingBottom: '14px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #e2e8f0', paddingBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <div style={{ width: '38px', height: '38px', borderRadius: '8px', background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <UploadCloud size={22} color="#0284c7" />
@@ -2282,18 +2450,43 @@ export default function FixablyInventoryDashboard({
                   Unified Fixably Multi-File Ingestion Center
                 </h3>
                 <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
-                  Select or drop CSV / XLSX export files to automatically validate, reconcile branch inventory, and sync stock transfers in real time.
+                  Select multiple files first or drop into slots below, then click "Upload" to upload and process all selected files at once.
                 </div>
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setIsDropzoneOpen(false)}
-              style={{ border: 'none', background: '#f1f5f9', borderRadius: '50%', width: '30px', height: '30px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}
-            >
-              <X size={16} />
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => multiFileInputRef.current?.click()}
+                disabled={isParsing}
+                className="btn btn-secondary"
+                style={{
+                  fontSize: '12px',
+                  padding: '6px 14px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontWeight: 700,
+                  color: '#0284c7',
+                  borderColor: '#bae6fd',
+                  background: '#f0f9ff',
+                  cursor: 'pointer'
+                }}
+                title="Select multiple files (Site Stocks, GSX KGB, Stock Transfers) simultaneously"
+              >
+                <UploadCloud size={14} color="#0284c7" />
+                <span>Select Multiple Files</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsDropzoneOpen(false)}
+                style={{ border: 'none', background: '#f1f5f9', borderRadius: '50%', width: '30px', height: '30px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}
+              >
+                <X size={16} />
+              </button>
+            </div>
           </div>
 
           {/* The 3 Drop Slots Grid */}
@@ -2346,7 +2539,9 @@ export default function FixablyInventoryDashboard({
                         </div>
                         <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
                           {formatFileSize(slots.site_stock.size)} • {slots.site_stock.rowCount.toLocaleString()} inventory units
-                          {slots.site_stock.updatedAt && (
+                          {slots.site_stock.pendingUpload ? (
+                            <span style={{ color: '#0284c7', fontWeight: 700 }}> • Ready for upload</span>
+                          ) : slots.site_stock.updatedAt && (
                             <span style={{ color: '#047857', fontWeight: 600 }}> • Saved {new Date(slots.site_stock.updatedAt).toLocaleDateString()}</span>
                           )}
                         </div>
@@ -2483,7 +2678,9 @@ export default function FixablyInventoryDashboard({
                         </div>
                         <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
                           {formatFileSize(slots.kgb_used.size)} • {slots.kgb_used.rowCount.toLocaleString()} repair log rows
-                          {slots.kgb_used.updatedAt && (
+                          {slots.kgb_used.pendingUpload ? (
+                            <span style={{ color: '#0284c7', fontWeight: 700 }}> • Ready for upload</span>
+                          ) : slots.kgb_used.updatedAt && (
                             <span style={{ color: '#047857', fontWeight: 600 }}> • Saved {new Date(slots.kgb_used.updatedAt).toLocaleDateString()}</span>
                           )}
                         </div>
@@ -2649,7 +2846,9 @@ export default function FixablyInventoryDashboard({
                         </div>
                         <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
                           {formatFileSize(slots.stock_transfer.size)} • {slots.stock_transfer.rowCount.toLocaleString()} transfer records
-                          {slots.stock_transfer.updatedAt && (
+                          {slots.stock_transfer.pendingUpload ? (
+                            <span style={{ color: '#0284c7', fontWeight: 700 }}> • Ready for upload</span>
+                          ) : slots.stock_transfer.updatedAt && (
                             <span style={{ color: '#047857', fontWeight: 600 }}> • Saved {new Date(slots.stock_transfer.updatedAt).toLocaleDateString()}</span>
                           )}
                         </div>
@@ -2788,7 +2987,7 @@ export default function FixablyInventoryDashboard({
                 type="button"
                 className="btn btn-primary"
                 onClick={handleProcessMultiFile}
-                disabled={isParsing || !slots.site_stock.valid || Boolean(slots.site_stock.error)}
+                disabled={isParsing || (!slots.site_stock.valid && !slots.site_stock.content && !snapshot?.items?.length) || Boolean(slots.site_stock.error)}
                 style={{
                   padding: '9px 24px',
                   fontSize: '13.5px',
@@ -2806,8 +3005,14 @@ export default function FixablyInventoryDashboard({
                   </>
                 ) : (
                   <>
-                    <Zap size={15} />
-                    <span>Process &amp; Sync Inventory</span>
+                    <UploadCloud size={16} />
+                    <span>
+                      {selectedFilesCount > 1
+                        ? `Upload & Process (${selectedFilesCount} Files)`
+                        : selectedFilesCount === 1
+                          ? 'Upload & Process File'
+                          : 'Upload & Sync Inventory'}
+                    </span>
                   </>
                 )}
               </button>
