@@ -80,8 +80,7 @@ export function useInventory({
   const [isInventoryLoaded, setIsInventoryLoaded] = useState(() => {
     try {
       if (isExplicitlyCleared()) return true;
-      const parsed = readInventoryFromLocalStorage();
-      if (Array.isArray(parsed) && parsed.length > 0) return true;
+      return inventoryUnits.length > 0;
     } catch (e) {}
     return false;
   });
@@ -155,7 +154,9 @@ export function useInventory({
         });
 
         const mergedUnits = Array.from(map.values());
-        saveInventoryToLocalStorage(mergedUnits);
+        if (mergedUnits.length !== prev.length) {
+          setTimeout(() => saveInventoryToLocalStorage(mergedUnits), 0);
+        }
         return mergedUnits;
       });
       setIsInventoryLoaded(true);

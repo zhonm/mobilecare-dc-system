@@ -68,24 +68,48 @@ function MainApp() {
     setIsCommandPaletteOpen
   } = useApp();
 
-  // Preload core operational route chunks in the background after authentication
-  // so tab transitions (Receive Scan-In, Pack Scan-Out, Shipments, etc.) render without delay.
+  // Preload core operational route chunks in a staggered background queue after authentication
+  // so tab transitions stay fast without saturating the main thread right after a page refresh.
   useEffect(() => {
     if (!currentUser?.id || isInitialSyncing) return;
-    const preloadCoreModules = () => {
-      import('./components/ScanInReceiving').catch(() => {});
-      import('./components/ScanOutPacking').catch(() => {});
-      import('./components/Shipments').catch(() => {});
-      import('./components/RequestParts').catch(() => {});
-      import('./components/SiteTransfersFifoReport').catch(() => {});
-      import('./components/DcStockMonitoring').catch(() => {});
+    let cancelled = false;
+    const loaders = [
+      () => import('./components/ScanInReceiving').catch(() => {}),
+      () => import('./components/ScanOutPacking').catch(() => {}),
+      () => import('./components/Shipments').catch(() => {}),
+      () => import('./components/RequestParts').catch(() => {}),
+      () => import('./components/SiteTransfersFifoReport').catch(() => {}),
+      () => import('./components/DcStockMonitoring').catch(() => {})
+    ];
+    let idx = 0;
+    let timerId = null;
+    let idleId = null;
+
+    const scheduleNext = (delayMs) => {
+      if (cancelled || idx >= loaders.length) return;
+      timerId = setTimeout(() => {
+        if (cancelled || idx >= loaders.length) return;
+        const run = () => {
+          if (cancelled || idx >= loaders.length) return;
+          loaders[idx++]();
+          scheduleNext(900);
+        };
+        if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+          idleId = window.requestIdleCallback(run, { timeout: 2000 });
+        } else {
+          run();
+        }
+      }, delayMs);
     };
-    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
-      const idleId = window.requestIdleCallback(preloadCoreModules, { timeout: 2500 });
-      return () => window.cancelIdleCallback(idleId);
-    }
-    const timer = setTimeout(preloadCoreModules, 1200);
-    return () => clearTimeout(timer);
+
+    scheduleNext(2000);
+    return () => {
+      cancelled = true;
+      if (timerId) clearTimeout(timerId);
+      if (idleId && typeof window !== 'undefined' && 'cancelIdleCallback' in window) {
+        window.cancelIdleCallback(idleId);
+      }
+    };
   }, [currentUser?.id, isInitialSyncing]);
 
   // 1. Auth Guard: Show CreatePassword or Login if not authenticated or password not set

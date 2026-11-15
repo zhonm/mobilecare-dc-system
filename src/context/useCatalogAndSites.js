@@ -10,7 +10,6 @@ import {
 } from '../utils/categoryFilter.js';
 import { resolveSafeRegion } from '../constants/config.js';
 import { OFFICIAL_BRANCH_DIRECTORY, enrichSiteWithDirectory } from '../constants/branchDirectory.js';
-import gsxPartsCatalogSeed from '../data/gsxPartsCatalog.json' with { type: 'json' };
 import { importGsxCatalogFromCsv, mergeGsxPartsIntoCatalog } from '../utils/gsxCatalogImporter.js';
 
 export const DEFAULT_SUPERVISOR_SETTINGS = {
@@ -205,81 +204,142 @@ export function useCatalogAndSites({
   const [parts, setParts] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_parts');
-      const parsed = saved ? JSON.parse(saved) : [];
-      let activeCats = DEFAULT_PART_CATEGORIES;
-      try {
-        const rawCats = localStorage.getItem('mdc_categories');
-        if (rawCats) activeCats = JSON.parse(rawCats);
-      } catch (e) {}
-
-      const normalizedSaved = (Array.isArray(parsed) ? parsed : []).map(p => {
-        const cleanPrice = parseFloat(p.stocking_price) > 0 ? parseFloat(p.stocking_price) : 99;
-        const { exchange_price: _exchangePrice, ...rest } = p;
-        const correctCatId = resolvePartCategoryId(p, activeCats);
-        return {
-          ...rest,
-          stocking_price: cleanPrice,
-          category_id: correctCatId
-        };
-      });
-
-      const seedParts = Array.isArray(gsxPartsCatalogSeed?.parts) ? gsxPartsCatalogSeed.parts : [];
-      return mergeGsxPartsIntoCatalog(normalizedSaved, seedParts, activeCats).merged;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+      return [];
     } catch {
-      const seedParts = Array.isArray(gsxPartsCatalogSeed?.parts) ? gsxPartsCatalogSeed.parts : [];
-      return mergeGsxPartsIntoCatalog([], seedParts, DEFAULT_PART_CATEGORIES).merged;
+      return [];
     }
   });
 
-  // Auto-heal part categories if any are misassigned to Battery
+  // Lazily hydrate & merge GSX Parts Catalog seed in the background so the 2.7MB JSON never blocks initial page refresh
+  const hasAttemptedGsxSeedMergeRef = useRef(false);
   useEffect(() => {
-    if (!parts || parts.length === 0) return;
-    let hasMismatches = false;
-    const changedIndexes = new Set();
-    const healed = parts.map((p, idx) => {
-      const genuineCode = getPartCategory(p);
-      const currentCat = categories.find(c => c.id === p.category_id);
-      const currentCode = currentCat ? String(currentCat.code || '').toUpperCase() : '';
-
-      if (currentCode !== genuineCode && !(genuineCode === 'OTHER' && (currentCode === 'GEN' || currentCode === 'ACC'))) {
-        hasMismatches = true;
-        changedIndexes.add(idx);
-        const targetCatId = resolvePartCategoryId(p, categories);
-        return { ...p, category_id: targetCatId };
-      }
-      return p;
-    });
-
-    if (hasMismatches) {
-      setParts(healed);
-      try { localStorage.setItem('mdc_parts', JSON.stringify(healed)); } catch (e) {}
-      dbStorage.setItem('mdc_parts', healed);
-
-      if (supabase) {
-        (async () => {
-          let liveDbCats = [];
-          try {
-            const { data } = await supabase.from('part_categories').select('id, code');
-            if (data && data.length > 0) liveDbCats = data;
-          } catch (e) {}
-
-          const updates = healed
-            .filter((p, idx) => p.part_number && changedIndexes.has(idx))
-            .map(p => {
-              const catUuid = resolvePartCategoryUUID(p, liveDbCats.length > 0 ? liveDbCats : categories);
-              return {
-                part_number: p.part_number,
-                ...(catUuid && isUUID(catUuid) ? { category_id: catUuid } : {})
-              };
-            });
-
-          for (let i = 0; i < updates.length; i += 50) {
-            const chunk = updates.slice(i, i + 50);
-            await supabase.from('parts').upsert(chunk, { onConflict: 'part_number' }).catch(() => {});
-          }
-        })();
-      }
+    if (hasAttemptedGsxSeedMergeRef.current) return;
+    let alreadyMerged = false;
+    try {
+      alreadyMerged = localStorage.getItem('mdc_gsx_seed_merged_v1') === '1' && parts.length > 0;
+    } catch {
+      // Ignore storage access errors
     }
+    if (alreadyMerged) {
+      hasAttemptedGsxSeedMergeRef.current = true;
+      return;
+    }
+
+    hasAttemptedGsxSeedMergeRef.current = true;
+    let isMounted = true;
+    const runLazySeedMerge = async () => {
+      try {
+        const mod = await import('../data/gsxPartsCatalog.json');
+        if (!isMounted) return;
+        const gsxSeed = mod?.default || mod;
+        const seedParts = Array.isArray(gsxSeed?.parts) ? gsxSeed.parts : [];
+        if (seedParts.length === 0) return;
+
+        setParts(prev => {
+          const normalizedSaved = (Array.isArray(prev) ? prev : []).map(p => {
+            const cleanPrice = parseFloat(p.stocking_price) > 0 ? parseFloat(p.stocking_price) : 99;
+            const { exchange_price: _exchangePrice, ...rest } = p;
+            const correctCatId = resolvePartCategoryId(p, categories);
+            return {
+              ...rest,
+              stocking_price: cleanPrice,
+              category_id: correctCatId
+            };
+          });
+          const merged = mergeGsxPartsIntoCatalog(normalizedSaved, seedParts, categories).merged;
+          try {
+            localStorage.setItem('mdc_parts', JSON.stringify(merged));
+            localStorage.setItem('mdc_gsx_seed_merged_v1', '1');
+          } catch (e) {}
+          dbStorage.setItem('mdc_parts', merged).catch(() => {});
+          return merged;
+        });
+      } catch (e) {
+        console.debug('[useCatalogAndSites] Lazy GSX seed merge note:', e?.message);
+      }
+    };
+
+    // If catalog is completely empty, load immediately (async); otherwise defer to idle so navigation stays instant
+    if (parts.length === 0) {
+      const timer = setTimeout(runLazySeedMerge, 50);
+      return () => { isMounted = false; clearTimeout(timer); };
+    }
+    const timer = setTimeout(runLazySeedMerge, 1800);
+    return () => { isMounted = false; clearTimeout(timer); };
+  }, [parts.length, categories]);
+
+  // Auto-heal part categories in the background (deferred so it never blocks initial render/navigation)
+  const healedCatsSignatureRef = useRef('');
+  useEffect(() => {
+    if (!parts || parts.length === 0 || !categories || categories.length === 0) return;
+    const catSig = `${categories.map(c => c.id).join(',')}|${parts.length}`;
+    if (healedCatsSignatureRef.current === catSig) return;
+
+    let cancelled = false;
+    const runAutoHeal = () => {
+      if (cancelled) return;
+      healedCatsSignatureRef.current = catSig;
+      const catById = new Map(categories.map(c => [c.id, c]));
+      let hasMismatches = false;
+      const changedIndexes = new Set();
+      const healed = parts.map((p, idx) => {
+        const genuineCode = getPartCategory(p);
+        const currentCat = catById.get(p.category_id);
+        const currentCode = currentCat ? String(currentCat.code || '').toUpperCase() : '';
+
+        if (currentCode !== genuineCode && !(genuineCode === 'OTHER' && (currentCode === 'GEN' || currentCode === 'ACC'))) {
+          hasMismatches = true;
+          changedIndexes.add(idx);
+          const targetCatId = resolvePartCategoryId(p, categories);
+          return { ...p, category_id: targetCatId };
+        }
+        return p;
+      });
+
+      if (hasMismatches && !cancelled) {
+        setParts(healed);
+        try { localStorage.setItem('mdc_parts', JSON.stringify(healed)); } catch (e) {}
+        dbStorage.setItem('mdc_parts', healed);
+
+        if (supabase) {
+          (async () => {
+            let liveDbCats = [];
+            try {
+              const { data } = await supabase.from('part_categories').select('id, code');
+              if (data && data.length > 0) liveDbCats = data;
+            } catch (e) {}
+
+            const updates = healed
+              .filter((p, idx) => p.part_number && changedIndexes.has(idx))
+              .map(p => {
+                const catUuid = resolvePartCategoryUUID(p, liveDbCats.length > 0 ? liveDbCats : categories);
+                return {
+                  part_number: p.part_number,
+                  ...(catUuid && isUUID(catUuid) ? { category_id: catUuid } : {})
+                };
+              });
+
+            for (let i = 0; i < updates.length; i += 50) {
+              const chunk = updates.slice(i, i + 50);
+              await supabase.from('parts').upsert(chunk, { onConflict: 'part_number' }).catch(() => {});
+            }
+          })();
+        }
+      }
+    };
+
+    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+      const idleId = window.requestIdleCallback(runAutoHeal, { timeout: 2500 });
+      return () => { cancelled = true; window.cancelIdleCallback(idleId); };
+    }
+    const timer = setTimeout(runAutoHeal, 2000);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [categories, parts]);
 
   // Authoritative Supervisor & Declaration Form Settings Cloud / Local Hydration

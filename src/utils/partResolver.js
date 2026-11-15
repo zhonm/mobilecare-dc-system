@@ -4,6 +4,85 @@
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
 import { formatSiteOwner, normalizeSiteCode } from '../services/transferHistoryService.js';
 
+const catalogIndexCache = new WeakMap();
+let defaultCatalogIndex = null;
+
+function buildCatalogIndex(partsCatalog) {
+  const baseList = Array.isArray(partsCatalog) ? partsCatalog : [];
+  const fullCatalog = baseList.length > 0 ? [...baseList, ...(defaultPartsCatalog || [])] : (defaultPartsCatalog || []);
+  const genuineParts = [];
+  const byId = new Map();
+  const byPnGenuine = new Map();
+  const byPnAny = new Map();
+  const byDescLowerGenuine = new Map();
+  const byNormDescGenuine = new Map();
+  const bySuffix = new Map();
+
+  for (let i = 0; i < fullCatalog.length; i++) {
+    const p = fullCatalog[i];
+    if (!p) continue;
+    if (p.id && !byId.has(p.id)) byId.set(p.id, p);
+
+    const isGenuine = Boolean(p.description && !p.description.includes('Replacement Part ('));
+    if (isGenuine) genuineParts.push(p);
+
+    if (p.part_number) {
+      const pnUpper = p.part_number.toUpperCase();
+      if (isGenuine && !byPnGenuine.has(pnUpper)) byPnGenuine.set(pnUpper, p);
+      if (!byPnAny.has(pnUpper)) byPnAny.set(pnUpper, p);
+
+      const dashIdx = pnUpper.lastIndexOf('-');
+      if (dashIdx !== -1 && dashIdx < pnUpper.length - 1) {
+        const suf = pnUpper.slice(dashIdx + 1);
+        if (!bySuffix.has(suf)) bySuffix.set(suf, p);
+      }
+      const digits = pnUpper.replace(/[^0-9]/g, '');
+      if (digits.length >= 4) {
+        const tail4 = digits.slice(-4);
+        const tail5 = digits.length >= 5 ? digits.slice(-5) : '';
+        const tail6 = digits.length >= 6 ? digits.slice(-6) : '';
+        if (tail5 && !bySuffix.has(tail5)) bySuffix.set(tail5, p);
+        if (tail6 && !bySuffix.has(tail6)) bySuffix.set(tail6, p);
+        if (!bySuffix.has(tail4)) bySuffix.set(tail4, p);
+      }
+    }
+
+    if (isGenuine && p.description) {
+      const descLower = p.description.trim().toLowerCase();
+      if (descLower && !byDescLowerGenuine.has(descLower)) byDescLowerGenuine.set(descLower, p);
+      const normDesc = p.description.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (normDesc && !byNormDescGenuine.has(normDesc)) byNormDescGenuine.set(normDesc, p);
+    }
+  }
+
+  return {
+    fullCatalog,
+    genuineParts,
+    byId,
+    byPnGenuine,
+    byPnAny,
+    byDescLowerGenuine,
+    byNormDescGenuine,
+    bySuffix
+  };
+}
+
+function getCatalogIndex(partsCatalog = []) {
+  if (!Array.isArray(partsCatalog) || partsCatalog.length === 0) {
+    if (!defaultCatalogIndex) {
+      defaultCatalogIndex = buildCatalogIndex([]);
+    }
+    return defaultCatalogIndex;
+  }
+  const cached = catalogIndexCache.get(partsCatalog);
+  if (cached && cached.length === partsCatalog.length) {
+    return cached.index;
+  }
+  const index = buildCatalogIndex(partsCatalog);
+  catalogIndexCache.set(partsCatalog, { length: partsCatalog.length, index });
+  return index;
+}
+
 /**
  * Validates if a given string is a legitimate Apple Serial Number
  * @param {string} rawSerial - The serial number string to validate
@@ -147,47 +226,41 @@ export function resolvePartInfo(rawInput, partsCatalog = []) {
   const clean = str.toUpperCase();
   const normalizedInput = str.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-  // Combined catalog prioritizing real parts over placeholder/dummy parts
-  const fullCatalog = [...(partsCatalog || []), ...(defaultPartsCatalog || [])];
-  const genuineParts = fullCatalog.filter(p => p.description && !p.description.includes('Replacement Part ('));
-  const allParts = [...genuineParts, ...fullCatalog];
+  const index = getCatalogIndex(partsCatalog);
+  const { genuineParts, byPnGenuine, byPnAny, byDescLowerGenuine, byNormDescGenuine, bySuffix } = index;
 
   // A. Canonicalize 660-xxxxx, 668-xxxxx, 662-xxxxx to canonical Apple 661-xxxxx
   if (/^66[0-9]-([0-9]{4,6})$/i.test(clean)) {
     const suffix = clean.match(/^66[0-9]-([0-9]{4,6})$/i)[1];
     const canonicalPn = `661-${suffix}`;
-    const foundCanonical = allParts.find(p => p.part_number && p.part_number.toUpperCase() === canonicalPn);
+    const foundCanonical = byPnGenuine.get(canonicalPn) || byPnAny.get(canonicalPn);
     if (foundCanonical) return foundCanonical;
   }
 
   // B. Exact Match on part_number in genuine catalog first
-  let found = genuineParts.find(p => p.part_number && p.part_number.toUpperCase() === clean);
+  let found = byPnGenuine.get(clean);
   if (found) return found;
 
   // C. Match without hyphens or prefix variations (e.g. "66130373", "66030373", "66830373")
   const digitsOnly = clean.replace(/[^0-9]/g, '');
   if (digitsOnly.length >= 7 && digitsOnly.startsWith('66')) {
     const suffix = digitsOnly.slice(3);
-    found = allParts.find(p => p.part_number && p.part_number.replace(/[^0-9]/g, '').endsWith(suffix));
+    found = bySuffix.get(suffix);
     if (found) return found;
   }
 
   // D. Match by 4-6 digit numeric suffix (e.g. "30373" -> "661-30373")
   if (/^[0-9]{4,6}$/.test(clean)) {
-    found = allParts.find(p => p.part_number && (p.part_number.endsWith(`-${clean}`) || p.part_number.endsWith(clean)));
+    found = bySuffix.get(clean);
     if (found) return found;
   }
 
   // E. Exact Match on description (e.g. "Battery, iPhone 14")
-  found = genuineParts.find(p => p.description && p.description.trim().toLowerCase() === str.toLowerCase());
+  found = byDescLowerGenuine.get(str.toLowerCase());
   if (found) return found;
 
   // F. Normalized description match (ignoring spaces, punctuation, commas)
-  found = genuineParts.find(p => {
-    if (!p.description) return false;
-    const normDesc = p.description.toLowerCase().replace(/[^a-z0-9]/g, '');
-    return normDesc === normalizedInput;
-  });
+  found = byNormDescGenuine.get(normalizedInput);
   if (found) return found;
 
   // G. Keyword & Model Matching (e.g. "Battery, iPhone 14", "iPhone 14 battery", "Display 16 Pro Max", etc.)
@@ -250,7 +323,7 @@ export function resolvePartInfo(rawInput, partsCatalog = []) {
   if (found) return found;
 
   // I. Fallback to any exact match in catalog
-  found = allParts.find(p => p.part_number && p.part_number.toUpperCase() === clean);
+  found = byPnAny.get(clean);
   if (found) return found;
 
   return null;
@@ -292,33 +365,31 @@ export function isProvincialSite(site) {
  */
 export function normalizeInventoryUnits(units = [], partsCatalog = []) {
   if (!Array.isArray(units)) return [];
-  const fullCatalog = [...(partsCatalog || []), ...(defaultPartsCatalog || [])];
+  const index = getCatalogIndex(partsCatalog);
+  const defaultFallbackPart = index.fullCatalog.find(p => p.part_number && p.part_number.startsWith('661-')) || defaultPartsCatalog[0];
+  const resolveCache = new Map();
+  const resolveCached = (input) => {
+    if (!input) return null;
+    if (resolveCache.has(input)) return resolveCache.get(input);
+    const res = resolvePartInfo(input, partsCatalog);
+    resolveCache.set(input, res);
+    return res;
+  };
 
   const enrichUnitWithOwnership = (resolvedUnit, rawUnit) => {
     const rawNotes = rawUnit?.notes || '';
-    const rawCurrentOwner = rawUnit?.current_owner || (typeof rawNotes === 'string' && rawNotes.includes('__META__') ? (() => {
+    let meta = null;
+    if ((!rawUnit?.current_owner || !rawUnit?.movement_history) && typeof rawNotes === 'string' && rawNotes.includes('__META__')) {
       try {
         const match = rawNotes.match(/__META__:(.+)$/);
-        if (match) {
-          const p = JSON.parse(match[1]);
-          return p.current_owner || null;
-        }
+        if (match) meta = JSON.parse(match[1]);
       } catch {}
-      return null;
-    })() : null);
+    }
 
+    const rawCurrentOwner = rawUnit?.current_owner || meta?.current_owner || null;
     const normSite = normalizeSiteCode(rawUnit?.site_code || rawUnit?.current_site_id || 'DC');
     const resolvedOwner = (rawCurrentOwner ? String(rawCurrentOwner).toUpperCase() : null) || formatSiteOwner(normSite);
-    const rawMovement = rawUnit?.movement_history || (typeof rawNotes === 'string' && rawNotes.includes('__META__') ? (() => {
-      try {
-        const match = rawNotes.match(/__META__:(.+)$/);
-        if (match) {
-          const p = JSON.parse(match[1]);
-          return p.movement_history || null;
-        }
-      } catch {}
-      return null;
-    })() : null);
+    const rawMovement = rawUnit?.movement_history || meta?.movement_history || null;
 
     const resolvedMovement = Array.isArray(rawMovement) && rawMovement.length > 0
       ? rawMovement
@@ -364,7 +435,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
 
       // 0. Primary Resolution: Match by part_id in catalog (e.g., from relational Supabase inventory_units)
       if (u.part_id) {
-        const foundById = fullCatalog.find(p => p.id === u.part_id);
+        const foundById = index.byId.get(u.part_id);
         if (foundById) {
           return enrichUnitWithOwnership({
             ...u,
@@ -380,7 +451,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
         // Handle part_id containing embedded PN (e.g. "part-661-56125" or "part-661-30373")
         const embeddedInId = String(u.part_id).match(/66[0-9]-?[0-9]{4,6}/i);
         if (embeddedInId) {
-          const resolvedFromId = resolvePartInfo(embeddedInId[0], fullCatalog);
+          const resolvedFromId = resolveCached(embeddedInId[0]);
           if (resolvedFromId) {
             return enrichUnitWithOwnership({
               ...u,
@@ -398,7 +469,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
 
       // 1. Resolve canonical Apple Genuine Part info (handles 660-xxxxx, 668-xxxxx, 661-xxxxx, 5-digit suffixes, barcodes, descriptions)
       if (rawPn && rawPn.toUpperCase() !== 'PART' && rawPn.toUpperCase() !== 'PART-UNKNOWN') {
-        const resolved = resolvePartInfo(rawPn, fullCatalog);
+        const resolved = resolveCached(rawPn);
         if (resolved) {
           return enrichUnitWithOwnership({
             ...u,
@@ -415,7 +486,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
 
       // 2. Exact match in catalog
       if (rawPn && rawPn.toUpperCase() !== 'PART' && rawPn.toUpperCase() !== 'PART-UNKNOWN') {
-        const exactPart = fullCatalog.find(p => p.part_number && p.part_number.toUpperCase() === rawPn.toUpperCase());
+        const exactPart = index.byPnAny.get(rawPn.toUpperCase());
         if (exactPart) {
           return enrichUnitWithOwnership({
             ...u,
@@ -432,7 +503,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
 
       // 3. Resolve by Description (if description is not generic placeholder)
       if (rawDesc && rawDesc.toLowerCase() !== 'service replacement part' && !rawDesc.toLowerCase().includes('replacement part (')) {
-        const resolvedDesc = resolvePartInfo(rawDesc, fullCatalog);
+        const resolvedDesc = resolveCached(rawDesc);
         if (resolvedDesc) {
           return enrichUnitWithOwnership({
             ...u,
@@ -451,7 +522,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
       const numMatch = `${rawPn} ${rawDesc}`.match(/(\d{4,6})/);
       if (numMatch) {
         const suffix = numMatch[1];
-        const matchBySuffix = fullCatalog.find(p => p.part_number && p.part_number.endsWith(suffix));
+        const matchBySuffix = index.bySuffix.get(suffix);
         if (matchBySuffix) {
           return enrichUnitWithOwnership({
             ...u,
@@ -467,7 +538,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
       }
 
       // 5. Ultimate Fallback: Never display 'PART' or empty part number. Provide genuine Apple default part info
-      const fallbackPart = fullCatalog.find(p => p.part_number && p.part_number.startsWith('661-')) || defaultPartsCatalog[0];
+      const fallbackPart = defaultFallbackPart;
       const safePn = (rawPn && rawPn.toUpperCase() !== 'PART' && rawPn.toUpperCase() !== 'PART-UNKNOWN')
         ? rawPn
         : (fallbackPart?.part_number || '661-30373');

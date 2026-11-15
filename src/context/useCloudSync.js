@@ -3369,12 +3369,13 @@ export function useCloudSync({
           // Preserve active local inventory units across all local tiers:
           // 1. Current in-memory React state (prev)
           // 2. Primary local IndexedDB storage (idbCachedUnits, idbBranchCachedUnits)
-          // 3. Compact/full localStorage cache (readInventoryFromLocalStorage())
+          // 3. Compact/full localStorage cache (only if in-memory & IDB caches are empty)
+          const hasMemoryOrIdbUnits = (Array.isArray(prev) && prev.length > 0) || (Array.isArray(idbCachedUnits) && idbCachedUnits.length > 0);
           const allLocalSources = [
             ...(Array.isArray(prev) ? prev : []),
             ...(Array.isArray(idbCachedUnits) ? idbCachedUnits : []),
             ...(Array.isArray(idbBranchCachedUnits) ? idbBranchCachedUnits : []),
-            ...readInventoryFromLocalStorage()
+            ...(hasMemoryOrIdbUnits ? [] : readInventoryFromLocalStorage())
           ];
 
           allLocalSources.forEach(u => {
@@ -3438,14 +3439,20 @@ export function useCloudSync({
               if (isDc && (u.is_generated || String(u.id || '').startsWith('unit-mdc') || (recvDate === '2026-09-01' && u.po_number))) return false;
               return true;
             })
-            .sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
+            .sort((a, b) => {
+              const aStr = a.received_at || '';
+              const bStr = b.received_at || '';
+              return aStr < bStr ? 1 : (aStr > bStr ? -1 : 0);
+            });
           const normalized = normalizeInventoryUnits(mergedRaw, allAvailableParts);
           const merged = reconcileUnitsWithPackedDrafts(normalized, effectiveShipments, effectiveDraft, activePackingStationsRef.current || activePackingStations);
-          saveInventoryToLocalStorage(merged);
-          // Zero-Loss Guard: Never overwrite local IndexedDB with a smaller array unless explicitly cleared
-          if (!Array.isArray(idbCachedUnits) || merged.length >= idbCachedUnits.length) {
-            dbStorage.setItem('mdc_inventory', merged);
-          }
+          setTimeout(() => {
+            saveInventoryToLocalStorage(merged);
+            // Zero-Loss Guard: Never overwrite local IndexedDB with a smaller array unless explicitly cleared
+            if (!Array.isArray(idbCachedUnits) || merged.length >= idbCachedUnits.length) {
+              dbStorage.setItem('mdc_inventory', merged);
+            }
+          }, 0);
 
           return merged;
         });
@@ -3607,10 +3614,10 @@ export function useCloudSync({
       if (!fixablyHandledInPreload && shouldFetch('saved_records') && dbSavedRecords && dbSavedRecords.length > 0) {
         const cloudFixablyDoc = dbSavedRecords.find(r => r.id === 'master_fixably_inventory_snapshot');
         if (cloudFixablyDoc?.snapshot_data && typeof cloudFixablyDoc.snapshot_data === 'object' && Array.isArray(cloudFixablyDoc.snapshot_data.items) && cloudFixablyDoc.snapshot_data.items.length > 0) {
-          const cloudSnap = hydrateFixablySnapshot(cloudFixablyDoc.snapshot_data, sites);
+          const rawCloudSnap = cloudFixablyDoc.snapshot_data;
           try {
             const localTimestamp = localStorage.getItem('mdc_fixably_snapshot_timestamp') || '';
-            const cloudTimestamp = cloudFixablyDoc.updated_at || cloudSnap.timestamp || '';
+            const cloudTimestamp = cloudFixablyDoc.updated_at || rawCloudSnap.timestamp || '';
 
             let localSnap = null;
             let savedTransferSlot = null;
@@ -3628,7 +3635,7 @@ export function useCloudSync({
             }
 
             const localHasTransfers = Boolean((Array.isArray(localSnap?.transfers) && localSnap.transfers.length > 0) || savedTransferSlot?.content);
-            const cloudHasTransfers = Boolean(Array.isArray(cloudSnap?.transfers) && cloudSnap.transfers.length > 0);
+            const cloudHasTransfers = Boolean(Array.isArray(rawCloudSnap?.transfers) && rawCloudSnap.transfers.length > 0);
 
             const cloudMs = cloudTimestamp ? new Date(cloudTimestamp).getTime() : 0;
             const localMs = Math.max(
@@ -3640,6 +3647,7 @@ export function useCloudSync({
               ? true
               : Boolean(cloudMs > 0 && (localMs === 0 || cloudMs > localMs) && (!localHasTransfers || cloudHasTransfers));
             if (shouldUpdateLocal) {
+              const cloudSnap = hydrateFixablySnapshot(rawCloudSnap, sites);
               if (cloudTimestamp && !cloudSnap.timestamp) {
                 cloudSnap.timestamp = cloudTimestamp;
               }
@@ -4900,7 +4908,10 @@ export function useCloudSync({
   useEffect(() => {
     if (currentUser?.id && currentUser.id !== prevUserIdRef.current) {
       prevUserIdRef.current = currentUser.id;
-      autoRefreshDataRef.current?.({ silent: true, force: false, isManual: false, reason: 'User session active / login transition' });
+      const timer = setTimeout(() => {
+        autoRefreshDataRef.current?.({ silent: true, force: false, isManual: false, reason: 'User session active / login transition' });
+      }, 300);
+      return () => clearTimeout(timer);
     } else if (!currentUser?.id) {
       prevUserIdRef.current = null;
     }

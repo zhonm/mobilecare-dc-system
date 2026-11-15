@@ -100,6 +100,9 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
   // --- Orders & Receiving State ---
   const [orderSearch, setOrderSearch] = useState('');
   const [selectedOrderId, setSelectedOrderId] = useState('');
+  const [poDropdownQuery, setPoDropdownQuery] = useState('');
+  const [poDropdownOpen, setPoDropdownOpen] = useState(false);
+  const poDropdownRef = useRef(null);
   const [recvPn, setRecvPn] = useState('');
   const [recvQty, setRecvQty] = useState('1');
   const [recvSerials, setRecvSerials] = useState('');
@@ -206,6 +209,39 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
     () => ctOrders.find(o => o.id === selectedOrderId) || null,
     [ctOrders, selectedOrderId]
   );
+
+  useEffect(() => {
+    if (!poDropdownOpen) return undefined;
+    const handleOutsideClick = (e) => {
+      if (poDropdownRef.current && !poDropdownRef.current.contains(e.target)) {
+        setPoDropdownOpen(false);
+        setPoDropdownQuery('');
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [poDropdownOpen]);
+
+  const linkedOrderMatches = useMemo(() => {
+    const q = poDropdownQuery.trim().toLowerCase();
+    return (ctOrders || []).filter(o => {
+      if (!q) return true;
+      return `${o.po_number || ''} ${o.order_number || ''} ${o.site_code || ''} ${o.status || ''}`.toLowerCase().includes(q);
+    });
+  }, [ctOrders, poDropdownQuery]);
+
+  const handleSelectLinkedOrder = (orderId) => {
+    const ord = ctOrders.find(o => o.id === orderId);
+    setSelectedOrderId(orderId);
+    setPoDropdownOpen(false);
+    setPoDropdownQuery('');
+    if (ord?.site_code) setRecvSiteCode(ord.site_code);
+    if (ord?.items?.length === 1) {
+      setRecvPn(ord.items[0].part_number);
+      const openQty = Math.max(1, (ord.items[0].quantity_ordered || 1) - (ord.items[0].quantity_received || 0));
+      setRecvQty(String(openQty));
+    }
+  };
 
   const matchedCatalogForReceive = useMemo(() => {
     const clean = normalizePartNumber(recvPn);
@@ -1161,29 +1197,156 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
             )}
 
             <form onSubmit={handleExecuteReceive} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div>
+              <div ref={poDropdownRef} style={{ position: 'relative' }}>
                 <label className="form-label">Linked Purchase Order (Optional for Direct Scan)</label>
-                <select
-                  className="form-select"
-                  value={selectedOrderId}
-                  onChange={(e) => {
-                    const ord = ctOrders.find(o => o.id === e.target.value);
-                    setSelectedOrderId(e.target.value);
-                    if (ord?.site_code) setRecvSiteCode(ord.site_code);
-                    if (ord?.items?.length === 1) {
-                      setRecvPn(ord.items[0].part_number);
-                      const openQty = Math.max(1, (ord.items[0].quantity_ordered || 1) - (ord.items[0].quantity_received || 0));
-                      setRecvQty(String(openQty));
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                  <Search
+                    size={14}
+                    color="#64748b"
+                    style={{ position: 'absolute', left: '10px', pointerEvents: 'none' }}
+                  />
+                  <input
+                    type="text"
+                    className="form-control"
+                    style={{ paddingLeft: '32px', paddingRight: (selectedOrderId || poDropdownQuery) ? '32px' : '10px' }}
+                    value={
+                      poDropdownOpen
+                        ? poDropdownQuery
+                        : activeReceivingOrder
+                          ? `${activeReceivingOrder.po_number} · ${activeReceivingOrder.site_code} (${activeReceivingOrder.status})`
+                          : ''
                     }
-                  }}
-                >
-                  <option value="">-- Direct / Ad-Hoc Receipt (No PO) --</option>
-                  {ctOrders.map(o => (
-                    <option key={o.id} value={o.id}>
-                      {o.po_number} · {o.site_code} ({o.status})
-                    </option>
-                  ))}
-                </select>
+                    placeholder="Search PO Number (or leave blank for Direct / Ad-Hoc Receipt)..."
+                    onFocus={() => {
+                      setPoDropdownOpen(true);
+                      setPoDropdownQuery('');
+                    }}
+                    onChange={(e) => {
+                      setPoDropdownOpen(true);
+                      setPoDropdownQuery(e.target.value);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        setPoDropdownOpen(false);
+                        setPoDropdownQuery('');
+                        e.currentTarget.blur();
+                      } else if (e.key === 'Enter' && poDropdownOpen) {
+                        e.preventDefault();
+                        if (linkedOrderMatches.length > 0) {
+                          handleSelectLinkedOrder(linkedOrderMatches[0].id);
+                        }
+                      }
+                    }}
+                  />
+                  {(selectedOrderId || poDropdownQuery) && (
+                    <button
+                      type="button"
+                      title="Clear linked PO (Direct / Ad-Hoc Receipt)"
+                      onClick={() => {
+                        setSelectedOrderId('');
+                        setPoDropdownQuery('');
+                        setPoDropdownOpen(false);
+                      }}
+                      style={{
+                        position: 'absolute',
+                        right: '8px',
+                        background: 'transparent',
+                        border: 'none',
+                        padding: '2px',
+                        cursor: 'pointer',
+                        color: '#64748b',
+                        display: 'inline-flex',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+
+                {poDropdownOpen && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 'calc(100% + 4px)',
+                      left: 0,
+                      right: 0,
+                      zIndex: 30,
+                      maxHeight: '240px',
+                      overflowY: 'auto',
+                      background: '#ffffff',
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '8px',
+                      boxShadow: '0 10px 25px rgba(15, 23, 42, 0.12)',
+                      padding: '4px'
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        handleSelectLinkedOrder('');
+                      }}
+                      style={{
+                        width: '100%',
+                        textAlign: 'left',
+                        padding: '7px 10px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        background: !selectedOrderId ? '#eff6ff' : 'transparent',
+                        color: !selectedOrderId ? '#1d4ed8' : '#475569',
+                        fontSize: '12.5px',
+                        fontWeight: !selectedOrderId ? 700 : 500,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      -- Direct / Ad-Hoc Receipt (No PO) --
+                    </button>
+
+                    {linkedOrderMatches.length === 0 ? (
+                      <div style={{ padding: '10px', fontSize: '12px', color: '#64748b', textAlign: 'center' }}>
+                        No purchase orders matching &ldquo;{poDropdownQuery}&rdquo;
+                      </div>
+                    ) : (
+                      linkedOrderMatches.map(o => {
+                        const isSelected = selectedOrderId === o.id;
+                        return (
+                          <button
+                            key={o.id}
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              handleSelectLinkedOrder(o.id);
+                            }}
+                            style={{
+                              width: '100%',
+                              textAlign: 'left',
+                              padding: '7px 10px',
+                              borderRadius: '6px',
+                              border: 'none',
+                              background: isSelected ? '#eff6ff' : 'transparent',
+                              color: '#0f172a',
+                              fontSize: '12.5px',
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              gap: '8px',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <span>
+                              <span className="font-mono" style={{ fontWeight: 700 }}>{o.po_number}</span>
+                              <span style={{ color: '#64748b' }}> · {o.site_code}</span>
+                            </span>
+                            <span style={{ fontSize: '11px', color: '#475569', textTransform: 'uppercase', fontWeight: 600 }}>
+                              {String(o.status || '').replace('_', ' ')}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
               </div>
 
               {activeReceivingOrder && (

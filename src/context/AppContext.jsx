@@ -277,15 +277,17 @@ export function AppProvider({ children }) {
 
   useEffect(() => {
     let isMounted = true;
-    (async () => {
+    const timer = setTimeout(async () => {
       try {
         let idb = await dbStorage.getItem('mdc_fixably_snapshot');
+        if (!isMounted) return;
         if (!idb?.items?.length) {
           const recs = await dbStorage.getAllSavedRecords();
           const fixRec = recs?.find(r => r.id === 'master_fixably_inventory_snapshot' || r.record_type === 'fixably_snapshot');
           if (fixRec?.snapshot?.items?.length) idb = fixRec.snapshot;
           else if (fixRec?.snapshot_data?.items?.length) idb = fixRec.snapshot_data;
         }
+        if (!isMounted) return;
         if (idb && (!Array.isArray(idb.transfers) || idb.transfers.length === 0)) {
           try {
             const savedTransferSlot = await dbStorage.getItem('mdc_uploaded_slot_stock_transfer');
@@ -305,6 +307,17 @@ export function AppProvider({ children }) {
             }
           } catch (e) {}
         }
+        if (!isMounted || (!idb?.items?.length && !idb?.transfers?.length)) return;
+
+        // Skip heavy hydration if localStorage already has the exact same snapshot
+        const alreadyLoadedSame = Boolean(
+          fixablySnapshot &&
+          fixablySnapshot.timestamp === idb.timestamp &&
+          (fixablySnapshot.items?.length || 0) === (idb.items?.length || 0) &&
+          (fixablySnapshot.transfers?.length || 0) >= (idb.transfers?.length || 0)
+        );
+        if (alreadyLoadedSame) return;
+
         if (idb?.items?.length) {
           idb = hydrateFixablySnapshot(idb);
         }
@@ -326,8 +339,12 @@ export function AppProvider({ children }) {
           });
         }
       } catch (e) {}
-    })();
-    return () => { isMounted = false; };
+    }, 350);
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
