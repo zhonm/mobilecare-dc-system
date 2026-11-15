@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, startTransition } from 'react';
 import seedData from '../data/seedData.json';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
@@ -556,6 +556,8 @@ export function useCloudSync({
       // Archiving Rolling Window: Active queries only fetch records within the 60-day operational window
       const archiveCutoffIsoDate = getArchiveCutoffIso(ARCHIVE_CUTOFF_DAYS);
       const archiveCutoffIsoTimestamp = getArchiveCutoffDate(ARCHIVE_CUTOFF_DAYS).toISOString();
+      const yieldToMain = () => new Promise(resolve => setTimeout(resolve, 0));
+      let fixablyHandledInPreload = false;
       const fetchAllInventoryUnits = async () => {
         // Egress Quota Defense: Probe latest updated_at and total count before downloading thousands of rows
         let localInvUpdatedAt = null;
@@ -1118,8 +1120,9 @@ export function useCloudSync({
                 updated_at: localFixablyUpdatedAt
               });
               if (cachedFixably && setFixablySnapshot) {
-                setFixablySnapshot(cachedFixably);
+                startTransition(() => setFixablySnapshot(cachedFixably));
               }
+              fixablyHandledInPreload = true;
               // Auto-heal by pushing newer local snapshot to cloud
               if (supabase) {
                 (async () => {
@@ -1171,11 +1174,15 @@ export function useCloudSync({
                         if (effectiveUpdated && !hydrated.timestamp) {
                           hydrated.timestamp = effectiveUpdated;
                         }
-                        await dbStorage.setItem('mdc_fixably_snapshot', hydrated);
+                        await dbStorage.setItem('mdc_fixably_snapshot', hydrated, { skipLocalStorage: true });
+                        if (setFixablySnapshot) {
+                          startTransition(() => setFixablySnapshot(hydrated));
+                        }
+                        fixablyHandledInPreload = true;
+                        await yieldToMain();
                         try {
                           localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(compactFixablySnapshot(hydrated)));
                         } catch (e) {}
-                        if (setFixablySnapshot) setFixablySnapshot(hydrated);
                       }
                     } else {
                       // Local is newer OR has reconciled transfers that cloud lacks: retain local snapshot and heal cloud!
@@ -1185,8 +1192,9 @@ export function useCloudSync({
                         updated_at: localFixablyUpdatedAt
                       });
                       if (cachedFixably && setFixablySnapshot) {
-                        setFixablySnapshot(cachedFixably);
+                        startTransition(() => setFixablySnapshot(cachedFixably));
                       }
+                      fixablyHandledInPreload = true;
                       if (supabase && cachedFixably?.items?.length > 0 && localHasTransfers && !cloudHasTransfers) {
                         (async () => {
                           try {
@@ -1216,8 +1224,9 @@ export function useCloudSync({
                   snapshot_data: cachedFixably || null
                 });
                 if (cachedFixably && setFixablySnapshot) {
-                  setFixablySnapshot(cachedFixably);
+                  startTransition(() => setFixablySnapshot(cachedFixably));
                 }
+                fixablyHandledInPreload = true;
               }
             }
           }
@@ -1894,49 +1903,52 @@ export function useCloudSync({
                   }
                 } catch (e) {}
               } else if (resolvedMasterlist && setMasterlistData) {
-                setMasterlistData(resolvedMasterlist);
+                startTransition(() => setMasterlistData(resolvedMasterlist));
                 setActiveScannedMasterlist(resolvedMasterlist);
                 try { localStorage.setItem('mdc_masterlist_data', JSON.stringify(resolvedMasterlist)); } catch (e) {}
-                dbStorage.setItem('mdc_masterlist_data', resolvedMasterlist);
+                dbStorage.setItem('mdc_masterlist_data', resolvedMasterlist, { skipLocalStorage: true });
               }
 
               // Case 1: Snapshot has forecastItems
               if (Array.isArray(snap.forecastItems) && snap.forecastItems.length > 0) {
-                setForecastItems(snap.forecastItems);
-                try { localStorage.setItem('mdc_forecast', JSON.stringify(snap.forecastItems)); } catch (e) {}
-                dbStorage.setItem('mdc_forecast', snap.forecastItems);
-
                 const restoredAlloc = (snap.allocations && snap.allocations.length > 0)
                   ? snap.allocations
                   : generateAllocationsFromForecasts(snap.forecastItems, sites, snap.forecastingModel || 'linear');
 
-                setAllocations(restoredAlloc);
+                startTransition(() => {
+                  setForecastItems(snap.forecastItems);
+                  setAllocations(restoredAlloc);
+                });
+                try { localStorage.setItem('mdc_forecast', JSON.stringify(snap.forecastItems)); } catch (e) {}
+                dbStorage.setItem('mdc_forecast', snap.forecastItems, { skipLocalStorage: true });
                 try { localStorage.setItem('mdc_allocations', JSON.stringify(restoredAlloc)); } catch (e) {}
-                dbStorage.setItem('mdc_allocations', restoredAlloc);
+                dbStorage.setItem('mdc_allocations', restoredAlloc, { skipLocalStorage: true });
               }
               // Case 2: Snapshot has allocations but missing/empty forecastItems -> Derive forecastItems!
               else if (Array.isArray(snap.allocations) && snap.allocations.length > 0) {
                 const derivedForecast = deriveForecastItemsFromAllocations(snap.allocations, parts);
-                setForecastItems(derivedForecast);
+                startTransition(() => {
+                  setForecastItems(derivedForecast);
+                  setAllocations(snap.allocations);
+                });
                 try { localStorage.setItem('mdc_forecast', JSON.stringify(derivedForecast)); } catch (e) {}
-                dbStorage.setItem('mdc_forecast', derivedForecast);
-
-                setAllocations(snap.allocations);
+                dbStorage.setItem('mdc_forecast', derivedForecast, { skipLocalStorage: true });
                 try { localStorage.setItem('mdc_allocations', JSON.stringify(snap.allocations)); } catch (e) {}
-                dbStorage.setItem('mdc_allocations', snap.allocations);
+                dbStorage.setItem('mdc_allocations', snap.allocations, { skipLocalStorage: true });
               }
               // Case 3: Snapshot has neither forecast nor allocations, but active masterlist exists for period -> Reconstitute from masterlist!
               else if (resolvedMasterlist && Array.isArray(resolvedMasterlist.partsSummary) && resolvedMasterlist.partsSummary.length > 0) {
                 const derivedForecast = deriveForecastItemsFromMasterlist(resolvedMasterlist);
                 if (derivedForecast.length > 0) {
-                  setForecastItems(derivedForecast);
-                  try { localStorage.setItem('mdc_forecast', JSON.stringify(derivedForecast)); } catch (e) {}
-                  dbStorage.setItem('mdc_forecast', derivedForecast);
-
                   const restoredAlloc = generateAllocationsFromForecasts(derivedForecast, sites, snap.forecastingModel || 'linear');
-                  setAllocations(restoredAlloc);
+                  startTransition(() => {
+                    setForecastItems(derivedForecast);
+                    setAllocations(restoredAlloc);
+                  });
+                  try { localStorage.setItem('mdc_forecast', JSON.stringify(derivedForecast)); } catch (e) {}
+                  dbStorage.setItem('mdc_forecast', derivedForecast, { skipLocalStorage: true });
                   try { localStorage.setItem('mdc_allocations', JSON.stringify(restoredAlloc)); } catch (e) {}
-                  dbStorage.setItem('mdc_allocations', restoredAlloc);
+                  dbStorage.setItem('mdc_allocations', restoredAlloc, { skipLocalStorage: true });
                 }
               }
             }
@@ -2383,14 +2395,15 @@ export function useCloudSync({
         const { reconciledList: reconciledShipments } = reconcileShipmentsAndDrafts(mappedShipments, { removeSuperseded: true }, effectiveSitesList);
         effectiveShipments = reconciledShipments;
 
+        await yieldToMain();
         if (effectiveShipments.length > 0) {
-          setShipments(effectiveShipments);
+          startTransition(() => setShipments(effectiveShipments));
           try { localStorage.setItem('mdc_shipments', JSON.stringify(effectiveShipments)); } catch (e) {}
-          dbStorage.setItem('mdc_shipments', effectiveShipments);
+          dbStorage.setItem('mdc_shipments', effectiveShipments, { skipLocalStorage: true });
         } else if (!selectiveTables || selectiveTables.includes('shipments') || selectiveTables.includes('saved_records')) {
-          setShipments([]);
+          startTransition(() => setShipments([]));
           try { localStorage.setItem('mdc_shipments', JSON.stringify([])); } catch (e) {}
-          dbStorage.setItem('mdc_shipments', []);
+          dbStorage.setItem('mdc_shipments', [], { skipLocalStorage: true });
         }
       }
 
@@ -2901,6 +2914,8 @@ export function useCloudSync({
           } catch (e) {}
         }
 
+        await yieldToMain();
+        startTransition(() => {
         setInventoryUnits(prev => {
           const hasCloudInventoryRows = Array.isArray(dbUnits) && dbUnits.length > 0;
           const hasInventorySnapshot = (dbSavedRecords || []).some(
@@ -3434,11 +3449,13 @@ export function useCloudSync({
 
           return merged;
         });
+        });
         if (setIsInventoryLoaded) setIsInventoryLoaded(true);
       }
 
       // 8. Process Parts Requests
       if (shouldFetch('parts_requests') || shouldFetch('saved_records')) {
+        await yieldToMain();
         const partsReqRegistryDoc = dbSavedRecords?.find(r => r.id === 'master_parts_requests_registry');
         const cloudRegistryRequests = Array.isArray(partsReqRegistryDoc?.snapshot_data?.requests)
           ? partsReqRegistryDoc.snapshot_data.requests
@@ -3587,7 +3604,7 @@ export function useCloudSync({
       }
 
       // 8d. Process Master Fixably Multi-Site Inventory Snapshot Registry
-      if (shouldFetch('saved_records') && dbSavedRecords && dbSavedRecords.length > 0) {
+      if (!fixablyHandledInPreload && shouldFetch('saved_records') && dbSavedRecords && dbSavedRecords.length > 0) {
         const cloudFixablyDoc = dbSavedRecords.find(r => r.id === 'master_fixably_inventory_snapshot');
         if (cloudFixablyDoc?.snapshot_data && typeof cloudFixablyDoc.snapshot_data === 'object' && Array.isArray(cloudFixablyDoc.snapshot_data.items) && cloudFixablyDoc.snapshot_data.items.length > 0) {
           const cloudSnap = hydrateFixablySnapshot(cloudFixablyDoc.snapshot_data, sites);
@@ -3626,14 +3643,7 @@ export function useCloudSync({
               if (cloudTimestamp && !cloudSnap.timestamp) {
                 cloudSnap.timestamp = cloudTimestamp;
               }
-              try {
-                if (cloudTimestamp) {
-                  localStorage.setItem('mdc_fixably_snapshot_timestamp', cloudTimestamp);
-                  localStorage.setItem('mdc_fixably_updated_at', cloudTimestamp);
-                }
-                localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(compactFixablySnapshot(cloudSnap)));
-              } catch (e) {}
-              await dbStorage.setItem('mdc_fixably_snapshot', cloudSnap);
+              await dbStorage.setItem('mdc_fixably_snapshot', cloudSnap, { skipLocalStorage: true });
               await dbStorage.putSavedRecord({
                 id: 'master_fixably_inventory_snapshot',
                 record_type: 'fixably_snapshot',
@@ -3646,7 +3656,17 @@ export function useCloudSync({
                 bus.postMessage({ type: 'FIXABLY_SNAPSHOT_UPDATED', payload: { snapshot: cloudSnap, timestamp: cloudTimestamp } });
                 bus.close();
               }
-              if (setFixablySnapshot) setFixablySnapshot(cloudSnap);
+              if (setFixablySnapshot) {
+                startTransition(() => setFixablySnapshot(cloudSnap));
+              }
+              await yieldToMain();
+              try {
+                if (cloudTimestamp) {
+                  localStorage.setItem('mdc_fixably_snapshot_timestamp', cloudTimestamp);
+                  localStorage.setItem('mdc_fixably_updated_at', cloudTimestamp);
+                }
+                localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(compactFixablySnapshot(cloudSnap)));
+              } catch (e) {}
             } else if (isLocalStrictlyNewer && supabase && localSnap?.items?.length > 0) {
               // Local is strictly newer or has reconciled transfers that cloud lacks: push local snapshot to cloud to auto-heal
               try {

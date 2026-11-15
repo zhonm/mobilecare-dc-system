@@ -8,6 +8,15 @@ const DB_VERSION = 1;
 const STORE_APP_STATE = 'app_state';
 const STORE_SAVED_RECORDS = 'saved_records';
 
+const IDB_PRIMARY_KEYS = new Set([
+  'mdc_fixably_snapshot',
+  'mdc_masterlist_data',
+  'mdc_repair_usage',
+  'mdc_branch_inventory_units',
+  'mdc_system_audit_logs',
+  'mdc_stock_transfer_reports'
+]);
+
 class DbStorage {
   constructor() {
     this.db = null;
@@ -84,19 +93,23 @@ class DbStorage {
     return fallbackValue;
   }
 
-  async setItem(key, value) {
-    // 1. Always attempt fast sync to localStorage
-    try {
-      if (typeof window !== 'undefined' && window.localStorage) {
-        window.localStorage.setItem(key, JSON.stringify(value));
+  async setItem(key, value, options = {}) {
+    const db = await this.getDb();
+    const skipLocal = Boolean(options?.skipLocalStorage) || (Boolean(db) && IDB_PRIMARY_KEYS.has(key));
+
+    // 1. Sync to localStorage only when needed (skip for large IDB-primary keys when IndexedDB is active)
+    if (!skipLocal) {
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.setItem(key, JSON.stringify(value));
+        }
+      } catch (err) {
+        console.debug('LocalStorage quota note:', err);
       }
-    } catch (err) {
-      console.debug('LocalStorage quota note:', err);
     }
 
     // 2. Persist to IndexedDB
     try {
-      const db = await this.getDb();
       if (db) {
         const tx = db.transaction(STORE_APP_STATE, 'readwrite');
         const store = tx.objectStore(STORE_APP_STATE);
@@ -208,15 +221,22 @@ class DbStorage {
   async putSavedRecord(record) {
     if (!record || !record.id) return;
 
+    let idbSaved = false;
     try {
       const db = await this.getDb();
       if (db) {
         const tx = db.transaction(STORE_SAVED_RECORDS, 'readwrite');
         const store = tx.objectStore(STORE_SAVED_RECORDS);
         store.put(record);
+        idbSaved = true;
       }
     } catch (err) {
       console.warn('[IndexedDB] Failed to save record:', err);
+    }
+
+    // Skip heavy synchronous localStorage serialization for large Fixably snapshots when IndexedDB is active
+    if (idbSaved && (record.id === 'master_fixably_inventory_snapshot' || record.record_type === 'fixably_snapshot')) {
+      return;
     }
 
     // Also update localStorage
