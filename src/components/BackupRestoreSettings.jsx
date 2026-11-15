@@ -1057,7 +1057,7 @@ export default function BackupRestoreSettings() {
                     value={confirmInputText}
                     onChange={(e) => setConfirmInputText(e.target.value)}
                     style={{
-                      fontFamily: 'monospace',
+                      fontFamily: 'var(--font-sans)',
                       fontWeight: 700,
                       letterSpacing: '1px',
                       textTransform: 'uppercase'
@@ -1160,7 +1160,7 @@ export default function BackupRestoreSettings() {
                   value={pastedCreds}
                   onChange={(e) => setPastedCreds(e.target.value)}
                   style={{
-                    fontFamily: 'monospace',
+                    fontFamily: 'var(--font-sans)',
                     fontSize: '11.5px',
                     lineHeight: 1.4,
                     width: '100%',

@@ -559,7 +559,7 @@ export default function AllocationMatrix() {
         </td>
 
         {/* Stock Price */}
-        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '12px', fontWeight: 600, color: '#0f172a' }}>
+        <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '12px', fontWeight: 600, color: '#0f172a' }}>
           ${stockPrice.toFixed(2)}
         </td>
 
@@ -598,7 +598,7 @@ export default function AllocationMatrix() {
             const share = item.total_allocated_qty > 0 ? ((qty / item.total_allocated_qty) * 100).toFixed(1) : '0.0';
             const hasShare = qty > 0;
             return (
-              <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', fontWeight: hasShare ? 700 : 400, color: hasShare ? '#0284c7' : '#94a3b8' }}>
+              <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11px', fontWeight: hasShare ? 700 : 400, color: hasShare ? '#0284c7' : '#94a3b8' }}>
                 {share}%
               </td>
             );
@@ -626,7 +626,7 @@ export default function AllocationMatrix() {
         <td style={{
           textAlign: 'center',
           fontWeight: 800,
-          fontFamily: 'var(--font-mono)',
+          fontFamily: 'var(--font-sans)',
           fontSize: '12.5px',
           background: (isWeeklyView ? rowWeekQty > 0 : isOrderRequired) ? '#e0f2fe' : '#fee2e2',
           color: (isWeeklyView ? rowWeekQty > 0 : isOrderRequired) ? '#0369a1' : '#b91c1c'
@@ -635,24 +635,24 @@ export default function AllocationMatrix() {
         </td>
 
         {/* Total Stock Price (or Week N Value) */}
-        <td style={{ textAlign: 'right', fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '12px', color: '#0f172a' }}>
+        <td style={{ textAlign: 'right', fontWeight: 700, fontFamily: 'var(--font-sans)', fontSize: '12px', color: '#0f172a' }}>
           ${(isWeeklyView ? rowWeekCost : totalStockPrice).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         </td>
 
         {/* 4-Week Split Breakdown (Only shown in Master Allocation View) */}
         {!isWeeklyView && (
           <>
-            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#334155', background: '#f8fafc' }}>{split.w1_qty}</td>
-            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0f172a', background: '#f8fafc', fontWeight: 600 }}>${split.w1_cost.toFixed(2)}</td>
+            <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#334155', background: '#f8fafc' }}>{split.w1_qty}</td>
+            <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#0f172a', background: '#f8fafc', fontWeight: 600 }}>${split.w1_cost.toFixed(2)}</td>
             
-            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#334155', background: '#f8fafc' }}>{split.w2_qty}</td>
-            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0f172a', background: '#f8fafc', fontWeight: 600 }}>${split.w2_cost.toFixed(2)}</td>
+            <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#334155', background: '#f8fafc' }}>{split.w2_qty}</td>
+            <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#0f172a', background: '#f8fafc', fontWeight: 600 }}>${split.w2_cost.toFixed(2)}</td>
             
-            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#334155', background: '#f8fafc' }}>{split.w3_qty}</td>
-            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0f172a', background: '#f8fafc', fontWeight: 600 }}>${split.w3_cost.toFixed(2)}</td>
+            <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#334155', background: '#f8fafc' }}>{split.w3_qty}</td>
+            <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#0f172a', background: '#f8fafc', fontWeight: 600 }}>${split.w3_cost.toFixed(2)}</td>
             
-            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#334155', background: '#f8fafc' }}>{split.w4_qty}</td>
-            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0f172a', background: '#f8fafc', fontWeight: 600 }}>${split.w4_cost.toFixed(2)}</td>
+            <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#334155', background: '#f8fafc' }}>{split.w4_qty}</td>
+            <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#0f172a', background: '#f8fafc', fontWeight: 600 }}>${split.w4_cost.toFixed(2)}</td>
           </>
         )}
 
@@ -1350,26 +1350,26 @@ export default function AllocationMatrix() {
                         </td>
                         <td style={{ textAlign: 'right', fontSize: '11px', color: '#64748b', background: '#f0f9ff' }}>—</td>
                         {orderedServiceSites.map(s => (
-                          <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: '#0369a1', fontSize: '11px', fontWeight: 700, background: '#f0f9ff' }}>
+                          <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', color: '#0369a1', fontSize: '11px', fontWeight: 700, background: '#f0f9ff' }}>
                             {isWeeklyView ? (displayTotals[`siteW${selectedWeekNum}Totals`]?.[s.id] || 0) : (displayTotals.perSite[s.id] || 0)}
                           </td>
                         ))}
-                        <td style={{ textAlign: 'center', background: '#e0f2fe', color: '#0369a1', fontSize: '12.5px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>
+                        <td style={{ textAlign: 'center', background: '#e0f2fe', color: '#0369a1', fontSize: '12.5px', fontWeight: 800, fontFamily: 'var(--font-sans)' }}>
                           {isWeeklyView ? displayTotals[`totalW${selectedWeekNum}`] : displayTotals.totalQty}
                         </td>
-                        <td style={{ textAlign: 'right', color: '#0369a1', fontWeight: 800, fontFamily: 'var(--font-mono)', fontSize: '11.5px', background: '#f0f9ff' }}>
+                        <td style={{ textAlign: 'right', color: '#0369a1', fontWeight: 800, fontFamily: 'var(--font-sans)', fontSize: '11.5px', background: '#f0f9ff' }}>
                           ${(isWeeklyView ? displayTotals[`totalW${selectedWeekNum}Cost`] : displayTotals.totalCost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         {!isWeeklyView && (
                           <>
-                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW1}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0fdf4' }}>${displayTotals.totalW1Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW2}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0fdf4' }}>${displayTotals.totalW2Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW3}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0fdf4' }}>${displayTotals.totalW3Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW4}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0fdf4' }}>${displayTotals.totalW4Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW1}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0fdf4' }}>${displayTotals.totalW1Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW2}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0fdf4' }}>${displayTotals.totalW2Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW3}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0fdf4' }}>${displayTotals.totalW3Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW4}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0fdf4' }}>${displayTotals.totalW4Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                           </>
                         )}
                         <td style={{ background: '#f0f9ff' }}></td>
@@ -1411,26 +1411,26 @@ export default function AllocationMatrix() {
                         </td>
                         <td style={{ textAlign: 'right', fontSize: '11px', color: '#64748b', background: '#f0fdf4' }}>—</td>
                         {orderedServiceSites.map(s => (
-                          <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: '#15803d', fontSize: '11px', fontWeight: 700, background: '#f0fdf4' }}>
+                          <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', color: '#15803d', fontSize: '11px', fontWeight: 700, background: '#f0fdf4' }}>
                             {isWeeklyView ? (batteryTotals[`siteW${selectedWeekNum}Totals`]?.[s.id] || 0) : (batteryTotals.perSite[s.id] || 0)}
                           </td>
                         ))}
-                        <td style={{ textAlign: 'center', background: '#dcfce7', color: '#15803d', fontSize: '12.5px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>
+                        <td style={{ textAlign: 'center', background: '#dcfce7', color: '#15803d', fontSize: '12.5px', fontWeight: 800, fontFamily: 'var(--font-sans)' }}>
                           {isWeeklyView ? batteryTotals[`totalW${selectedWeekNum}`] : batteryTotals.totalQty}
                         </td>
-                        <td style={{ textAlign: 'right', color: '#15803d', fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '11.5px', background: '#f0fdf4' }}>
+                        <td style={{ textAlign: 'right', color: '#15803d', fontWeight: 700, fontFamily: 'var(--font-sans)', fontSize: '11.5px', background: '#f0fdf4' }}>
                           ${(isWeeklyView ? batteryTotals[`totalW${selectedWeekNum}Cost`] : batteryTotals.totalCost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         {!isWeeklyView && (
                           <>
-                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW1}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW1Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW2}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW2Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW3}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW3Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW4}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW4Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW1}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW1Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW2}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW2Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW3}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW3Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW4}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW4Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                           </>
                         )}
                         <td style={{ background: '#f0fdf4' }}></td>
@@ -1476,25 +1476,25 @@ export default function AllocationMatrix() {
                   </td>
                   <td style={{ textAlign: 'right', color: '#64748b', fontSize: '11px' }}>—</td>
                   {orderedServiceSites.map(s => (
-                    <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: '#38bdf8', fontSize: '11.5px', fontWeight: 800 }}>
+                    <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', color: '#38bdf8', fontSize: '11.5px', fontWeight: 800 }}>
                       {isWeeklyView ? (weeklySiteTotals[selectedWeekNum]?.[s.id] || 0) : (siteTotals[s.id] || 0)}
                     </td>
                   ))}
-                  <td style={{ textAlign: 'center', background: '#0284c7', color: '#ffffff', fontSize: '13px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>
+                  <td style={{ textAlign: 'center', background: '#0284c7', color: '#ffffff', fontSize: '13px', fontWeight: 800, fontFamily: 'var(--font-sans)' }}>
                     {isWeeklyView ? grandGroupTotals[`totalW${selectedWeekNum}`] : totalAllocatedAllParts}
                   </td>
-                  <td style={{ textAlign: 'right', color: '#94a3b8', fontSize: '11px', fontFamily: 'var(--font-mono)' }}>
+                  <td style={{ textAlign: 'right', color: '#94a3b8', fontSize: '11px', fontFamily: 'var(--font-sans)' }}>
                     —
                   </td>
                   {!isWeeklyView && (
                     <>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW1}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW1}</td>
                       <td style={{ textAlign: 'right', color: '#94a3b8', fontSize: '10px' }}>—</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW2}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW2}</td>
                       <td style={{ textAlign: 'right', color: '#94a3b8', fontSize: '10px' }}>—</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW3}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW3}</td>
                       <td style={{ textAlign: 'right', color: '#94a3b8', fontSize: '10px' }}>—</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW4}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW4}</td>
                       <td style={{ textAlign: 'right', color: '#94a3b8', fontSize: '10px' }}>—</td>
                     </>
                   )}
@@ -1518,26 +1518,26 @@ export default function AllocationMatrix() {
                   </td>
                   <td style={{ textAlign: 'right', color: '#64748b', fontSize: '10px' }}>—</td>
                   {orderedServiceSites.map(s => (
-                    <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10.5px', color: '#e2e8f0', fontWeight: 600, padding: '6px 2px' }}>
+                    <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '10.5px', color: '#e2e8f0', fontWeight: 600, padding: '6px 2px' }}>
                       ${Math.round(isWeeklyView ? (weeklySiteCosts[selectedWeekNum]?.[s.id] || 0) : (siteCostTotals[s.id] || 0)).toLocaleString()}
                     </td>
                   ))}
-                  <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px', fontFamily: 'var(--font-mono)' }}>
+                  <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px', fontFamily: 'var(--font-sans)' }}>
                     —
                   </td>
-                  <td style={{ textAlign: 'right', background: '#0369a1', color: '#ffffff', fontWeight: 800, fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
+                  <td style={{ textAlign: 'right', background: '#0369a1', color: '#ffffff', fontWeight: 800, fontFamily: 'var(--font-sans)', fontSize: '12px' }}>
                     ${(isWeeklyView ? grandGroupTotals[`totalW${selectedWeekNum}Cost`] : grandTotalCost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </td>
                   {!isWeeklyView && (
                     <>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10px', color: '#94a3b8' }}>W1</td>
-                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>${grandGroupTotals.totalW1Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10px', color: '#94a3b8' }}>W2</td>
-                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>${grandGroupTotals.totalW2Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10px', color: '#94a3b8' }}>W3</td>
-                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>${grandGroupTotals.totalW3Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10px', color: '#94a3b8' }}>W4</td>
-                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>${grandGroupTotals.totalW4Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '10px', color: '#94a3b8' }}>W1</td>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>${grandGroupTotals.totalW1Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '10px', color: '#94a3b8' }}>W2</td>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>${grandGroupTotals.totalW2Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '10px', color: '#94a3b8' }}>W3</td>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>${grandGroupTotals.totalW3Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '10px', color: '#94a3b8' }}>W4</td>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>${grandGroupTotals.totalW4Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                     </>
                   )}
                   <td style={{ textAlign: 'center', color: '#64748b', fontSize: '10.5px' }}>—</td>

@@ -505,7 +505,7 @@ export default function PurchaseOrders() {
           {/* Total POs */}
           <div style={{ background: '#f8fafc', padding: '14px 16px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
             <span style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Total POs</span>
-            <div style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#0f172a', marginTop: '4px' }}>
+            <div style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--font-sans)', color: '#0f172a', marginTop: '4px' }}>
               {stats.totalPOs}
             </div>
           </div>
@@ -513,7 +513,7 @@ export default function PurchaseOrders() {
           {/* Pending / In Transit */}
           <div style={{ background: '#fefce8', padding: '14px 16px', borderRadius: '10px', border: '1px solid #fef08a' }}>
             <span style={{ fontSize: '11px', color: '#854d0e', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Pending / In Transit</span>
-            <div style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#a16207', marginTop: '4px' }}>
+            <div style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--font-sans)', color: '#a16207', marginTop: '4px' }}>
               {stats.pendingPOs}
             </div>
           </div>
@@ -521,7 +521,7 @@ export default function PurchaseOrders() {
           {/* Partially Received */}
           <div style={{ background: '#eff6ff', padding: '14px 16px', borderRadius: '10px', border: '1px solid #bfdbfe' }}>
             <span style={{ fontSize: '11px', color: '#1e40af', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Partially Received</span>
-            <div style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#2563eb', marginTop: '4px' }}>
+            <div style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--font-sans)', color: '#2563eb', marginTop: '4px' }}>
               {stats.partialPOs}
             </div>
           </div>
@@ -529,7 +529,7 @@ export default function PurchaseOrders() {
           {/* Fully Received */}
           <div style={{ background: '#f0fdf4', padding: '14px 16px', borderRadius: '10px', border: '1px solid #bbf7d0' }}>
             <span style={{ fontSize: '11px', color: '#166534', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Fully Received</span>
-            <div style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#16a34a', marginTop: '4px' }}>
+            <div style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--font-sans)', color: '#16a34a', marginTop: '4px' }}>
               {stats.receivedPOs}
             </div>
           </div>
@@ -537,7 +537,7 @@ export default function PurchaseOrders() {
           {/* Received Units */}
           <div style={{ background: '#f8fafc', padding: '14px 16px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
             <span style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Received Units</span>
-            <div style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#0f172a', marginTop: '4px' }}>
+            <div style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--font-sans)', color: '#0f172a', marginTop: '4px' }}>
               {stats.totalReceivedUnits} <span style={{ fontSize: '14px', color: '#94a3b8', fontWeight: 500 }}>/ {stats.totalOrderedUnits}</span>
             </div>
           </div>
@@ -706,7 +706,7 @@ export default function PurchaseOrders() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <span style={{ fontSize: '17px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#0f172a' }}>
+                      <span style={{ fontSize: '17px', fontWeight: 700, fontFamily: 'var(--font-sans)', color: '#0f172a' }}>
                         {po.po_number}
                       </span>
                       <span className={`badge ${isCompleted ? 'badge-success' : totalReceived > 0 ? 'badge-primary' : 'badge-warning'}`}>
@@ -730,7 +730,7 @@ export default function PurchaseOrders() {
 
                   <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                     <div style={{ textAlign: 'right', marginRight: '8px' }}>
-                      <div style={{ fontSize: '16px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: isCompleted ? '#16a34a' : '#2563eb' }}>
+                      <div style={{ fontSize: '16px', fontWeight: 700, fontFamily: 'var(--font-sans)', color: isCompleted ? '#16a34a' : '#2563eb' }}>
                         {totalReceived} / {totalOrdered} Units ({pct}%)
                       </div>
                       <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '1px' }}>
@@ -824,14 +824,14 @@ export default function PurchaseOrders() {
                               {item.part_number}
                             </td>
                             <td style={{ color: '#334155' }}>{item.description}</td>
-                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: '#0f172a' }}>{item.quantity_ordered}</td>
-                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontWeight: 600, color: item.quantity_received > 0 ? '#16a34a' : '#64748b' }}>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', color: '#0f172a' }}>{item.quantity_ordered}</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontWeight: 600, color: item.quantity_received > 0 ? '#16a34a' : '#64748b' }}>
                               {item.quantity_received}
                             </td>
-                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: remaining > 0 ? '#b45309' : '#64748b' }}>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', color: remaining > 0 ? '#b45309' : '#64748b' }}>
                               {remaining}
                             </td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', color: '#334155' }}>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', color: '#334155' }}>
                               ${Number(item.unit_price || 0).toFixed(2)}
                             </td>
                             <td style={{ textAlign: 'center' }}>
@@ -963,13 +963,13 @@ export default function PurchaseOrders() {
                       <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                         <div style={{ textAlign: 'right' }}>
                           <span style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 600 }}>Total Expected Units</span>
-                          <div style={{ fontSize: '16px', fontWeight: 700, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+                          <div style={{ fontSize: '16px', fontWeight: 700, color: '#0f172a', fontFamily: 'var(--font-sans)' }}>
                             {stagedPOs.reduce((s, p) => s + (p.totalUnits || 0), 0)} units
                           </div>
                         </div>
                         <div style={{ textAlign: 'right' }}>
                           <span style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 600 }}>Total Value</span>
-                          <div style={{ fontSize: '16px', fontWeight: 700, color: '#16a34a', fontFamily: 'var(--font-mono)' }}>
+                          <div style={{ fontSize: '16px', fontWeight: 700, color: '#16a34a', fontFamily: 'var(--font-sans)' }}>
                             ${stagedPOs.reduce((s, p) => s + (p.calculatedTotal || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </div>
                         </div>
@@ -992,7 +992,7 @@ export default function PurchaseOrders() {
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
                             <div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                                <span style={{ fontSize: '14px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#0f172a' }}>
+                                <span style={{ fontSize: '14px', fontWeight: 700, fontFamily: 'var(--font-sans)', color: '#0f172a' }}>
                                   {staged.po_number || `PO #${idx + 1}`}
                                 </span>
                                 {staged.invoice_ref && (
@@ -1013,7 +1013,7 @@ export default function PurchaseOrders() {
                             </div>
 
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                              <span style={{ fontSize: '13.5px', fontWeight: 700, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+                              <span style={{ fontSize: '13.5px', fontWeight: 700, color: '#0f172a', fontFamily: 'var(--font-sans)' }}>
                                 ${(staged.calculatedTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {staged.currency || 'USD'}
                               </span>
                               <button
@@ -1045,7 +1045,7 @@ export default function PurchaseOrders() {
                                 }}
                                 title={it.description}
                               >
-                                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#2563eb' }}>
+                                <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, color: '#2563eb' }}>
                                   {it.part_number}
                                 </span>
                                 <span style={{ color: '#64748b' }}>
@@ -1240,7 +1240,7 @@ export default function PurchaseOrders() {
                                       style={{ height: '30px', fontSize: '12px', textAlign: 'right', padding: '2px 6px', background: '#ffffff', border: '1px solid #cbd5e1', color: '#0f172a' }}
                                     />
                                   </td>
-                                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', color: '#0f172a', fontWeight: 600 }}>
+                                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', color: '#0f172a', fontWeight: 600 }}>
                                     ${(Number(it.quantity_ordered || 0) * Number(it.unit_price || 0)).toFixed(2)}
                                   </td>
                                   <td style={{ textAlign: 'center' }}>

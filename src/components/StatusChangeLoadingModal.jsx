@@ -109,7 +109,7 @@ export default function StatusChangeLoadingModal({
         {invoiceRef && (
           <div
             style={{
-              fontFamily: 'var(--font-mono)',
+              fontFamily: 'var(--font-sans)',
               fontSize: '12.5px',
               fontWeight: 700,
               color: '#0284c7',

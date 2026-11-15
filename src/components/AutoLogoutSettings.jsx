@@ -150,7 +150,7 @@ export default function AutoLogoutSettings({
           </div>
           <div>
             <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Next Reset In</div>
-            <div style={{ fontSize: '17px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono, monospace)' }}>
+            <div style={{ fontSize: '17px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-sans)' }}>
               {form.enabled && timeRemainingMs
                 ? `${remainingHours}h ${remainingMins}m`
                 : 'Disabled'}
@@ -168,7 +168,7 @@ export default function AutoLogoutSettings({
           </div>
           <div>
             <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Device Local Time</div>
-            <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono, monospace)' }}>
+            <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-sans)' }}>
               {deviceLocalTime}
             </div>
             <div style={{ fontSize: '11px', color: '#7e22ce', fontWeight: 600 }}>
@@ -281,7 +281,7 @@ export default function AutoLogoutSettings({
                   border: '1px solid #cbd5e1',
                   fontSize: '14px',
                   fontWeight: 600,
-                  fontFamily: 'var(--font-mono, monospace)',
+                  fontFamily: 'var(--font-sans)',
                   background: '#ffffff',
                   color: '#0f172a',
                   width: '160px'

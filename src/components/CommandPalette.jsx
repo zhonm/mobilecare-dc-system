@@ -539,7 +539,7 @@ export default function CommandPalette({ isOpen, onClose }) {
                         }}>
                           <Barcode size={15} />
                         </div>
-                        <span style={{ fontSize: '14.5px', fontWeight: 800, color: '#f8fafc', fontFamily: 'var(--font-mono)' }}>
+                        <span style={{ fontSize: '14.5px', fontWeight: 800, color: '#f8fafc', fontFamily: 'var(--font-sans)' }}>
                           {sd.serialNumber}
                         </span>
                       </div>
@@ -587,7 +587,7 @@ export default function CommandPalette({ isOpen, onClose }) {
                           {sd.isDcSite ? 'DC Stocks' : sd.siteName}
                         </strong>
                         {sd.movementTrail && sd.transferCount > 0 && (
-                          <span style={{ color: '#38bdf8', fontSize: '10.5px', fontWeight: 700, display: 'block', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
+                          <span style={{ color: '#38bdf8', fontSize: '10.5px', fontWeight: 700, display: 'block', marginTop: '2px', fontFamily: 'var(--font-sans)' }}>
                             Trail: {sd.movementTrail}
                           </span>
                         )}

@@ -122,11 +122,11 @@ export default function ToolLabelPrintModal({ assets = [], onClose }) {
     const cardsHtml = assets
       .map(
         (asset) => `
-          <div style="border:1.5px solid #0f172a;border-radius:8px;padding:10px 12px;margin-bottom:10px;page-break-inside:avoid;font-family:system-ui,-apple-system,sans-serif;">
+          <div style="border:1.5px solid #0f172a;border-radius:8px;padding:10px 12px;margin-bottom:10px;page-break-inside:avoid;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
             <div style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;">MOBILECARE TOOL ASSET</div>
-            <div style="font-family:monospace;font-size:14px;font-weight:800;color:#0f172a;margin:2px 0;">${asset.asset_tag}</div>
+            <div style="font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-variant-numeric:tabular-nums;font-size:14px;font-weight:800;color:#0f172a;margin:2px 0;">${asset.asset_tag}</div>
             <div style="font-size:12px;font-weight:600;color:#1e293b;">${asset.part_number} — ${asset.description}</div>
-            <div style="font-family:monospace;font-size:11px;color:#334155;margin-top:4px;">
+            <div style="font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-variant-numeric:tabular-nums;font-size:11px;color:#334155;margin-top:4px;">
               ${asset.serial_number ? `SN: ${asset.serial_number}` : 'Unserialized Tool'} | Site: ${asset.site_code}
             </div>
           </div>`

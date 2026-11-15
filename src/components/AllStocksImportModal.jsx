@@ -985,13 +985,13 @@ export default function AllStocksImportModal({
                           <td style={{ padding: '8px 12px', fontWeight: 700, color: '#0369a1' }}>
                             {item.site_code || item.sheetName}
                           </td>
-                          <td style={{ padding: '8px 12px', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                          <td style={{ padding: '8px 12px', fontFamily: 'var(--font-sans)', fontWeight: 600 }}>
                             {item.partNumber || item.part_number}
                           </td>
                           <td style={{ padding: '8px 12px' }}>
                             {item.description}
                           </td>
-                          <td style={{ padding: '8px 12px', fontFamily: 'var(--font-mono)' }}>
+                          <td style={{ padding: '8px 12px', fontFamily: 'var(--font-sans)' }}>
                             {item.summary_only ? (
                               <span style={{ fontSize: '11px', color: '#64748b', fontStyle: 'italic' }}>
                                 Non-serialized (Summary)

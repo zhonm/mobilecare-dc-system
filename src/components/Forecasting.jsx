@@ -363,12 +363,12 @@ export default function Forecasting() {
                 <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                   Recommended Order
                 </div>
-                <div style={{ fontSize: '20px', fontWeight: 800, color: '#047857', fontFamily: 'var(--font-mono)' }}>
+                <div style={{ fontSize: '20px', fontWeight: 800, color: '#047857', fontFamily: 'var(--font-sans)' }}>
                   {executiveSummary.totalRecommendedUnits.toLocaleString()}{' '}
                   <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>units</span>
                 </div>
                 <div style={{ fontSize: '11px', color: '#64748b', marginTop: '1px' }}>
-                  Base forecast: <strong style={{ fontFamily: 'var(--font-mono)' }}>{executiveSummary.totalBaseUnits}</strong> units
+                  Base forecast: <strong style={{ fontFamily: 'var(--font-sans)' }}>{executiveSummary.totalBaseUnits}</strong> units
                 </div>
               </div>
             </div>
@@ -400,7 +400,7 @@ export default function Forecasting() {
                 <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                   Total Valuation
                 </div>
-                <div style={{ fontSize: '20px', fontWeight: 800, color: '#0369a1', fontFamily: 'var(--font-mono)' }}>
+                <div style={{ fontSize: '20px', fontWeight: 800, color: '#0369a1', fontFamily: 'var(--font-sans)' }}>
                   ${executiveSummary.totalEstimatedSpend.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </div>
                 <div style={{ fontSize: '11px', color: '#64748b', marginTop: '1px' }}>
@@ -473,7 +473,7 @@ export default function Forecasting() {
                 <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                   Covered SKUs
                 </div>
-                <div style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+                <div style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-sans)' }}>
                   {enrichedItems.length}{' '}
                   <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>models</span>
                 </div>
@@ -838,7 +838,7 @@ export default function Forecasting() {
 
                       {/* Historical Monthly Counts */}
                       {item.counts.map((cnt, idx) => (
-                        <td key={idx} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: cnt > 0 ? '#0f172a' : '#94a3b8' }}>
+                        <td key={idx} style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: cnt > 0 ? '#0f172a' : '#94a3b8' }}>
                           {cnt}
                         </td>
                       ))}
@@ -846,13 +846,13 @@ export default function Forecasting() {
                       {/* Detailed Columns */}
                       {viewMode === 'detailed' && (
                         <>
-                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: '#475569', fontSize: '11.5px' }}>
+                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', color: '#475569', fontSize: '11.5px' }}>
                             {item.avgMonthlyUsage.toFixed(1)}
                           </td>
-                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: '#64748b', fontSize: '11px' }}>
+                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', color: '#64748b', fontSize: '11px' }}>
                             <strong>{item.peakUsage}</strong> ({item.peakMonth})
                           </td>
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0f172a', fontWeight: 600 }}>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#0f172a', fontWeight: 600 }}>
                             ${item.stockPrice.toFixed(2)}
                           </td>
                         </>
@@ -861,7 +861,7 @@ export default function Forecasting() {
                       {/* Computed Linear Regression Forecast */}
                       <td
                         className="forecast-calc-cell"
-                        style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#0369a1', fontSize: '13px' }}
+                        style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-sans)', color: '#0369a1', fontSize: '13px' }}
                       >
                         {item.computed}
                       </td>
@@ -906,7 +906,7 @@ export default function Forecasting() {
                             )}
                           </div>
                         ) : (
-                          <div style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
+                          <div style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '12px' }}>
                             {item.hasOverride ? (
                               <span
                                 className="badge"
@@ -935,7 +935,7 @@ export default function Forecasting() {
                         style={{
                           textAlign: 'center',
                           fontWeight: 800,
-                          fontFamily: 'var(--font-mono)',
+                          fontFamily: 'var(--font-sans)',
                           color: '#15803d',
                           fontSize: '14px'
                         }}
@@ -949,7 +949,7 @@ export default function Forecasting() {
                           className="forecast-spend-cell"
                           style={{
                             textAlign: 'right',
-                            fontFamily: 'var(--font-mono)',
+                            fontFamily: 'var(--font-sans)',
                             fontWeight: 700,
                             color: '#0f172a',
                             fontSize: '12px'
@@ -974,7 +974,7 @@ export default function Forecasting() {
                   {months.map((_, idx) => {
                     const colTotal = enrichedItems.reduce((sum, it) => sum + (it.counts[idx] || 0), 0);
                     return (
-                      <td key={idx} style={{ background: '#0f172a', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#e2e8f0' }}>
+                      <td key={idx} style={{ background: '#0f172a', textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#e2e8f0' }}>
                         {colTotal}
                       </td>
                     );
@@ -989,7 +989,7 @@ export default function Forecasting() {
                   )}
 
                   {/* Computed Base Total */}
-                  <td className="forecast-footer-highlight-blue" style={{ textAlign: 'center', background: '#0369a1', color: '#ffffff', fontFamily: 'var(--font-mono)', fontSize: '13px', fontWeight: 800 }}>
+                  <td className="forecast-footer-highlight-blue" style={{ textAlign: 'center', background: '#0369a1', color: '#ffffff', fontFamily: 'var(--font-sans)', fontSize: '13px', fontWeight: 800 }}>
                     {executiveSummary.totalBaseUnits.toLocaleString()}
                   </td>
 
@@ -999,13 +999,13 @@ export default function Forecasting() {
                   </td>
 
                   {/* Final Recommended Order Total */}
-                  <td className="forecast-footer-highlight-green-rec" style={{ textAlign: 'center', background: '#059669', color: '#ffffff', fontFamily: 'var(--font-mono)', fontSize: '15px', fontWeight: 800 }}>
+                  <td className="forecast-footer-highlight-green-rec" style={{ textAlign: 'center', background: '#059669', color: '#ffffff', fontFamily: 'var(--font-sans)', fontSize: '15px', fontWeight: 800 }}>
                     {executiveSummary.totalRecommendedUnits.toLocaleString()}
                   </td>
 
                   {/* Total Spend */}
                   {viewMode === 'detailed' && (
-                    <td className="forecast-footer-highlight-green-spend" style={{ textAlign: 'right', background: '#047857', color: '#ffffff', fontFamily: 'var(--font-mono)', fontSize: '13px', fontWeight: 800 }}>
+                    <td className="forecast-footer-highlight-green-spend" style={{ textAlign: 'right', background: '#047857', color: '#ffffff', fontFamily: 'var(--font-sans)', fontSize: '13px', fontWeight: 800 }}>
                       ${executiveSummary.totalEstimatedSpend.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                   )}

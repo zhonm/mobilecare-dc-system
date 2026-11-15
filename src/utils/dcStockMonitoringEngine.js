@@ -1311,26 +1311,33 @@ export function computeDcStockMonitoringAnalytics(datasets = {}, options = {}) {
 
   const completedOrderReport = (orderReportOrders || []).filter(o => o.status === 'Completed');
   const orderReportTotalAmount = completedOrderReport.reduce((sum, o) => sum + cleanNum(o.finalCharge), 0);
+  const currentMonthName = MONTH_NAMES[new Date().getMonth()];
+  const dynamicByMonth = {};
+  for (const o of completedOrderReport) {
+    const m = cleanStr(o.month);
+    if (!m) continue;
+    if (!dynamicByMonth[m]) {
+      dynamicByMonth[m] = { count: 0, amount: 0 };
+    }
+    dynamicByMonth[m].count += 1;
+    dynamicByMonth[m].amount = Number((dynamicByMonth[m].amount + cleanNum(o.finalCharge)).toFixed(2));
+  }
+  if (currentMonthName && !dynamicByMonth[currentMonthName]) {
+    dynamicByMonth[currentMonthName] = { count: 0, amount: 0 };
+  }
+  const orderedMonthNames = Object.keys(dynamicByMonth).sort(
+    (a, b) => MONTH_NAMES.indexOf(a) - MONTH_NAMES.indexOf(b)
+  );
+  const firstOrderMonth = orderedMonthNames[0] || 'August';
+  const lastOrderMonth = orderedMonthNames[orderedMonthNames.length - 1] || currentMonthName || 'October';
+
   const orderReportDetails = {
     isVerified: true,
-    sourceOfTruth: 'Lalamove Order Report (August to October)',
+    sourceOfTruth: `Lalamove Order Report (${firstOrderMonth} to ${lastOrderMonth})`,
     totalDeliveries: completedOrderReport.length,
     totalAmountPhp: Number(orderReportTotalAmount.toFixed(2)),
     avgCostPerDeliveryPhp: completedOrderReport.length > 0 ? Number((orderReportTotalAmount / completedOrderReport.length).toFixed(2)) : 0,
-    byMonth: {
-      August: {
-        count: completedOrderReport.filter(o => o.month === 'August').length,
-        amount: Number(completedOrderReport.filter(o => o.month === 'August').reduce((sum, o) => sum + cleanNum(o.finalCharge), 0).toFixed(2))
-      },
-      September: {
-        count: completedOrderReport.filter(o => o.month === 'September').length,
-        amount: Number(completedOrderReport.filter(o => o.month === 'September').reduce((sum, o) => sum + cleanNum(o.finalCharge), 0).toFixed(2))
-      },
-      October: {
-        count: completedOrderReport.filter(o => o.month === 'October').length,
-        amount: Number(completedOrderReport.filter(o => o.month === 'October').reduce((sum, o) => sum + cleanNum(o.finalCharge), 0).toFixed(2))
-      }
-    },
+    byMonth: dynamicByMonth,
     orders: orderReportOrders
   };
 

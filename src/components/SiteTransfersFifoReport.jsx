@@ -242,9 +242,9 @@ export default function SiteTransfersFifoReport() {
   }, [broadcastCloudEvent]);
 
   // Zero-Egress Cloud Synchronization
-  const syncFromCloud = useCallback(async ({ force = false, silent = false } = {}) => {
-    if (!supabase || isSyncingRef.current) return;
-    isSyncingRef.current = true;
+  const syncFromCloud = useCallback(async ({ force = false, silent = false, bypassLock = false } = {}) => {
+    if (!supabase || (!bypassLock && isSyncingRef.current)) return;
+    if (!bypassLock) isSyncingRef.current = true;
     if (!silent) setIsCloudSyncing(true);
 
     try {
@@ -364,8 +364,10 @@ export default function SiteTransfersFifoReport() {
     } catch (err) {
       console.warn('[FIFO Audit Sync] Sync error:', err?.message || err);
     } finally {
-      isSyncingRef.current = false;
-      setIsCloudSyncing(false);
+      if (!bypassLock) {
+        isSyncingRef.current = false;
+        setIsCloudSyncing(false);
+      }
     }
   }, [uploadTransfersToCloud, uploadGsxToCloud]);
 
@@ -501,7 +503,7 @@ export default function SiteTransfersFifoReport() {
 
       // Fallback 2: Extract from master_used_parts_registry if available
       if (!nextGsxData) {
-        const masterUsed = await dbStorage.getItem('master_used_parts_registry');
+        const masterUsed = (await dbStorage.getItem('mdc_master_used_parts_registry')) || (await dbStorage.getItem('master_used_parts_registry'));
         if (Array.isArray(masterUsed) && masterUsed.length > 0) {
           const mapped = masterUsed.map(r => ({
             order_id: String(r.work_order_number || r.order_id || '').trim(),
@@ -542,7 +544,7 @@ export default function SiteTransfersFifoReport() {
 
       // ── Cloud Sync Fallback (Multi-device remote sync) ──
       if (supabase && (!nextTrfData || !nextGsxData || force)) {
-        await syncFromCloud({ force, silent: true });
+        await syncFromCloud({ force, silent: true, bypassLock: true });
       }
 
       setLastCloudSyncTime(new Date());
@@ -565,11 +567,14 @@ export default function SiteTransfersFifoReport() {
     })();
 
     let fifoReloadTimer = null;
-    const scheduleFifoReload = () => {
+    const scheduleFifoReload = (checkCloud = false) => {
       if (fifoReloadTimer) clearTimeout(fifoReloadTimer);
-      fifoReloadTimer = setTimeout(() => {
+      fifoReloadTimer = setTimeout(async () => {
         fifoReloadTimer = null;
-        loadDataFromAllStocks({ force: false, silent: true });
+        await loadDataFromAllStocks({ force: false, silent: true });
+        if (checkCloud && supabase) {
+          await syncFromCloud({ force: false, silent: true });
+        }
       }, 1500);
     };
 
@@ -586,7 +591,7 @@ export default function SiteTransfersFifoReport() {
             p.type === 'KGB_USED_REPORT_SYNCED' ||
             p.type === 'STOCK_UPDATED'
           )) {
-            scheduleFifoReload();
+            scheduleFifoReload(true);
           }
         })
         .on('postgres_changes', {
@@ -595,7 +600,7 @@ export default function SiteTransfersFifoReport() {
           table: 'saved_records',
           filter: `id=eq.${FIFO_TRANSFERS_DOC_ID}`
         }, () => {
-          scheduleFifoReload();
+          scheduleFifoReload(true);
         })
         .on('postgres_changes', {
           event: '*',
@@ -603,7 +608,7 @@ export default function SiteTransfersFifoReport() {
           table: 'saved_records',
           filter: `id=eq.${FIFO_GSX_DOC_ID}`
         }, () => {
-          scheduleFifoReload();
+          scheduleFifoReload(true);
         })
         .subscribe();
     }
@@ -654,7 +659,7 @@ export default function SiteTransfersFifoReport() {
       if (bcSyncBus) bcSyncBus.close();
       window.removeEventListener('storage', handleStorageChange);
     };
-  }, [loadDataFromAllStocks]);
+  }, [loadDataFromAllStocks, syncFromCloud]);
 
   // Reset audit cache and re-sync fresh from All Stocks & Multi-Site
   const handleClearAll = async () => {
@@ -1693,7 +1698,7 @@ export default function SiteTransfersFifoReport() {
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <span style={{
                               fontWeight: 800,
-                              fontFamily: 'Consolas, monospace',
+                              fontFamily: 'var(--font-sans)',
                               background: '#0f172a',
                               color: '#fff',
                               padding: '2px 7px',
@@ -1822,7 +1827,7 @@ export default function SiteTransfersFifoReport() {
                   <span style={{
                     background: '#0f172a',
                     color: '#38bdf8',
-                    fontFamily: 'Consolas, monospace',
+                    fontFamily: 'var(--font-sans)',
                     fontWeight: 800,
                     fontSize: '12px',
                     padding: '3px 8px',
@@ -1875,7 +1880,7 @@ export default function SiteTransfersFifoReport() {
                       borderRadius: '6px',
                       fontSize: '11px',
                       fontWeight: isSel ? 800 : 600,
-                      fontFamily: 'Consolas, monospace',
+                      fontFamily: 'var(--font-sans)',
                       border: isSel ? '1.5px solid #0284c7' : '1px solid #cbd5e1',
                       background: isSel ? '#0284c7' : '#f8fafc',
                       color: isSel ? '#fff' : '#334155',
@@ -2063,7 +2068,7 @@ export default function SiteTransfersFifoReport() {
                           const isSlowMov = r.aging_category === 'SLOW_MOVING';
                           return (
                             <tr key={`${r.serial_number}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9', background: idx % 2 === 1 ? '#fcfcfd' : '#fff' }}>
-                              <td style={{ padding: '8px 12px', textAlign: 'center', color: '#94a3b8', fontSize: '11px', fontFamily: 'Consolas, monospace' }}>
+                              <td style={{ padding: '8px 12px', textAlign: 'center', color: '#94a3b8', fontSize: '11px', fontFamily: 'var(--font-sans)' }}>
                                 {idx + 1}
                               </td>
                               <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontWeight: 600, color: '#334155' }}>
@@ -2080,19 +2085,19 @@ export default function SiteTransfersFifoReport() {
                               }}>
                                 {r.serial_used_by_label || '—'}
                               </td>
-                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'Consolas, monospace', fontWeight: 700, color: '#0f172a' }}>
+                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0f172a' }}>
                                 {r.product_code}
                               </td>
                               <td style={{ padding: '8px 12px', color: '#1e293b' }}>
                                 {r.product_name}
                               </td>
-                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'Consolas, monospace', fontWeight: 700, color: '#0284c7' }}>
+                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0284c7' }}>
                                 {r.serial_number}
                               </td>
                               <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', textAlign: 'center', color: '#334155' }}>
                                 {r.repair_closed_date || '—'}
                               </td>
-                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'Consolas, monospace', color: '#334155' }}>
+                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-sans)', color: '#334155' }}>
                                 {r.gsx_order_id || '—'}
                               </td>
                               <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
@@ -2201,19 +2206,19 @@ export default function SiteTransfersFifoReport() {
                         ) : (
                           (inspectedBranch.violationRows || []).map((r, idx) => (
                             <tr key={`${r.serial_number}-${idx}`} style={{ borderBottom: '1px solid #fee2e2', background: idx % 2 === 1 ? '#fffafa' : '#fff' }}>
-                              <td style={{ padding: '8px 12px', textAlign: 'center', color: '#94a3b8', fontSize: '11px', fontFamily: 'Consolas, monospace' }}>
+                              <td style={{ padding: '8px 12px', textAlign: 'center', color: '#94a3b8', fontSize: '11px', fontFamily: 'var(--font-sans)' }}>
                                 {idx + 1}
                               </td>
                               <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontWeight: 600 }}>{r.transfer_received_date}</td>
                               <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>{r.to_stock}</td>
                               <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>{r.serial_used_by_label}</td>
-                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'Consolas, monospace', fontWeight: 700 }}>{r.product_code}</td>
+                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-sans)', fontWeight: 700 }}>{r.product_code}</td>
                               <td style={{ padding: '8px 12px' }}>{r.product_name}</td>
-                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'Consolas, monospace', fontWeight: 700, color: '#dc2626' }}>
+                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#dc2626' }}>
                                 {r.serial_number}
                               </td>
                               <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', textAlign: 'center', fontWeight: 600 }}>{r.repair_closed_date}</td>
-                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'Consolas, monospace' }}>{r.gsx_order_id}</td>
+                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-sans)' }}>{r.gsx_order_id}</td>
                               <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
                                 <span style={{
                                   display: 'inline-block',
@@ -2304,7 +2309,7 @@ export default function SiteTransfersFifoReport() {
                         ) : (
                           (inspectedBranch.nonMovingRows || []).map((r, idx) => (
                             <tr key={`${r.serial_number}-${idx}`} style={{ borderBottom: '1px solid #fee2e2', background: idx % 2 === 1 ? '#fffafa' : '#fff' }}>
-                              <td style={{ padding: '8px 12px', textAlign: 'center', color: '#94a3b8', fontSize: '11px', fontFamily: 'Consolas, monospace' }}>
+                              <td style={{ padding: '8px 12px', textAlign: 'center', color: '#94a3b8', fontSize: '11px', fontFamily: 'var(--font-sans)' }}>
                                 {idx + 1}
                               </td>
                               <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontWeight: 600, color: '#334155' }}>
@@ -2313,13 +2318,13 @@ export default function SiteTransfersFifoReport() {
                               <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', color: '#475569' }}>
                                 {r.to_stock}
                               </td>
-                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'Consolas, monospace', fontWeight: 700, color: '#0f172a' }}>
+                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0f172a' }}>
                                 {r.product_code}
                               </td>
                               <td style={{ padding: '8px 12px', color: '#1e293b' }}>
                                 {r.product_name}
                               </td>
-                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'Consolas, monospace', fontWeight: 700, color: '#0284c7' }}>
+                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0284c7' }}>
                                 {r.serial_number}
                               </td>
                               <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
@@ -2427,7 +2432,7 @@ export default function SiteTransfersFifoReport() {
                         ) : (
                           (inspectedBranch.slowMovingRows || []).map((r, idx) => (
                             <tr key={`${r.serial_number}-${idx}`} style={{ borderBottom: '1px solid #fef3c7', background: idx % 2 === 1 ? '#fffdf7' : '#fff' }}>
-                              <td style={{ padding: '8px 12px', textAlign: 'center', color: '#94a3b8', fontSize: '11px', fontFamily: 'Consolas, monospace' }}>
+                              <td style={{ padding: '8px 12px', textAlign: 'center', color: '#94a3b8', fontSize: '11px', fontFamily: 'var(--font-sans)' }}>
                                 {idx + 1}
                               </td>
                               <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontWeight: 600, color: '#334155' }}>
@@ -2436,13 +2441,13 @@ export default function SiteTransfersFifoReport() {
                               <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', color: '#475569' }}>
                                 {r.to_stock}
                               </td>
-                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'Consolas, monospace', fontWeight: 700, color: '#0f172a' }}>
+                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0f172a' }}>
                                 {r.product_code}
                               </td>
                               <td style={{ padding: '8px 12px', color: '#1e293b' }}>
                                 {r.product_name}
                               </td>
-                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'Consolas, monospace', fontWeight: 700, color: '#0284c7' }}>
+                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0284c7' }}>
                                 {r.serial_number}
                               </td>
                               <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
@@ -2601,7 +2606,7 @@ export default function SiteTransfersFifoReport() {
                             color: '#0f172a',
                             padding: '2px 6px',
                             borderRadius: '4px',
-                            fontFamily: 'Consolas, monospace',
+                            fontFamily: 'var(--font-sans)',
                             marginRight: '6px'
                           }}>
                             {r.current_site.code}
@@ -2609,11 +2614,11 @@ export default function SiteTransfersFifoReport() {
                           {r.current_site.shortName}
                         </td>
                         <td style={{ padding: '10px 14px', color: '#475569' }}>{r.to_stock}</td>
-                        <td style={{ padding: '10px 14px', fontFamily: 'Consolas, monospace', fontWeight: 600 }}>
+                        <td style={{ padding: '10px 14px', fontFamily: 'var(--font-sans)', fontWeight: 600 }}>
                           {r.product_code}
                         </td>
                         <td style={{ padding: '10px 14px' }}>{r.product_name}</td>
-                        <td style={{ padding: '10px 14px', fontFamily: 'Consolas, monospace', fontWeight: 700, color: '#0284c7' }}>
+                        <td style={{ padding: '10px 14px', fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0284c7' }}>
                           {r.serial_number}
                         </td>
                         <td style={{ padding: '10px 14px', textAlign: 'center' }}>{r.transfer_received_date}</td>
@@ -2712,28 +2717,28 @@ export default function SiteTransfersFifoReport() {
                             color: '#0f172a',
                             padding: '2px 6px',
                             borderRadius: '4px',
-                            fontFamily: 'Consolas, monospace',
+                            fontFamily: 'var(--font-sans)',
                             marginRight: '6px'
                           }}>
                             {r.current_site.code}
                           </span>
                           {r.current_site.shortName}
                         </td>
-                        <td style={{ padding: '10px 14px', fontFamily: 'Consolas, monospace', fontWeight: 600 }}>
+                        <td style={{ padding: '10px 14px', fontFamily: 'var(--font-sans)', fontWeight: 600 }}>
                           {r.product_code}
                         </td>
                         <td style={{ padding: '10px 14px' }}>{r.product_name}</td>
-                        <td style={{ padding: '10px 14px', fontFamily: 'Consolas, monospace', fontWeight: 700, color: '#dc2626' }}>
+                        <td style={{ padding: '10px 14px', fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#dc2626' }}>
                           {r.serial_number}
                         </td>
                         <td style={{ padding: '10px 14px', textAlign: 'center' }}>{r.transfer_received_date}</td>
                         <td style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600 }}>{r.repair_closed_date}</td>
-                        <td style={{ padding: '10px 14px', fontFamily: 'Consolas, monospace' }}>{r.gsx_order_id}</td>
+                        <td style={{ padding: '10px 14px', fontFamily: 'var(--font-sans)' }}>{r.gsx_order_id}</td>
                         <td style={{ padding: '10px 14px' }}>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                             {olderSerials.slice(0, 3).map((old, oIdx) => (
                               <div key={oIdx} style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <span style={{ fontFamily: 'Consolas, monospace', fontWeight: 700, color: '#0f172a' }}>
+                                <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0f172a' }}>
                                   {old.olderSerial}
                                 </span>
                                 <span style={{ color: '#64748b' }}>
@@ -2825,17 +2830,17 @@ export default function SiteTransfersFifoReport() {
                         }}>
                           {r.serial_used_by_label || '—'}
                         </td>
-                        <td style={{ padding: '9px 12px', fontFamily: 'Consolas, monospace', fontWeight: 600 }}>
+                        <td style={{ padding: '9px 12px', fontFamily: 'var(--font-sans)', fontWeight: 600 }}>
                           {r.product_code}
                         </td>
                         <td style={{ padding: '9px 12px' }}>{r.product_name}</td>
-                        <td style={{ padding: '9px 12px', fontFamily: 'Consolas, monospace', fontWeight: 700, color: '#0f172a' }}>
+                        <td style={{ padding: '9px 12px', fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0f172a' }}>
                           {r.serial_number}
                         </td>
                         <td style={{ padding: '9px 12px', textAlign: 'center' }}>
                           {r.repair_closed_date || '—'}
                         </td>
-                        <td style={{ padding: '9px 12px', fontFamily: 'Consolas, monospace' }}>
+                        <td style={{ padding: '9px 12px', fontFamily: 'var(--font-sans)' }}>
                           {r.gsx_order_id || '—'}
                         </td>
                         <td style={{ padding: '9px 12px' }}>
@@ -2891,7 +2896,7 @@ export default function SiteTransfersFifoReport() {
                 </div>
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                   {(validations.duplicateTransferSerials || []).map(sn => (
-                    <span key={sn} style={{ fontFamily: 'Consolas, monospace', fontSize: '11px', background: '#fef3c7', color: '#92400e', padding: '2px 7px', borderRadius: '4px', fontWeight: 700 }}>
+                    <span key={sn} style={{ fontFamily: 'var(--font-sans)', fontSize: '11px', background: '#fef3c7', color: '#92400e', padding: '2px 7px', borderRadius: '4px', fontWeight: 700 }}>
                       {sn}
                     </span>
                   ))}
@@ -2907,7 +2912,7 @@ export default function SiteTransfersFifoReport() {
                 </div>
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', maxHeight: '64px', overflowY: 'auto' }}>
                   {(validations.missingPriceParts || []).map(pn => (
-                    <span key={pn} style={{ fontFamily: 'Consolas, monospace', fontSize: '11px', background: '#e0f2fe', color: '#0369a1', padding: '2px 7px', borderRadius: '4px', fontWeight: 700 }}>
+                    <span key={pn} style={{ fontFamily: 'var(--font-sans)', fontSize: '11px', background: '#e0f2fe', color: '#0369a1', padding: '2px 7px', borderRadius: '4px', fontWeight: 700 }}>
                       {pn}
                     </span>
                   ))}
@@ -2963,10 +2968,10 @@ export default function SiteTransfersFifoReport() {
                   ) : (
                     paginatedList.map((r, idx) => (
                       <tr key={`${r.serial_number}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '10px 14px', fontFamily: 'Consolas, monospace', fontWeight: 700, color: '#0f172a' }}>
+                        <td style={{ padding: '10px 14px', fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0f172a' }}>
                           {r.serial_number}
                         </td>
-                        <td style={{ padding: '10px 14px', fontFamily: 'Consolas, monospace', fontWeight: 600 }}>
+                        <td style={{ padding: '10px 14px', fontFamily: 'var(--font-sans)', fontWeight: 600 }}>
                           {r.product_code}
                         </td>
                         <td style={{ padding: '10px 14px' }}>{r.product_name}</td>
@@ -2978,7 +2983,7 @@ export default function SiteTransfersFifoReport() {
                         </td>
                         <td style={{ padding: '10px 14px', textAlign: 'center' }}>{r.transfer_received_date}</td>
                         <td style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600 }}>{r.repair_closed_date}</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'center', fontFamily: 'Consolas, monospace' }}>
+                        <td style={{ padding: '10px 14px', textAlign: 'center', fontFamily: 'var(--font-sans)' }}>
                           {r.gsx_order_id}
                         </td>
                       </tr>
@@ -3025,7 +3030,7 @@ export default function SiteTransfersFifoReport() {
                   <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
                     <td style={{ padding: '10px 12px', fontWeight: 800, color: '#0284c7' }}>1. Stock Transfer Report</td>
                     <td style={{ padding: '10px 12px' }}>Fixably → <code>Custom reports - Stock Transfers</code></td>
-                    <td style={{ padding: '10px 12px', fontFamily: 'Consolas, monospace' }}>Stock Transfer</td>
+                    <td style={{ padding: '10px 12px', fontFamily: 'var(--font-sans)' }}>Stock Transfer</td>
                     <td style={{ padding: '10px 12px' }}>
                       <code>Transfer Received Date</code>, <code>From Stock</code>, <code>To Stock</code>, <code>Product Code</code>, <code>Product Name</code>, <code>Transfer Quantity</code>, <code>Serial Number</code>
                     </td>
@@ -3036,7 +3041,7 @@ export default function SiteTransfersFifoReport() {
                   <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
                     <td style={{ padding: '10px 12px', fontWeight: 800, color: '#7c3aed' }}>2. GSX KBB/KGBs Used Report</td>
                     <td style={{ padding: '10px 12px' }}>Fixably / Apple GSX → <code>Custom reports - GSX KBB / KGBs Used</code></td>
-                    <td style={{ padding: '10px 12px', fontFamily: 'Consolas, monospace' }}>KGB Used</td>
+                    <td style={{ padding: '10px 12px', fontFamily: 'var(--font-sans)' }}>KGB Used</td>
                     <td style={{ padding: '10px 12px' }}>
                       <code>Order id</code>, <code>Location Name</code>, <code>Repair Closed Date</code>, <code>Product Code</code>, <code>Product Description</code>, <code>Product KGB</code>
                     </td>
@@ -3047,7 +3052,7 @@ export default function SiteTransfersFifoReport() {
                   <tr>
                     <td style={{ padding: '10px 12px', fontWeight: 800, color: '#15803d' }}>3. Apple Service Price List</td>
                     <td style={{ padding: '10px 12px' }}>Apple GSX Stocking Price Catalog (Built-in)</td>
-                    <td style={{ padding: '10px 12px', fontFamily: 'Consolas, monospace' }}>Sheet35</td>
+                    <td style={{ padding: '10px 12px', fontFamily: 'var(--font-sans)' }}>Sheet35</td>
                     <td style={{ padding: '10px 12px' }}>
                       <code>Part Number</code>, <code>Description</code>, <code>Price Type</code> (<code>Stocking Price</code>), <code>Price</code>
                     </td>

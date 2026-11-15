@@ -591,7 +591,7 @@ export default function ClearDataConfirmationModal({
                     {backupStepMessage || 'Uploading workbooks to Google Drive...'}
                   </div>
                 </div>
-                <div style={{ fontSize: '15px', fontWeight: 800, color: '#047857', fontFamily: 'var(--font-mono, monospace)' }}>
+                <div style={{ fontSize: '15px', fontWeight: 800, color: '#047857', fontFamily: 'var(--font-sans)' }}>
                   {backupProgressPercent}%
                 </div>
               </div>
@@ -713,7 +713,7 @@ export default function ClearDataConfirmationModal({
           {/* Security Phrase Input */}
           <div style={{ marginBottom: '18px' }}>
             <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 700, color: '#0f172a', marginBottom: '6px' }}>
-              Type <span style={{ color: '#dc2626', background: '#fee2e2', padding: '1px 6px', borderRadius: '4px', fontFamily: 'var(--font-mono, monospace)' }}>Delete Data</span> to confirm:
+              Type <span style={{ color: '#dc2626', background: '#fee2e2', padding: '1px 6px', borderRadius: '4px', fontFamily: 'var(--font-sans)' }}>Delete Data</span> to confirm:
             </label>
             <div style={{ position: 'relative' }}>
               <input
@@ -735,7 +735,7 @@ export default function ClearDataConfirmationModal({
                   border: isPhraseMatched ? '2px solid #10b981' : inputError ? '2px solid #ef4444' : '1px solid #cbd5e1',
                   outline: 'none',
                   boxSizing: 'border-box',
-                  fontFamily: 'var(--font-mono, monospace)',
+                  fontFamily: 'var(--font-sans)',
                   background: isPhraseMatched ? '#f0fdf4' : '#ffffff'
                 }}
               />

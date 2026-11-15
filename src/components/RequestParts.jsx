@@ -154,7 +154,7 @@ function renderUsageNotesContent(u) {
         </div>
 
         {kbbSeg && (
-          <div style={{ fontSize: '11px', color: '#475569', fontFamily: 'var(--font-mono)' }}>
+          <div style={{ fontSize: '11px', color: '#475569', fontFamily: 'var(--font-sans)' }}>
             <span style={{ fontWeight: 600, color: '#64748b' }}>Return KBB:</span> {kbbSeg.replace(/^KBB:\s*/i, '')}
           </div>
         )}
@@ -3008,7 +3008,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                                     onMouseLeave={(e) => e.currentTarget.style.background = isSelected ? '#f0f9ff' : '#ffffff'}
                                   >
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                                      <strong style={{ fontSize: '12.5px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>{p.part_number}</strong>
+                                      <strong style={{ fontSize: '12.5px', color: '#0284c7', fontFamily: 'var(--font-sans)' }}>{p.part_number}</strong>
                                       <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                                         <span className="badge" style={{ fontSize: '10px', background: '#f1f5f9' }}>{p.iphone_model || 'iPhone'}</span>
                                         <span
@@ -3653,7 +3653,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                         <td style={{ padding: '12px 14px' }}>
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <strong style={{ fontSize: '13px', color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+                              <strong style={{ fontSize: '13px', color: '#0f172a', fontFamily: 'var(--font-sans)' }}>
                                 {req.request_number}
                               </strong>
                               <button
@@ -3675,7 +3675,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                         <td style={{ padding: '12px 14px' }}>
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <span style={{ fontWeight: 800, fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                              <span style={{ fontWeight: 800, fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-sans)' }}>
                                 {req.part_number}
                               </span>
                               <button
@@ -4307,7 +4307,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                           <div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                                <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-sans)' }}>
                                   {sh.invoice_ref || sh.shipment_number}
                                 </strong>
                                 <span className="badge" style={{
@@ -4370,7 +4370,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                             {/* Part numbers preview */}
                             <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                               {(sh.items || []).slice(0, 4).map((it, idx) => (
-                                <span key={idx} style={{ fontSize: '11px', background: '#f1f5f9', border: '1px solid #e2e8f0', padding: '2px 7px', borderRadius: '4px', color: '#334155', fontFamily: 'var(--font-mono)' }}>
+                                <span key={idx} style={{ fontSize: '11px', background: '#f1f5f9', border: '1px solid #e2e8f0', padding: '2px 7px', borderRadius: '4px', color: '#334155', fontFamily: 'var(--font-sans)' }}>
                                   {it.part_number}
                                 </span>
                               ))}
@@ -4886,7 +4886,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                                 {isNested && (
                                   <span style={{ color: '#0284c7', fontSize: '12px', fontWeight: 700, userSelect: 'none' }}>↳</span>
                                 )}
-                                <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+                                <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-sans)', fontWeight: 700 }}>
                                   {row.partNumber}
                                 </strong>
                                 <button
@@ -4912,11 +4912,11 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                             <div style={{ fontSize: '11px', color: '#64748b', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                               <span>Model: <strong>{row.model}</strong></span>
                               <span style={{ color: '#cbd5e1' }}>&bull;</span>
-                              <span>Owner: <code style={{ fontSize: '10.5px', background: '#ecfdf5', padding: '1px 5px', borderRadius: '4px', color: '#047857', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{(row.currentOwner ? String(row.currentOwner).toUpperCase() : 'DC_MSPI-OWNED')}</code></span>
+                              <span>Owner: <code style={{ fontSize: '10.5px', background: '#ecfdf5', padding: '1px 5px', borderRadius: '4px', color: '#047857', fontFamily: 'var(--font-sans)', fontWeight: 700 }}>{(row.currentOwner ? String(row.currentOwner).toUpperCase() : 'DC_MSPI-OWNED')}</code></span>
                               {row.movementTrail && (
                                 <>
                                   <span style={{ color: '#cbd5e1' }}>&bull;</span>
-                                  <span>Movement: <strong style={{ color: '#0f172a', fontFamily: 'var(--font-mono)' }}>{row.movementTrail}</strong></span>
+                                  <span>Movement: <strong style={{ color: '#0f172a', fontFamily: 'var(--font-sans)' }}>{row.movementTrail}</strong></span>
                                 </>
                               )}
                               {row.latestTransferFormatted && row.latestTransferFormatted !== '—' && (
@@ -5573,7 +5573,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                           {/* Part Number */}
                           <td style={{ padding: '12px 14px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <span style={{ fontWeight: 800, fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                              <span style={{ fontWeight: 800, fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-sans)' }}>
                                 {partNumber}
                               </span>
                               <button
@@ -5601,7 +5601,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                               style={{
                                 fontSize: '11px',
                                 fontWeight: 800,
-                                fontFamily: 'var(--font-mono)',
+                                fontFamily: 'var(--font-sans)',
                                 padding: '2px 8px',
                                 borderRadius: '5px',
                                 background: '#f1f5f9',
@@ -5678,7 +5678,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                               <span
                                 onClick={() => setInspectedSerialDetails(serialDetails)}
                                 style={{
-                                  fontFamily: 'var(--font-mono)',
+                                  fontFamily: 'var(--font-sans)',
                                   fontWeight: 700,
                                   fontSize: '12px',
                                   color: '#0f172a',
@@ -6270,7 +6270,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                                 borderRadius: '6px',
                                 padding: '6px 10px',
                                 margin: '8px 0',
-                                fontFamily: 'var(--font-mono)'
+                                fontFamily: 'var(--font-sans)'
                               }}
                             >
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -6311,7 +6311,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
 
                             {/* Part Telemetry */}
                             <div style={{ fontSize: '12px', color: '#1e293b', fontWeight: 600 }}>
-                              <span style={{ color: '#0284c7', fontFamily: 'var(--font-mono)', fontWeight: 800 }}>{serialMatch.partNumber}</span>
+                              <span style={{ color: '#0284c7', fontFamily: 'var(--font-sans)', fontWeight: 800 }}>{serialMatch.partNumber}</span>
                               <span style={{ margin: '0 6px', color: '#cbd5e1' }}>•</span>
                               <span>{serialMatch.description}</span>
                             </div>
@@ -6424,7 +6424,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                           <div style={{ fontWeight: 800, fontSize: '13.5px', color: '#0f172a' }}>
                             {match.siteCode} — {match.siteName}
                           </div>
-                          <div style={{ fontSize: '12px', color: '#0284c7', fontFamily: 'var(--font-mono)', fontWeight: 700, marginTop: '4px' }}>
+                          <div style={{ fontSize: '12px', color: '#0284c7', fontFamily: 'var(--font-sans)', fontWeight: 700, marginTop: '4px' }}>
                             {match.partNumber}
                           </div>
                           <div style={{ fontSize: '11.5px', color: '#475569', marginTop: '2px' }}>
@@ -6822,7 +6822,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                             <tr style={{ background: isOwnSite ? '#f8fafc' : '#ffffff', borderBottom: isExpanded ? 'none' : '1px solid #f1f5f9' }}>
                               <td style={{ verticalAlign: 'top', padding: '12px 16px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                  <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                                  <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-sans)' }}>
                                     {row.partNumber}
                                   </strong>
                                   <button
@@ -7218,14 +7218,14 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                                                 {/* Serial Number */}
                                                 {isMaskedUnit ? (
                                                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                                    <span style={{ fontFamily: 'var(--font-mono)', color: '#94a3b8', fontSize: '11.5px', letterSpacing: '0.05em' }}>••••••••••••••••</span>
+                                                    <span style={{ fontFamily: 'var(--font-sans)', color: '#94a3b8', fontSize: '11.5px', letterSpacing: '0.05em' }}>••••••••••••••••</span>
                                                     <span className="badge" style={{ background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', fontSize: '9px', padding: '1px 4px', display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
                                                       <Lock size={9} /> Protected
                                                     </span>
                                                   </span>
                                                 ) : (
                                                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '12px', color: '#0f172a', letterSpacing: '0.02em' }}>
+                                                    <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: '12px', color: '#0f172a', letterSpacing: '0.02em' }}>
                                                       {u.serialNumber}
                                                     </span>
                                                     <button
@@ -7574,7 +7574,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                             </span>
                           </td>
                           <td style={{ width: '135px', padding: '12px 10px', whiteSpace: 'nowrap', verticalAlign: 'middle' }}>
-                            <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)', letterSpacing: '0.02em' }}>
+                            <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-sans)', letterSpacing: '0.02em' }}>
                               {u.part_number}
                             </strong>
                           </td>
@@ -7584,7 +7584,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                           <td style={{ width: '190px', padding: '12px 10px', verticalAlign: 'middle' }}>
                             <span
                               style={{
-                                fontFamily: 'var(--font-mono)',
+                                fontFamily: 'var(--font-sans)',
                                 fontWeight: 700,
                                 fontSize: '11.5px',
                                 background: '#f1f5f9',
@@ -7599,7 +7599,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                               {getCleanDisplaySerial(u.serial_number, u)}
                             </span>
                             {u.product_kbb && (
-                              <div style={{ fontSize: '10px', color: '#64748b', marginTop: '3px', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
+                              <div style={{ fontSize: '10px', color: '#64748b', marginTop: '3px', fontFamily: 'var(--font-sans)', whiteSpace: 'nowrap' }}>
                                 KBB: <span style={{ color: '#0369a1', fontWeight: 600 }}>{u.product_kbb}</span>
                               </div>
                             )}
@@ -7849,7 +7849,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                       {paginatedHistList.map(item => (
                         <tr key={item.partNumber}>
                           <td>
-                            <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                            <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-sans)' }}>
                               {item.partNumber}
                             </strong>
                           </td>
@@ -8168,7 +8168,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                       paddingLeft: '36px',
                       paddingRight: serialSearchFilter ? '32px' : '12px',
                       fontSize: '13px',
-                      fontFamily: 'var(--font-mono)',
+                      fontFamily: 'var(--font-sans)',
                       height: '42px',
                       borderRadius: '8px',
                       border: '1.5px solid #2563eb',
@@ -8296,7 +8296,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
 
                           <div style={{ minWidth: 0 }}>
                             <div style={{
-                              fontFamily: 'var(--font-mono)',
+                              fontFamily: 'var(--font-sans)',
                               fontSize: '12.5px',
                               fontWeight: isChecked ? 700 : 600,
                               color: isChecked ? '#065f46' : '#0f172a',
@@ -8505,11 +8505,11 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '10px 12px', fontSize: '12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                   <span style={{ color: '#64748b' }}>Serial Number:</span>
-                  <strong style={{ fontFamily: 'var(--font-mono)', color: '#0f172a' }}>{getCleanDisplaySerial(unitToDelete.serial_number || unitToDelete.serialNumber, unitToDelete)}</strong>
+                  <strong style={{ fontFamily: 'var(--font-sans)', color: '#0f172a' }}>{getCleanDisplaySerial(unitToDelete.serial_number || unitToDelete.serialNumber, unitToDelete)}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                   <span style={{ color: '#64748b' }}>Part Number:</span>
-                  <strong style={{ fontFamily: 'var(--font-mono)', color: '#0284c7' }}>{unitToDelete.part_number || unitToDelete.partNumber}</strong>
+                  <strong style={{ fontFamily: 'var(--font-sans)', color: '#0284c7' }}>{unitToDelete.part_number || unitToDelete.partNumber}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ color: '#64748b' }}>Branch / Location:</span>
@@ -8594,11 +8594,11 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
               <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '6px', padding: '10px 12px', fontSize: '12px', marginBottom: '14px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                   <span style={{ color: '#0369a1' }}>Serial Number:</span>
-                  <strong style={{ fontFamily: 'var(--font-mono)', color: '#0f172a' }}>{getCleanDisplaySerial(unitToEdit.serial_number || unitToEdit.serialNumber, unitToEdit)}</strong>
+                  <strong style={{ fontFamily: 'var(--font-sans)', color: '#0f172a' }}>{getCleanDisplaySerial(unitToEdit.serial_number || unitToEdit.serialNumber, unitToEdit)}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ color: '#0369a1' }}>Part Number:</span>
-                  <strong style={{ fontFamily: 'var(--font-mono)', color: '#0284c7' }}>{unitToEdit.part_number || unitToEdit.partNumber}</strong>
+                  <strong style={{ fontFamily: 'var(--font-sans)', color: '#0284c7' }}>{unitToEdit.part_number || unitToEdit.partNumber}</strong>
                 </div>
               </div>
 
@@ -8927,7 +8927,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+                    <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-sans)' }}>
                       #{reqNumber}
                     </h2>
                     <button
@@ -9012,7 +9012,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <strong style={{ fontSize: '15px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                      <strong style={{ fontSize: '15px', color: '#0284c7', fontFamily: 'var(--font-sans)' }}>
                         {partPn}
                       </strong>
                       <button
@@ -9125,7 +9125,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                     <span
                       onClick={() => handleCopyWaybill(req.tracking_number)}
                       style={{
-                        fontFamily: 'var(--font-mono)',
+                        fontFamily: 'var(--font-sans)',
                         fontWeight: 700,
                         fontSize: '12.5px',
                         color: isCopiedWb ? '#15803d' : '#0284c7',

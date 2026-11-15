@@ -1044,7 +1044,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                               {cat?.name || 'Part'}
                             </span>
                           </td>
-                          <td style={{ textAlign: 'right', padding: '14px 14px', fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#047857', fontSize: '14px' }}>
+                          <td style={{ textAlign: 'right', padding: '14px 14px', fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#047857', fontSize: '14px' }}>
                             ${parseFloat(p.stocking_price || 0).toFixed(2)}
                           </td>
                           <td style={{ textAlign: 'center', padding: '14px 10px' }}>
@@ -1427,7 +1427,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                             </div>
                           )}
                           {s.contact_phone && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#0284c7', fontSize: '12.5px', fontWeight: 600, fontFamily: 'var(--font-mono, monospace)', marginBottom: '3px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#0284c7', fontSize: '12.5px', fontWeight: 600, fontFamily: 'var(--font-sans)', marginBottom: '3px' }}>
                               <Phone size={14} style={{ flexShrink: 0, color: '#0284c7' }} />
                               <span>{s.contact_phone}</span>
                             </div>
@@ -2440,7 +2440,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                             fontSize: '11px',
                             fontWeight: 700,
                             color: ent.color,
-                            fontFamily: 'var(--font-mono)'
+                            fontFamily: 'var(--font-sans)'
                           }}
                         >
                           {ent.count} {ent.unit}
@@ -2488,7 +2488,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                   color: '#38bdf8',
                   padding: '16px',
                   borderRadius: 'var(--radius-sm)',
-                  fontFamily: 'var(--font-mono)',
+                  fontFamily: 'var(--font-sans)',
                   fontSize: '11.5px',
                   maxHeight: '400px',
                   overflowY: 'auto',

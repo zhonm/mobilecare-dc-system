@@ -873,7 +873,7 @@ export default function Dashboard() {
                 fontSize: '20px',
                 fontWeight: 800,
                 color: '#047857',
-                fontFamily: 'var(--font-mono)',
+                fontFamily: 'var(--font-sans)',
                 letterSpacing: '-0.01em'
               }}
             >
@@ -1331,7 +1331,7 @@ export default function Dashboard() {
                 <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
                   Branch Demand
                 </div>
-                <div style={{ fontSize: '20px', fontWeight: 800, color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                <div style={{ fontSize: '20px', fontWeight: 800, color: '#0284c7', fontFamily: 'var(--font-sans)' }}>
                   {sitePartsReport.siteTotalUnits.toLocaleString()} <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>units</span>
                 </div>
               </div>
@@ -1342,7 +1342,7 @@ export default function Dashboard() {
                 <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
                   Total Branch Spend
                 </div>
-                <div style={{ fontSize: '20px', fontWeight: 800, color: '#059669', fontFamily: 'var(--font-mono)' }}>
+                <div style={{ fontSize: '20px', fontWeight: 800, color: '#059669', fontFamily: 'var(--font-sans)' }}>
                   ${sitePartsReport.siteTotalValUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}{' '}
                   <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>(₱{(sitePartsReport.siteTotalValPHP / 1000000).toFixed(2)}M)</span>
                 </div>
@@ -1354,7 +1354,7 @@ export default function Dashboard() {
                 <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
                   Active SKUs
                 </div>
-                <div style={{ fontSize: '20px', fontWeight: 800, color: '#7c3aed', fontFamily: 'var(--font-mono)' }}>
+                <div style={{ fontSize: '20px', fontWeight: 800, color: '#7c3aed', fontFamily: 'var(--font-sans)' }}>
                   {sitePartsReport.totalPartsCount} <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>parts</span>
                 </div>
               </div>
@@ -1600,12 +1600,12 @@ export default function Dashboard() {
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '12.5px', flexWrap: 'wrap' }}>
                 <div>
-                  Total Demand: <strong style={{ color: '#0284c7', fontFamily: 'var(--font-mono)' }}>{masterPartsReport.totalFilteredUnits.toLocaleString()} units</strong>
+                  Total Demand: <strong style={{ color: '#0284c7', fontFamily: 'var(--font-sans)' }}>{masterPartsReport.totalFilteredUnits.toLocaleString()} units</strong>
                 </div>
                 <div style={{ width: '1px', height: '16px', background: '#cbd5e1' }} />
                 <div>
                   Valuation:{' '}
-                  <strong style={{ color: '#10b981', fontFamily: 'var(--font-mono)' }}>
+                  <strong style={{ color: '#10b981', fontFamily: 'var(--font-sans)' }}>
                     ${masterPartsReport.totalFilteredValUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </strong>{' '}
                   <span style={{ color: '#64748b' }}>(₱{masterPartsReport.totalFilteredValPHP.toLocaleString(undefined, { maximumFractionDigits: 0 })})</span>
@@ -1672,7 +1672,7 @@ export default function Dashboard() {
                           </td>
 
                           {/* Part Number */}
-                          <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, color: '#0f172a', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                          <td style={{ fontFamily: 'var(--font-sans)', fontWeight: 800, color: '#0f172a', padding: '13px 14px', whiteSpace: 'nowrap' }}>
                             {item.part_number}
                           </td>
 
@@ -1706,7 +1706,7 @@ export default function Dashboard() {
                           </td>
 
                           {/* Stocking Price - No Wrap */}
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
                             <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '13px' }}>${item.priceUSD}</div>
                             <div style={{ fontSize: '11px', color: '#64748b' }}>₱{(item.priceUSD * USD_TO_PHP_RATE).toLocaleString()}</div>
                           </td>
@@ -1722,7 +1722,7 @@ export default function Dashboard() {
                                 borderRadius: '6px',
                                 fontWeight: 800,
                                 fontSize: '13px',
-                                fontFamily: 'var(--font-mono)',
+                                fontFamily: 'var(--font-sans)',
                                 display: 'inline-block',
                                 whiteSpace: 'nowrap'
                               }}
@@ -1732,7 +1732,7 @@ export default function Dashboard() {
                           </td>
 
                           {/* Total Valuation - No Wrap */}
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
                             <div style={{ fontWeight: 800, color: '#059669', fontSize: '13px' }}>
                               ${item.totalValUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                             </div>
@@ -1747,7 +1747,7 @@ export default function Dashboard() {
                               <div style={{ width: '45px', height: '6px', background: '#e2e8f0', borderRadius: '3px', overflow: 'hidden' }}>
                                 <div style={{ width: `${Math.min(item.pctShare * 6, 100)}%`, height: '100%', background: '#0284c7' }} />
                               </div>
-                              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+                              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#475569', fontFamily: 'var(--font-sans)' }}>
                                 {item.pctShare.toFixed(1)}%
                               </span>
                             </div>
@@ -1796,7 +1796,7 @@ export default function Dashboard() {
                 <div style={{ width: '1px', height: '16px', background: '#cbd5e1' }} />
                 <div>
                   Total Network Demand:{' '}
-                  <strong style={{ color: '#10b981', fontFamily: 'var(--font-mono)' }}>
+                  <strong style={{ color: '#10b981', fontFamily: 'var(--font-sans)' }}>
                     {masterSitesReport.grandTotalUnits.toLocaleString()} units
                   </strong>
                 </div>
@@ -1893,7 +1893,7 @@ export default function Dashboard() {
                             borderRadius: '6px',
                             fontWeight: 800,
                             fontSize: '13px',
-                            fontFamily: 'var(--font-mono)',
+                            fontFamily: 'var(--font-sans)',
                             display: 'inline-block',
                             whiteSpace: 'nowrap'
                           }}
@@ -1903,12 +1903,12 @@ export default function Dashboard() {
                       </td>
 
                       {/* Distinct SKUs */}
-                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#475569', padding: '13px 14px', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
+                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#475569', padding: '13px 14px', fontFamily: 'var(--font-sans)', whiteSpace: 'nowrap' }}>
                         {site.distinctPartsCount} SKUs
                       </td>
 
                       {/* Total Valuation */}
-                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
                         <div style={{ fontWeight: 800, color: '#059669', fontSize: '13px' }}>${site.totalValUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
                         <div style={{ fontSize: '11px', color: '#64748b' }}>₱{site.totalValPHP.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
                       </td>
@@ -1926,7 +1926,7 @@ export default function Dashboard() {
                           <div style={{ width: '45px', height: '6px', background: '#e2e8f0', borderRadius: '3px', overflow: 'hidden' }}>
                             <div style={{ width: `${Math.min(site.pctShare * 8, 100)}%`, height: '100%', background: '#0284c7' }} />
                           </div>
-                          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+                          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#475569', fontFamily: 'var(--font-sans)' }}>
                             {site.pctShare.toFixed(1)}%
                           </span>
                         </div>
@@ -2018,7 +2018,7 @@ export default function Dashboard() {
                           </td>
 
                           {/* Part Number */}
-                          <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, color: '#0f172a', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                          <td style={{ fontFamily: 'var(--font-sans)', fontWeight: 800, color: '#0f172a', padding: '13px 14px', whiteSpace: 'nowrap' }}>
                             {item.part_number}
                           </td>
 
@@ -2049,7 +2049,7 @@ export default function Dashboard() {
                           </td>
 
                           {/* Stocking Price - No Wrap */}
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
                             <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '13px' }}>${item.priceUSD}</div>
                             <div style={{ fontSize: '11px', color: '#64748b' }}>₱{(item.priceUSD * USD_TO_PHP_RATE).toLocaleString()}</div>
                           </td>
@@ -2065,7 +2065,7 @@ export default function Dashboard() {
                                 borderRadius: '6px',
                                 fontWeight: 800,
                                 fontSize: '13px',
-                                fontFamily: 'var(--font-mono)',
+                                fontFamily: 'var(--font-sans)',
                                 display: 'inline-block',
                                 whiteSpace: 'nowrap'
                               }}
@@ -2075,7 +2075,7 @@ export default function Dashboard() {
                           </td>
 
                           {/* Total Cost - No Wrap */}
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
                             <div style={{ fontWeight: 800, color: '#059669', fontSize: '13px' }}>
                               ${item.totalValUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                             </div>
@@ -2090,7 +2090,7 @@ export default function Dashboard() {
                               <div style={{ width: '45px', height: '6px', background: '#e2e8f0', borderRadius: '3px', overflow: 'hidden' }}>
                                 <div style={{ width: `${Math.min(item.pctShare * 4, 100)}%`, height: '100%', background: '#0284c7' }} />
                               </div>
-                              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+                              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#475569', fontFamily: 'var(--font-sans)' }}>
                                 {item.pctShare.toFixed(1)}%
                               </span>
                             </div>
@@ -2159,7 +2159,7 @@ export default function Dashboard() {
                       <span style={{ width: '9px', height: '9px', borderRadius: '50%', background: item.color, flexShrink: 0 }} />
                       <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>{item.name}</span>
                     </div>
-                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
+                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', flexShrink: 0 }}>
                       <strong>{item.count.toLocaleString()}</strong> <span style={{ color: 'var(--text-muted)', fontSize: '10.5px' }}>({pct}%)</span>
                     </div>
                   </div>
@@ -2418,7 +2418,7 @@ export default function Dashboard() {
                         fontWeight: 700,
                         fontSize: '13px',
                         color: '#0f172a',
-                        fontFamily: 'var(--font-mono)',
+                        fontFamily: 'var(--font-sans)',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
@@ -2652,7 +2652,7 @@ export default function Dashboard() {
                   return (
                     <tr key={item.part_number} style={{ borderBottom: '1px solid #f1f5f9', background: idx % 2 === 0 ? '#ffffff' : '#fafafa' }}>
                       <td style={{ textAlign: 'center', color: '#64748b', padding: '10px 12px', whiteSpace: 'nowrap' }}>{idx + 1}</td>
-                      <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#0f172a', padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                      <td style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0f172a', padding: '10px 12px', whiteSpace: 'nowrap' }}>
                         {item.part_number}
                       </td>
                       <td style={{ color: '#334155', padding: '10px 12px' }}>
@@ -2676,7 +2676,7 @@ export default function Dashboard() {
                           {badge.name || item.category_name || item.category}
                         </span>
                       </td>
-                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', padding: '10px 12px', whiteSpace: 'nowrap' }}>
                         <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '12.5px' }}>
                           ${item.stockPriceUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </div>
@@ -2689,7 +2689,7 @@ export default function Dashboard() {
                           {item.units.length} {item.units.length === 1 ? 'unit' : 'units'}
                         </span>
                       </td>
-                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', padding: '10px 12px', whiteSpace: 'nowrap' }}>
                         <div style={{ fontWeight: 800, color: '#059669', fontSize: '12.5px' }}>
                           ${item.totalValUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </div>
@@ -2734,7 +2734,7 @@ export default function Dashboard() {
                           </span>
                         )}
                       </td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#475569', padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#475569', padding: '10px 12px', whiteSpace: 'nowrap' }}>
                         {item.latest_serial || '—'}
                       </td>
                     </tr>
@@ -2754,7 +2754,7 @@ export default function Dashboard() {
                       {groupedInventory.reduce((acc, it) => acc + it.units.length, 0).toLocaleString()} units
                     </span>
                   </td>
-                  <td style={{ textAlign: 'right', padding: '12px 14px', color: '#059669', fontFamily: 'var(--font-mono)', fontSize: '13px', whiteSpace: 'nowrap' }}>
+                  <td style={{ textAlign: 'right', padding: '12px 14px', color: '#059669', fontFamily: 'var(--font-sans)', fontSize: '13px', whiteSpace: 'nowrap' }}>
                     ${filteredSnapshotValuationUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </td>
                   <td colSpan={2} style={{ padding: '12px 14px', textAlign: 'center', color: '#64748b', fontSize: '11px' }}>

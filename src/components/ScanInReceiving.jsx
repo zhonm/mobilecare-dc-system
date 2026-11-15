@@ -2177,7 +2177,7 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '8px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span style={{ fontSize: '13.5px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#0f172a' }}>
+                <span style={{ fontSize: '13.5px', fontWeight: 700, fontFamily: 'var(--font-sans)', color: '#0f172a' }}>
                   Linked PO: {activePo.po_number}
                 </span>
                 <span className={`badge ${activePo.status === 'received' ? 'badge-success' : activePo.status === 'partially_received' ? 'badge-info' : 'badge-warning'}`} style={{ fontSize: '11px' }}>
@@ -2196,7 +2196,7 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '12.5px', fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#2563eb' }}>
+                <span style={{ fontSize: '12.5px', fontFamily: 'var(--font-sans)', fontWeight: 600, color: '#2563eb' }}>
                   {activePo.items?.reduce((s, it) => s + (it.quantity_received || 0), 0)} / {activePo.items?.reduce((s, it) => s + (it.quantity_ordered || 0), 0)} Units Received ({activePo.items?.reduce((s, it) => s + (it.quantity_ordered || 0), 0) > 0 ? Math.round((activePo.items?.reduce((s, it) => s + (it.quantity_received || 0), 0) / activePo.items?.reduce((s, it) => s + (it.quantity_ordered || 0), 0)) * 100) : 0}%)
                 </span>
                 <button
@@ -2232,7 +2232,7 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
                     }}
                     title={it.description}
                   >
-                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: isFulfilled ? '#15803d' : '#2563eb' }}>
+                    <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, color: isFulfilled ? '#15803d' : '#2563eb' }}>
                       {it.part_number}
                     </span>
                     <span style={{ color: '#475569', fontWeight: 500 }}>

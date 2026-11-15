@@ -768,7 +768,7 @@ export default function Login() {
                     <span>Viber / Mobile</span>
                     <span style={{ background: '#7c3aed', color: '#fff', fontSize: '8px', padding: '0 3px', borderRadius: '2px', fontWeight: 800 }}>VIBER</span>
                   </div>
-                  <a href="tel:09613328304" style={{ fontSize: '14px', color: '#f8fafc', fontWeight: 700, textDecoration: 'none', fontFamily: 'var(--font-mono)' }}>
+                  <a href="tel:09613328304" style={{ fontSize: '14px', color: '#f8fafc', fontWeight: 700, textDecoration: 'none', fontFamily: 'var(--font-sans)' }}>
                     09613328304
                   </a>
                 </div>
@@ -840,7 +840,7 @@ export default function Login() {
                     <span>Viber / Mobile</span>
                     <span style={{ background: '#7c3aed', color: '#fff', fontSize: '8px', padding: '0 3px', borderRadius: '2px', fontWeight: 800 }}>VIBER</span>
                   </div>
-                  <a href="tel:09763543574" style={{ fontSize: '14px', color: '#f8fafc', fontWeight: 700, textDecoration: 'none', fontFamily: 'var(--font-mono)' }}>
+                  <a href="tel:09763543574" style={{ fontSize: '14px', color: '#f8fafc', fontWeight: 700, textDecoration: 'none', fontFamily: 'var(--font-sans)' }}>
                     09763543574
                   </a>
                 </div>

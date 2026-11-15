@@ -409,7 +409,7 @@ export default function EgressUsageModal({ isOpen, onClose, onForceSync }) {
                             background: idx % 2 === 0 ? '#ffffff' : '#fafafa'
                           }}
                         >
-                          <td style={{ padding: '8px 12px', fontFamily: 'monospace', fontWeight: 600, color: '#334155' }}>
+                          <td style={{ padding: '8px 12px', fontFamily: 'var(--font-sans)', fontWeight: 600, color: '#334155' }}>
                             {table}
                           </td>
                           <td style={{ padding: '8px 12px', textAlign: 'right', color: '#64748b' }}>

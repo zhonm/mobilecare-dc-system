@@ -5348,7 +5348,7 @@ export async function exportSiteTransfersFifoAuditToExcel({
       cell.border = borderThin;
       if (isAlt) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
       if (cNum === 7) {
-        cell.font = { name: 'Consolas, monospace', size: 9, bold: true };
+        cell.font = { name: 'Calibri', size: 9, bold: true };
       }
       if (cNum === 4 && r.is_cross_site_discrepancy) {
         cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF7C3AED' } };
@@ -5410,7 +5410,7 @@ export async function exportSiteTransfersFifoAuditToExcel({
       cell.font = { name: 'Arial', size: 9 };
       cell.border = borderThin;
       if (isAlt) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
-      if (cNum === 4) cell.font = { name: 'Consolas, monospace', size: 9, bold: true };
+      if (cNum === 4) cell.font = { name: 'Calibri', size: 9, bold: true };
       if (cNum === 7 && r.aging_category === 'NON_MOVING') {
         cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFDC2626' } };
       } else if (cNum === 7 && r.aging_category === 'SLOW_MOVING') {
@@ -5475,7 +5475,7 @@ export async function exportSiteTransfersFifoAuditToExcel({
       cell.font = { name: 'Arial', size: 9 };
       cell.border = borderThin;
       if (isAlt) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
-      if (cNum === 4 || cNum === 8) cell.font = { name: 'Consolas, monospace', size: 9, bold: true };
+      if (cNum === 4 || cNum === 8) cell.font = { name: 'Calibri', size: 9, bold: true };
       if (cNum === 7) cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFDC2626' } };
     });
   });
@@ -5528,7 +5528,7 @@ export async function exportSiteTransfersFifoAuditToExcel({
       cell.font = { name: 'Arial', size: 9 };
       cell.border = borderThin;
       if (isAlt) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
-      if (cNum === 1) cell.font = { name: 'Consolas, monospace', size: 9, bold: true };
+      if (cNum === 1) cell.font = { name: 'Calibri', size: 9, bold: true };
       if (cNum === 5) cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF7C3AED' } };
     });
   });
@@ -5667,7 +5667,7 @@ export async function exportSiteTransfersFifoAuditToExcel({
         cell.font = { name: 'Arial', size: 8.5 };
         cell.border = borderThin;
         if (cNum === 6 || cNum === 17 || cNum === 25 || cNum === 33) {
-          cell.font = { name: 'Consolas, monospace', size: 8.5, bold: true };
+          cell.font = { name: 'Calibri', size: 8.5, bold: true };
         }
         if (cNum === 9 && String(cell.value).includes('Violation')) {
           cell.font = { name: 'Arial', size: 8.5, bold: true, color: { argb: 'FFDC2626' } };

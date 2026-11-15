@@ -138,7 +138,7 @@ export default function AutoLogoutWarningModal({
             style={{
               fontSize: '42px',
               fontWeight: 900,
-              fontFamily: 'var(--font-mono, monospace)',
+              fontFamily: 'var(--font-sans)',
               color: isUrgent ? '#f87171' : '#fbbf24',
               margin: '4px 0',
               textShadow: isUrgent ? '0 0 20px rgba(239, 68, 68, 0.4)' : 'none'

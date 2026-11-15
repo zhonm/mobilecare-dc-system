@@ -2117,7 +2117,7 @@ export default function AuditTrail() {
                               fontSize: '10px',
                               color: '#64748b',
                               marginTop: '4px',
-                              fontFamily: 'var(--font-mono, monospace)',
+                              fontFamily: 'var(--font-sans)',
                               whiteSpace: 'nowrap',
                               overflow: 'hidden',
                               textOverflow: 'ellipsis',
@@ -3452,7 +3452,7 @@ export default function AuditTrail() {
                             background: '#e0f2fe',
                             color: '#0369a1',
                             border: '1px solid #bae6fd',
-                            fontFamily: 'var(--font-mono, monospace)',
+                            fontFamily: 'var(--font-sans)',
                             display: 'inline-block'
                           }}
                         >
@@ -3610,7 +3610,7 @@ export default function AuditTrail() {
                               background: badgeStyle.bg,
                               color: badgeStyle.text,
                               border: `1px solid ${badgeStyle.border}`,
-                              fontFamily: 'var(--font-mono, monospace)',
+                              fontFamily: 'var(--font-sans)',
                               display: 'inline-block',
                               whiteSpace: 'nowrap',
                               maxWidth: '100%',
@@ -3649,7 +3649,7 @@ export default function AuditTrail() {
                                 padding: '4px 8px',
                                 borderRadius: '4px',
                                 border: '1px solid #e2e8f0',
-                                fontFamily: 'var(--font-mono, monospace)',
+                                fontFamily: 'var(--font-sans)',
                                 fontSize: '10.5px',
                                 whiteSpace: 'nowrap',
                                 overflow: 'hidden',
@@ -3783,7 +3783,7 @@ export default function AuditTrail() {
                 <ShieldCheck size={20} color="#38bdf8" />
                 <div>
                   <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 800 }}>Audit Event Immutable Dossier</h3>
-                  <span style={{ fontSize: '11px', color: '#94a3b8', fontFamily: 'monospace' }}>
+                  <span style={{ fontSize: '11px', color: '#94a3b8', fontFamily: 'var(--font-sans)' }}>
                     Ref: {selectedEventForDossier.id}
                   </span>
                 </div>
@@ -3819,7 +3819,7 @@ export default function AuditTrail() {
                   <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>
                     {formatTo12HourDateTime(selectedEventForDossier.timestamp)}
                   </div>
-                  <div style={{ fontSize: '10.5px', color: '#64748b', fontFamily: 'monospace' }}>
+                  <div style={{ fontSize: '10.5px', color: '#64748b', fontFamily: 'var(--font-sans)' }}>
                     {selectedEventForDossier.timestamp}
                   </div>
                 </div>
@@ -3839,7 +3839,7 @@ export default function AuditTrail() {
                   <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>
                     {selectedEventForDossier.entityType}
                   </div>
-                  <div style={{ fontSize: '11.5px', color: '#334155', fontFamily: 'monospace' }}>
+                  <div style={{ fontSize: '11.5px', color: '#334155', fontFamily: 'var(--font-sans)' }}>
                     {selectedEventForDossier.entityId}
                   </div>
                 </div>
@@ -3866,7 +3866,7 @@ export default function AuditTrail() {
               {/* Detailed Metadata / Payload */}
               <div style={{ marginBottom: '16px' }}>
                 <div style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 700, marginBottom: '4px', textTransform: 'uppercase' }}>Cryptographic Event Metadata &amp; Payload</div>
-                <pre style={{ background: '#0f172a', color: '#38bdf8', padding: '12px', borderRadius: '8px', fontSize: '11.5px', fontFamily: 'monospace', overflowX: 'auto', margin: 0, maxHeight: '180px' }}>
+                <pre style={{ background: '#0f172a', color: '#38bdf8', padding: '12px', borderRadius: '8px', fontSize: '11.5px', fontFamily: 'var(--font-sans)', overflowX: 'auto', margin: 0, maxHeight: '180px' }}>
                   {JSON.stringify(selectedEventForDossier.details || {}, null, 2)}
                 </pre>
               </div>

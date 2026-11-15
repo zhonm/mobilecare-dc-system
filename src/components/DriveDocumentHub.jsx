@@ -516,7 +516,7 @@ export default function DriveDocumentHub() {
                       <td style={{ padding: '12px 18px' }}>
                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                           {invoiceRef && (
-                            <span style={{ background: '#f1f5f9', color: '#334155', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600, fontFamily: 'monospace' }}>
+                            <span style={{ background: '#f1f5f9', color: '#334155', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600, fontFamily: 'var(--font-sans)' }}>
                               {invoiceRef}
                             </span>
                           )}
@@ -555,7 +555,7 @@ export default function DriveDocumentHub() {
                         {file.createdTime ? formatTo12HourDateTime(file.createdTime) : '—'}
                       </td>
 
-                      <td style={{ padding: '12px 18px', color: '#64748b', fontFamily: 'monospace' }}>
+                      <td style={{ padding: '12px 18px', color: '#64748b', fontFamily: 'var(--font-sans)' }}>
                         {formatSize(file.size)}
                       </td>
 

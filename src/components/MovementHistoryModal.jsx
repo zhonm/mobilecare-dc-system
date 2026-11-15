@@ -117,7 +117,7 @@ export default function MovementHistoryModal({
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#0f172a', fontFamily: serialNumber ? 'var(--font-mono)' : 'inherit' }}>
+              <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#0f172a', fontFamily: serialNumber ? 'var(--font-sans)' : 'inherit' }}>
                 {serialNumber || partNumber}
               </h2>
               {serialNumber && (
@@ -178,7 +178,7 @@ export default function MovementHistoryModal({
               <span>Current Site Ownership</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '15px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+              <span style={{ fontSize: '15px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-sans)' }}>
                 {(currentOwner ? String(currentOwner).toUpperCase() : formatSiteOwner(targetPart.site_code || 'DC'))}
               </span>
               <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', fontSize: '11px', fontWeight: 700 }}>
@@ -208,7 +208,7 @@ export default function MovementHistoryModal({
                       padding: '3px 8px',
                       fontSize: '12px',
                       fontWeight: 700,
-                      fontFamily: 'var(--font-mono)'
+                      fontFamily: 'var(--font-sans)'
                     }}
                   >
                     {site}
@@ -288,7 +288,7 @@ export default function MovementHistoryModal({
                     <div style={{ flex: 1 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px', marginBottom: '4px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <span style={{ fontSize: '13px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+                          <span style={{ fontSize: '13px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-sans)' }}>
                             {xfer.from_site_code} → {xfer.to_site_code}
                           </span>
                           <span

@@ -3069,7 +3069,7 @@ export default function FixablyInventoryDashboard({
                 <Boxes size={16} color="#0284c7" />
               </div>
             </div>
-            <div style={{ fontSize: '23px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono)', letterSpacing: '-0.02em', lineHeight: 1.15 }}>
+            <div style={{ fontSize: '23px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-sans)', letterSpacing: '-0.02em', lineHeight: 1.15 }}>
               ${Number(displayMetrics.totalValue || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
             <div style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 600 }}>
@@ -3840,7 +3840,7 @@ export default function FixablyInventoryDashboard({
                         
                         <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
                           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                            <span style={{ color: '#0284c7', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '13px', fontWeight: 700 }}>
+                            <span style={{ color: '#0284c7', fontFamily: 'var(--font-sans)', fontSize: '13px', fontWeight: 700 }}>
                               {item.partNumber}
                             </span>
                             <button
@@ -3936,7 +3936,7 @@ export default function FixablyInventoryDashboard({
                                   padding: '3px 8px',
                                   borderRadius: '5px',
                                   fontWeight: 700,
-                                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                                  fontFamily: 'var(--font-sans)',
                                   letterSpacing: '0.02em',
                                   cursor: 'pointer'
                                 }}
@@ -3995,13 +3995,13 @@ export default function FixablyInventoryDashboard({
                                 </span>
                               )}
                             </div>
-                            <span style={{ fontSize: '10.5px', color: '#64748b', fontWeight: 700, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
+                            <span style={{ fontSize: '10.5px', color: '#64748b', fontWeight: 700, fontFamily: 'var(--font-sans)' }}>
                               Owner: {currentOwnerText}
                             </span>
                           </div>
                         </td>
 
-                        <td style={{ verticalAlign: 'middle', padding: '12px 14px', fontSize: '12px', color: '#475569', fontWeight: 600, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', whiteSpace: 'nowrap' }}>
+                        <td style={{ verticalAlign: 'middle', padding: '12px 14px', fontSize: '12px', color: '#475569', fontWeight: 600, fontFamily: 'var(--font-sans)', whiteSpace: 'nowrap' }}>
                           {item.lastReceivedDate || '—'}
                         </td>
 
@@ -4093,7 +4093,7 @@ export default function FixablyInventoryDashboard({
                           )}
                         </td>
 
-                        <td style={{ verticalAlign: 'middle', textAlign: 'right', fontWeight: 700, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '13px', color: '#0f172a', padding: '12px 16px', whiteSpace: 'nowrap' }}>
+                        <td style={{ verticalAlign: 'middle', textAlign: 'right', fontWeight: 700, fontFamily: 'var(--font-sans)', fontSize: '13px', color: '#0f172a', padding: '12px 16px', whiteSpace: 'nowrap' }}>
                           ${(item.totalValue || item.partValue || 0).toFixed(2)}
                         </td>
                       </tr>
@@ -4544,7 +4544,7 @@ export default function FixablyInventoryDashboard({
                         <tbody>
                           {activityLogs.map((log) => (
                             <tr key={log.id} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                              <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#334155', fontWeight: 600 }}>
+                              <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-sans)', fontSize: '11.5px', color: '#334155', fontWeight: 600 }}>
                                 {new Date(log.timestamp).toLocaleDateString()} {new Date(log.timestamp).toLocaleTimeString()}
                               </td>
                               <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
@@ -4554,7 +4554,7 @@ export default function FixablyInventoryDashboard({
                               <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontWeight: 700, color: '#1e293b' }}>
                                 {log.actionType}
                               </td>
-                              <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: '12px', color: '#0284c7', fontWeight: 700 }}>
+                              <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-sans)', fontSize: '12px', color: '#0284c7', fontWeight: 700 }}>
                                 {log.fileName}
                               </td>
                               <td style={{ padding: '10px 12px', color: '#334155', lineHeight: 1.4 }}>
@@ -4638,7 +4638,7 @@ export default function FixablyInventoryDashboard({
                                 <td style={{ padding: '10px 12px', textAlign: 'center', color: '#64748b', fontWeight: 700 }}>
                                   {rowNum}
                                 </td>
-                                <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#0f172a' }}>
+                                <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0f172a' }}>
                                   {tr.receivedDate || '—'}
                                 </td>
                                 <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
@@ -4658,16 +4658,16 @@ export default function FixablyInventoryDashboard({
                                 </td>
                                 <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
                                   <div style={{ fontWeight: 800, color: '#334155' }}>{tr.fromSiteCode}</div>
-                                  <div style={{ fontSize: '11px', color: '#64748b', fontFamily: 'var(--font-mono)' }}>{tr.fromStock}</div>
+                                  <div style={{ fontSize: '11px', color: '#64748b', fontFamily: 'var(--font-sans)' }}>{tr.fromStock}</div>
                                 </td>
                                 <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
                                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontWeight: 800, color: isSiteToSite ? '#5b21b6' : '#0284c7' }}>
                                     <span>→ {tr.toSiteCode}</span>
                                   </div>
-                                  <div style={{ fontSize: '11px', color: '#64748b', fontFamily: 'var(--font-mono)' }}>{tr.toStock}</div>
+                                  <div style={{ fontSize: '11px', color: '#64748b', fontFamily: 'var(--font-sans)' }}>{tr.toStock}</div>
                                 </td>
                                 <td style={{ padding: '10px 12px' }}>
-                                  <div style={{ fontWeight: 800, color: '#0284c7', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>{tr.productCode}</div>
+                                  <div style={{ fontWeight: 800, color: '#0284c7', fontFamily: 'var(--font-sans)', fontSize: '12px' }}>{tr.productCode}</div>
                                   <div style={{ fontSize: '12px', color: '#0f172a', fontWeight: 500 }}>{tr.productName}</div>
                                 </td>
                                 <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
@@ -4684,7 +4684,7 @@ export default function FixablyInventoryDashboard({
                                         if (details) setInspectedSerialDetails(details);
                                       }}
                                       style={{
-                                        fontFamily: 'var(--font-mono)',
+                                        fontFamily: 'var(--font-sans)',
                                         fontSize: '12px',
                                         fontWeight: 800,
                                         color: '#0f172a',
@@ -4746,7 +4746,7 @@ export default function FixablyInventoryDashboard({
                                     </span>
                                   )}
                                 </td>
-                                <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 800, color: '#0f172a', whiteSpace: 'nowrap' }}>
+                                <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-sans)', fontWeight: 800, color: '#0f172a', whiteSpace: 'nowrap' }}>
                                   ${Number(tr.transferValue || 0).toFixed(2)}
                                 </td>
                               </tr>
@@ -5038,7 +5038,7 @@ export default function FixablyInventoryDashboard({
                           >
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                                <span style={{ fontWeight: 800, fontSize: '13.5px', color: '#0f172a', fontFamily: 'monospace' }}>
+                                <span style={{ fontWeight: 800, fontSize: '13.5px', color: '#0f172a', fontFamily: 'var(--font-sans)' }}>
                                   {unit.serialNumber}
                                 </span>
                                 <span style={{ fontSize: '10.5px', fontWeight: 800, padding: '1px 6px', borderRadius: '4px', background: unit.badgeBg || '#fee2e2', color: unit.badgeColor || '#dc2626' }}>
@@ -5108,7 +5108,7 @@ export default function FixablyInventoryDashboard({
                           >
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span style={{ fontWeight: 800, fontSize: '13.5px', color: '#0284c7', fontFamily: 'monospace' }}>
+                                <span style={{ fontWeight: 800, fontSize: '13.5px', color: '#0284c7', fontFamily: 'var(--font-sans)' }}>
                                   {item.partNumber}
                                 </span>
                                 {isSelected && (
@@ -5198,7 +5198,7 @@ export default function FixablyInventoryDashboard({
                             <span style={{ fontSize: '11.5px', fontWeight: 800, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                               Serial Number Located
                             </span>
-                            <span style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', fontFamily: 'monospace' }}>
+                            <span style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-sans)' }}>
                               {partStockBySite.locatedSerial.serialNumber}
                             </span>
                             <button
@@ -5218,7 +5218,7 @@ export default function FixablyInventoryDashboard({
                           </div>
 
                           <div style={{ fontSize: '13px', color: '#334155', marginTop: '4px' }}>
-                            Part: <strong style={{ color: '#0284c7', fontFamily: 'monospace' }}>{partStockBySite.locatedSerial.partNumber}</strong> — {partStockBySite.locatedSerial.description || partStockBySite.partDescription || 'Apple Genuine Component'}
+                            Part: <strong style={{ color: '#0284c7', fontFamily: 'var(--font-sans)' }}>{partStockBySite.locatedSerial.partNumber}</strong> — {partStockBySite.locatedSerial.description || partStockBySite.partDescription || 'Apple Genuine Component'}
                           </div>
 
                           <div style={{ fontSize: '12.5px', color: '#475569', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -5295,7 +5295,7 @@ export default function FixablyInventoryDashboard({
                     </div>
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', fontFamily: 'monospace' }}>
+                        <span style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-sans)' }}>
                           {partStockBySite.searchedPartNumber}
                         </span>
                         <span style={{ fontSize: '11px', fontWeight: 800, background: '#0284c7', color: '#ffffff', padding: '2px 8px', borderRadius: '999px' }}>
@@ -6344,7 +6344,7 @@ export default function FixablyInventoryDashboard({
                             >
                               <td style={{ verticalAlign: 'middle', padding: '11px 14px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                  <strong style={{ color: '#0284c7', fontFamily: 'var(--font-mono)', fontSize: '13px', fontWeight: 800 }}>
+                                  <strong style={{ color: '#0284c7', fontFamily: 'var(--font-sans)', fontSize: '13px', fontWeight: 800 }}>
                                     {partRow.partNumber}
                                   </strong>
                                   <button
@@ -6631,7 +6631,7 @@ export default function FixablyInventoryDashboard({
 
                                 <td style={{ verticalAlign: 'middle', padding: '11px 12px' }}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                    <strong style={{ color: '#0284c7', fontFamily: 'var(--font-mono)', fontSize: '13px', fontWeight: 800 }}>{unit.partNumber}</strong>
+                                    <strong style={{ color: '#0284c7', fontFamily: 'var(--font-sans)', fontSize: '13px', fontWeight: 800 }}>{unit.partNumber}</strong>
                                     <button
                                       type="button"
                                       onClick={() => handleCopy(unit.partNumber, 'Part Number')}
@@ -6666,7 +6666,7 @@ export default function FixablyInventoryDashboard({
                                     </span>
                                   ) : (
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                      <code style={{ fontSize: '12px', color: '#9f1239', background: '#ffe4e6', border: '1.5px solid #fecdd3', padding: '3px 8px', borderRadius: '5px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>
+                                      <code style={{ fontSize: '12px', color: '#9f1239', background: '#ffe4e6', border: '1.5px solid #fecdd3', padding: '3px 8px', borderRadius: '5px', fontWeight: 800, fontFamily: 'var(--font-sans)' }}>
                                         {unit.serialNumber}
                                       </code>
                                       <button
@@ -6698,7 +6698,7 @@ export default function FixablyInventoryDashboard({
                                   </span>
                                 </td>
 
-                                <td style={{ verticalAlign: 'middle', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono)', padding: '11px 12px' }}>
+                                <td style={{ verticalAlign: 'middle', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-sans)', padding: '11px 12px' }}>
                                   {unit.investigationDetails?.orderId || '—'}
                                 </td>
 
@@ -6797,7 +6797,7 @@ export default function FixablyInventoryDashboard({
 
                                 <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
                                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                                    <span style={{ color: '#0284c7', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '13px', fontWeight: 700 }}>{unit.partNumber}</span>
+                                    <span style={{ color: '#0284c7', fontFamily: 'var(--font-sans)', fontSize: '13px', fontWeight: 700 }}>{unit.partNumber}</span>
                                     <button
                                       type="button"
                                       onClick={() => handleCopy(unit.partNumber, 'Part Number')}
@@ -6865,7 +6865,7 @@ export default function FixablyInventoryDashboard({
                                         padding: '3px 8px',
                                         borderRadius: '5px',
                                         fontWeight: 600,
-                                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                                        fontFamily: 'var(--font-sans)',
                                         letterSpacing: '0.02em'
                                       }}>
                                         {unit.serialNumber}
@@ -6883,7 +6883,7 @@ export default function FixablyInventoryDashboard({
                                   )}
                                 </td>
 
-                                <td style={{ verticalAlign: 'middle', fontSize: '12.5px', color: '#475569', fontWeight: 600, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', padding: '12px 14px', whiteSpace: 'nowrap' }}>
+                                <td style={{ verticalAlign: 'middle', fontSize: '12.5px', color: '#475569', fontWeight: 600, fontFamily: 'var(--font-sans)', padding: '12px 14px', whiteSpace: 'nowrap' }}>
                                   {unit.lastReceivedDate || '—'}
                                 </td>
 
@@ -6969,7 +6969,7 @@ export default function FixablyInventoryDashboard({
                                   )}
                                 </td>
 
-                                <td style={{ verticalAlign: 'middle', textAlign: 'right', fontWeight: 700, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '13px', color: '#0f172a', padding: '12px 16px', whiteSpace: 'nowrap' }}>
+                                <td style={{ verticalAlign: 'middle', textAlign: 'right', fontWeight: 700, fontFamily: 'var(--font-sans)', fontSize: '13px', color: '#0f172a', padding: '12px 16px', whiteSpace: 'nowrap' }}>
                                   ${(unit.totalValue || unit.partValue || 0).toFixed(2)}
                                 </td>
                               </tr>

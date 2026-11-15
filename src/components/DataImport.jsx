@@ -732,16 +732,16 @@ export default function DataImport() {
                     <tr key={item.part_id}>
                       <td className="font-mono"><strong>{item.part_number}</strong></td>
                       <td>{item.description}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', fontSize: '12px' }}>
                         {item.ytd_monthly_counts.join(', ')}
                       </td>
-                      <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
+                      <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-sans)' }}>
                         {item.final_forecast || item.computed_forecast}
                       </td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)', color: 'var(--text-muted)' }}>
                         {item.safety_stock_units}
                       </td>
-                      <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#15803d' }}>
+                      <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-sans)', color: '#15803d' }}>
                         {item.recommended_order}
                       </td>
                     </tr>
@@ -781,21 +781,21 @@ export default function DataImport() {
                       <tr key={item.part_id}>
                         <td className="font-mono"><strong>{item.part_number}</strong></td>
                         <td>{item.description}</td>
-                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${price.toFixed(2)}</td>
-                        <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--primary)' }}>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)' }}>${price.toFixed(2)}</td>
+                        <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-sans)', color: 'var(--primary)' }}>
                           {totalQty}
                         </td>
-                        <td style={{ textAlign: 'right', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
+                        <td style={{ textAlign: 'right', fontWeight: 700, fontFamily: 'var(--font-sans)' }}>
                           ${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
-                        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w1_qty ?? 0}</td>
-                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${((item.w1_cost ?? (item.w1_qty * price)) || 0).toFixed(2)}</td>
-                        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w2_qty ?? 0}</td>
-                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${((item.w2_cost ?? (item.w2_qty * price)) || 0).toFixed(2)}</td>
-                        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w3_qty ?? 0}</td>
-                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${((item.w3_cost ?? (item.w3_qty * price)) || 0).toFixed(2)}</td>
-                        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w4_qty ?? 0}</td>
-                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${((item.w4_cost ?? (item.w4_qty * price)) || 0).toFixed(2)}</td>
+                        <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)' }}>{item.w1_qty ?? 0}</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)' }}>${((item.w1_cost ?? (item.w1_qty * price)) || 0).toFixed(2)}</td>
+                        <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)' }}>{item.w2_qty ?? 0}</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)' }}>${((item.w2_cost ?? (item.w2_qty * price)) || 0).toFixed(2)}</td>
+                        <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)' }}>{item.w3_qty ?? 0}</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)' }}>${((item.w3_cost ?? (item.w3_qty * price)) || 0).toFixed(2)}</td>
+                        <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)' }}>{item.w4_qty ?? 0}</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)' }}>${((item.w4_cost ?? (item.w4_qty * price)) || 0).toFixed(2)}</td>
                       </tr>
                     );
                   })}
@@ -826,7 +826,7 @@ export default function DataImport() {
                       <td>{rec.rawSiteName || rec.siteId}</td>
                       <td className="font-mono"><strong>{rec.partNumber}</strong></td>
                       <td>{rec.description}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{rec.quantity}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)' }}>{rec.quantity}</td>
                     </tr>
                   ))}
                 </tbody>

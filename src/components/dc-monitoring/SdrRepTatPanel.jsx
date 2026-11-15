@@ -571,7 +571,7 @@ export default function SdrRepTatPanel({ analytics, onExportSdrPdf }) {
               <tbody>
                 {pagedOrders.map((o) => (
                   <tr key={`${o.orderId}-${o.rowIndex}`} style={{ borderBottom: '1px solid var(--border-light)' }}>
-                    <td style={{ padding: '7px 10px', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{o.orderId}</td>
+                    <td style={{ padding: '7px 10px', fontFamily: 'var(--font-sans)', fontWeight: 600 }}>{o.orderId}</td>
                     <td style={{ padding: '7px 10px' }}>{o.receivedDate}</td>
                     <td style={{ padding: '7px 10px' }}>{o.closedDate}</td>
                     <td style={{ padding: '7px 10px' }}>{o.locationName}</td>

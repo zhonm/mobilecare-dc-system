@@ -315,7 +315,7 @@ export default function Feedback() {
                       </span>
                     </div>
 
-                    <div style={{ fontSize: '17px', fontWeight: 800, color: '#0f172a', margin: '2px 0 10px', fontFamily: 'var(--font-mono)' }}>
+                    <div style={{ fontSize: '17px', fontWeight: 800, color: '#0f172a', margin: '2px 0 10px', fontFamily: 'var(--font-sans)' }}>
                       <a href={contact.telLink} style={{ color: '#0f172a', textDecoration: 'none' }} title={`Call ${contact.name}`}>
                         {contact.viber}
                       </a>

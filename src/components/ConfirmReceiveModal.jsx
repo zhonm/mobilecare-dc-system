@@ -329,7 +329,7 @@ export default function ConfirmReceiveModal({
                     placeholder="e.g. APP ASP ABR"
                     value={receivingBranch}
                     onChange={(e) => setReceivingBranch(e.target.value)}
-                    style={{ fontSize: '12.5px', height: '36px', fontFamily: 'var(--font-mono)' }}
+                    style={{ fontSize: '12.5px', height: '36px', fontFamily: 'var(--font-sans)' }}
                   />
                 </div>
 
@@ -395,7 +395,7 @@ export default function ConfirmReceiveModal({
               }}>
                 <div style={{ fontSize: '11.5px', color: '#166534' }}>
                   <span>Printed on Packing List Signature: </span>
-                  <strong style={{ color: '#14532d', fontFamily: 'var(--font-mono)' }}>
+                  <strong style={{ color: '#14532d', fontFamily: 'var(--font-sans)' }}>
                     {computedSignature || cleanBranch || 'Receiving Staff Name'}
                   </strong>
                 </div>

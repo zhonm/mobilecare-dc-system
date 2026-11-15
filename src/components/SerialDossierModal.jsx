@@ -90,7 +90,7 @@ export default function SerialDossierModal({
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+              <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-sans)' }}>
                 {serialDetails.serialNumber}
               </h2>
               <button
@@ -149,11 +149,11 @@ export default function SerialDossierModal({
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px', flexWrap: 'wrap' }}>
               <span style={{ fontSize: '13px', color: '#14532d', fontWeight: 700 }}>
-                Current Owner: <code style={{ background: '#dcfce7', padding: '2px 6px', borderRadius: '4px', color: '#15803d', fontFamily: 'var(--font-mono)' }}>{(serialDetails.currentOwner ? String(serialDetails.currentOwner).toUpperCase() : 'DC_MSPI-OWNED')}</code>
+                Current Owner: <code style={{ background: '#dcfce7', padding: '2px 6px', borderRadius: '4px', color: '#15803d', fontFamily: 'var(--font-sans)' }}>{(serialDetails.currentOwner ? String(serialDetails.currentOwner).toUpperCase() : 'DC_MSPI-OWNED')}</code>
               </span>
               <span style={{ color: '#86efac' }}>&bull;</span>
               <span style={{ fontSize: '13px', color: '#14532d', fontWeight: 700 }}>
-                Movement History: <strong style={{ color: '#0f172a', fontFamily: 'var(--font-mono)' }}>{serialDetails.movementTrail || (serialDetails.isDcSite ? 'DC' : `${serialDetails.siteCode || 'SITE'}`)}</strong>
+                Movement History: <strong style={{ color: '#0f172a', fontFamily: 'var(--font-sans)' }}>{serialDetails.movementTrail || (serialDetails.isDcSite ? 'DC' : `${serialDetails.siteCode || 'SITE'}`)}</strong>
               </span>
             </div>
             <div style={{ fontSize: '11.5px', color: '#15803d', marginTop: '3px' }}>

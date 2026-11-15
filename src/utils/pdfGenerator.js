@@ -713,7 +713,7 @@ export function printAllocationMatrixDirect(allocations = [], sites = [], period
       return `
         <tr>
           <td style="text-align: center;"><span style="background: ${badgeBg}; color: ${badgeText}; padding: 2px 6px; border-radius: 4px; font-weight: 700; font-size: 9.5px;">${catLabel}</span></td>
-          <td style="font-weight: 700; font-family: monospace; font-size: 10.5px;">${it.part_number}</td>
+          <td style="font-weight: 700; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-variant-numeric: tabular-nums; font-size: 10.5px;">${it.part_number}</td>
           <td style="text-align: left; font-size: 10.5px;">${it.description}</td>
           <td style="text-align: right; font-size: 10px;">$${price.toFixed(2)}</td>
           ${siteCells}
@@ -740,7 +740,7 @@ export function printAllocationMatrixDirect(allocations = [], sites = [], period
       <title>Master Allocation Matrix - ${period}</title>
       <style>
         @page { size: landscape; margin: 6mm; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; color: #0f172a; margin: 0; padding: 6px; font-size: 10px; }
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #0f172a; margin: 0; padding: 6px; font-size: 10px; }
         .matrix-title-bar { background: #0f172a; color: #ffffff; padding: 10px 16px; border-radius: 6px 6px 0 0; display: flex; justify-content: space-between; align-items: center; }
         .matrix-kpi-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px 0; }
         .kpi-card { background: #f8fafc; border: 1px solid #e2e8f0; padding: 6px 12px; border-radius: 4px; }
@@ -936,10 +936,10 @@ export function printStockTransfersDirect(records = [], metadata = {}) {
       <td style="text-align: center;">${r.transfer_received_date || '—'}</td>
       <td style="text-align: center; font-weight: 700; color: #92400e; background: #fef3c7; border-radius: 4px;">${r.from_stock || '—'}</td>
       <td style="text-align: center; font-weight: 700; color: #15803d; background: #dcfce7; border-radius: 4px;">${r.to_stock || '—'}</td>
-      <td style="text-align: center; font-family: monospace; font-weight: 700;">${r.product_code || '—'}</td>
+      <td style="text-align: center; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-variant-numeric: tabular-nums; font-weight: 700;">${r.product_code || '—'}</td>
       <td style="text-align: left;">${r.product_name || '—'}</td>
       <td style="text-align: center; font-weight: 800; color: #0369a1; background: #e0f2fe;">${r.transfer_quantity || 1}</td>
-      <td style="text-align: center; font-family: monospace; font-size: 10px;">${r.serial_number || '—'}</td>
+      <td style="text-align: center; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-variant-numeric: tabular-nums; font-size: 10px;">${r.serial_number || '—'}</td>
       <td style="text-align: right; font-weight: 700;">$${(r.transfer_value || 0).toFixed(2)}</td>
     </tr>
   `).join('');
@@ -951,7 +951,7 @@ export function printStockTransfersDirect(records = [], metadata = {}) {
       <title>Fixably Stock Transfers Report</title>
       <style>
         @page { size: landscape; margin: 8mm; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; color: #0f172a; margin: 0; padding: 8px; font-size: 11px; }
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #0f172a; margin: 0; padding: 8px; font-size: 11px; }
         .report-header { background: #0f172a; color: #ffffff; padding: 12px 18px; border-radius: 6px 6px 0 0; display: flex; justify-content: space-between; align-items: center; }
         .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0; }
         .kpi-box { background: #f8fafc; border: 1px solid #e2e8f0; padding: 8px 12px; border-radius: 6px; }
@@ -2435,7 +2435,7 @@ export function printForecastingReportDirect(forecastItems = [], metadata = {}) 
     return `
       <tr>
         <td style="text-align:center">${idx + 1}</td>
-        <td style="font-family:monospace;font-weight:bold;color:#0284c7">${it.part_number}</td>
+        <td style="font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-variant-numeric:tabular-nums;font-weight:bold;color:#0284c7">${it.part_number}</td>
         <td>${it.description || ''}</td>
         <td>${it.iphone_model || ''}</td>
         <td style="text-align:center">${it.category_name || (it.part_number?.startsWith('661-') ? 'Apple Part' : 'General')}</td>
@@ -2462,7 +2462,7 @@ export function printForecastingReportDirect(forecastItems = [], metadata = {}) 
       <title>Fixably Demand Forecasting Report - ${periodLabel}</title>
       <style>
         @page { size: landscape; margin: 8mm; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #0f172a; margin: 0; padding: 0; font-size: 11px; }
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #0f172a; margin: 0; padding: 0; font-size: 11px; }
         .header-bar { background: #0f172a; color: #fff; padding: 12px 16px; border-radius: 6px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
         .kpi-bar { display: flex; gap: 12px; margin-bottom: 14px; }
         .kpi-card { flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid #e2e8f0; background: #f8fafc; }

@@ -1727,7 +1727,7 @@ export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onN
                           <td style={{ whiteSpace: 'nowrap' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
                               <Calendar size={13} color="var(--text-muted)" />
-                              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
+                              <span style={{ fontFamily: 'var(--font-sans)', fontSize: '12px' }}>
                                 {normalizeDateToIso(rec.intake_date) || 'Recent'}
                               </span>
                             </div>
@@ -1746,7 +1746,7 @@ export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onN
                           <td>
                             {effectivePoNumber ? (
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                <strong style={{ fontFamily: 'var(--font-mono)', color: '#2563eb' }}>{effectivePoNumber}</strong>
+                                <strong style={{ fontFamily: 'var(--font-sans)', color: '#2563eb' }}>{effectivePoNumber}</strong>
                                 {effectiveInvoiceRef && <span style={{ fontSize: '11px', color: '#64748b' }}>Ref: {effectiveInvoiceRef}</span>}
                               </div>
                             ) : (

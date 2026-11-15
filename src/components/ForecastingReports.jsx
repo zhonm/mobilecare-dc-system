@@ -90,7 +90,7 @@ const CustomBarTooltip = ({ active, payload }) => {
       borderRadius: '8px', fontSize: '12px', boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
       border: '1px solid #334155', minWidth: '220px'
     }}>
-      <p style={{ fontWeight: 800, marginBottom: '2px', color: '#38bdf8', fontFamily: 'monospace', fontSize: '13px' }}>
+      <p style={{ fontWeight: 800, marginBottom: '2px', color: '#38bdf8', fontFamily: 'var(--font-sans)', fontSize: '13px' }}>
         {data.partNumber || payload[0]?.name}
       </p>
       {data.description && (
@@ -132,7 +132,7 @@ const CustomSiteBarTooltip = ({ active, payload }) => {
       border: '1px solid #334155', minWidth: '240px'
     }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
-        <span style={{ fontWeight: 800, color: '#38bdf8', fontFamily: 'monospace', fontSize: '13px' }}>
+        <span style={{ fontWeight: 800, color: '#38bdf8', fontFamily: 'var(--font-sans)', fontSize: '13px' }}>
           {data.code}
         </span>
         <span style={{
@@ -1565,7 +1565,7 @@ export default function ForecastingReports() {
 
                             {/* Part Number Badge */}
                             <span style={{
-                              fontFamily: 'var(--font-mono, monospace)',
+                              fontFamily: 'var(--font-sans)',
                               fontSize: '11.5px',
                               fontWeight: 700,
                               color: '#0284c7',
@@ -1634,7 +1634,7 @@ export default function ForecastingReports() {
                         dataKey="partNumber"
                         type="category"
                         width={90}
-                        tick={{ fontSize: 10.5, fill: '#0f172a', fontFamily: 'monospace', fontWeight: 600 }}
+                        tick={{ fontSize: 10.5, fill: '#0f172a', fontFamily: 'var(--font-sans)', fontWeight: 600 }}
                       />
                       <Tooltip content={<CustomBarTooltip />} />
                       <Bar dataKey="qty" name="Recommended Qty" radius={[0, 4, 4, 0]}>
@@ -1753,7 +1753,7 @@ export default function ForecastingReports() {
                       <tr key={it.id || it.part_number} style={{ borderBottom: '1px solid #f1f5f9' }}>
                         <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px' }}>{globalIdx}</td>
                         <td>
-                          <span style={{ fontFamily: 'var(--font-mono, monospace)', fontWeight: 700, color: '#0284c7' }}>
+                          <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0284c7' }}>
                             {it.part_number}
                           </span>
                         </td>
@@ -1972,7 +1972,7 @@ export default function ForecastingReports() {
                         const isDisplay = (it.description || '').toLowerCase().includes('display');
                         return (
                           <tr key={it.part_number || idx} style={{ borderBottom: '1px solid #f1f5f9', background: idx % 2 === 0 ? '#ffffff' : '#fafafa' }}>
-                            <td style={{ fontFamily: 'monospace', fontWeight: 700, color: '#0284c7', padding: '11px 14px', whiteSpace: 'nowrap' }}>{it.part_number}</td>
+                            <td style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0284c7', padding: '11px 14px', whiteSpace: 'nowrap' }}>{it.part_number}</td>
                             <td style={{ fontWeight: 600, color: '#0f172a', padding: '11px 14px' }}>{it.description}</td>
                             <td style={{ textAlign: 'center', padding: '11px 14px', whiteSpace: 'nowrap' }}>
                               <span style={{
@@ -2087,7 +2087,7 @@ export default function ForecastingReports() {
                     <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
                       Branch Accuracy
                     </div>
-                    <div style={{ fontSize: '20px', fontWeight: 800, color: '#047857', fontFamily: 'var(--font-mono)' }}>
+                    <div style={{ fontSize: '20px', fontWeight: 800, color: '#047857', fontFamily: 'var(--font-sans)' }}>
                       {siteAccuracyData.accuracyRate}% <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>({siteAccuracyData.accurateCount}/{siteAccuracyData.totalCount})</span>
                     </div>
                   </div>
@@ -2098,7 +2098,7 @@ export default function ForecastingReports() {
                     <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
                       Actual vs Forecast
                     </div>
-                    <div style={{ fontSize: '20px', fontWeight: 800, color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                    <div style={{ fontSize: '20px', fontWeight: 800, color: '#0284c7', fontFamily: 'var(--font-sans)' }}>
                       {siteAccuracyData.totalActualUnits.toLocaleString()}{' '}
                       <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>vs {siteAccuracyData.totalForecastUnits.toLocaleString()}</span>
                     </div>
@@ -2113,7 +2113,7 @@ export default function ForecastingReports() {
                     <div style={{
                       fontSize: '20px',
                       fontWeight: 800,
-                      fontFamily: 'var(--font-mono)',
+                      fontFamily: 'var(--font-sans)',
                       color: siteAccuracyData.netUnitVariance === 0 ? '#059669' : (siteAccuracyData.netUnitVariance > 0 ? '#0284c7' : '#b91c1c')
                     }}>
                       {siteAccuracyData.netUnitVariance >= 0 ? '+' : ''}{siteAccuracyData.netUnitVariance}{' '}
@@ -2238,7 +2238,7 @@ export default function ForecastingReports() {
                             <td style={{ textAlign: 'center', color: '#64748b', padding: '11px 12px', whiteSpace: 'nowrap' }}>
                               {idx + 1}
                             </td>
-                            <td style={{ fontFamily: 'monospace', fontWeight: 700, color: '#0284c7', padding: '11px 12px', whiteSpace: 'nowrap' }}>
+                            <td style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0284c7', padding: '11px 12px', whiteSpace: 'nowrap' }}>
                               {it.part_number}
                             </td>
                             <td style={{ fontWeight: 600, color: '#0f172a', padding: '11px 12px' }}>
@@ -2261,7 +2261,7 @@ export default function ForecastingReports() {
                                 {badge.name}
                               </span>
                             </td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '11px 12px', whiteSpace: 'nowrap' }}>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', padding: '11px 12px', whiteSpace: 'nowrap' }}>
                               <div style={{ fontWeight: 700, color: '#0f172a' }}>${it.unitPriceUSD}</div>
                               <div style={{ fontSize: '10.5px', color: '#64748b' }}>₱{it.unitPricePHP?.toLocaleString()}</div>
                             </td>
@@ -2301,7 +2301,7 @@ export default function ForecastingReports() {
                                 {it.remark} ({it.variance > 0 ? `+${it.variance}` : it.variance})
                               </span>
                             </td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '11px 12px', whiteSpace: 'nowrap' }}>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', padding: '11px 12px', whiteSpace: 'nowrap' }}>
                               <div style={{
                                 fontWeight: 700,
                                 color: it.costVarianceUSD === 0 ? '#059669' : (it.costVarianceUSD > 0 ? '#0284c7' : '#b91c1c')
@@ -2333,7 +2333,7 @@ export default function ForecastingReports() {
                 subtitle="11 Premier Service Hubs in National Capital Region"
                 color="#0284c7"
               />
-              <div style={{ fontSize: '32px', fontWeight: 800, color: '#0284c7', fontFamily: 'var(--font-mono, monospace)', margin: '10px 0 4px 0' }}>
+              <div style={{ fontSize: '32px', fontWeight: 800, color: '#0284c7', fontFamily: 'var(--font-sans)', margin: '10px 0 4px 0' }}>
                 {analytics.regionalSummary.mmPct}%{' '}
                 <span style={{ fontSize: '15px', fontWeight: 600, color: '#64748b' }}>({analytics.regionalSummary.mmUnits.toLocaleString()} Units)</span>
               </div>
@@ -2352,7 +2352,7 @@ export default function ForecastingReports() {
                 subtitle="17 Regional Hubs across Luzon, Visayas, and Mindanao"
                 color="#10b981"
               />
-              <div style={{ fontSize: '32px', fontWeight: 800, color: '#10b981', fontFamily: 'var(--font-mono, monospace)', margin: '10px 0 4px 0' }}>
+              <div style={{ fontSize: '32px', fontWeight: 800, color: '#10b981', fontFamily: 'var(--font-sans)', margin: '10px 0 4px 0' }}>
                 {analytics.regionalSummary.provPct}%{' '}
                 <span style={{ fontSize: '15px', fontWeight: 600, color: '#64748b' }}>({analytics.regionalSummary.provUnits.toLocaleString()} Units)</span>
               </div>
@@ -2437,7 +2437,7 @@ export default function ForecastingReports() {
                         dataKey="code"
                         type="category"
                         width={85}
-                        tick={{ fontSize: 11, fill: '#0f172a', fontWeight: 600, fontFamily: 'monospace' }}
+                        tick={{ fontSize: 11, fill: '#0f172a', fontWeight: 600, fontFamily: 'var(--font-sans)' }}
                       />
                       <Tooltip content={<CustomSiteBarTooltip />} />
                       <Bar dataKey="totalUnits" name="Allocated Units" radius={[0, 4, 4, 0]} barSize={18}>
@@ -2677,7 +2677,7 @@ export default function ForecastingReports() {
                     dataKey="code"
                     type="category"
                     width={85}
-                    tick={{ fontSize: 11, fill: '#0f172a', fontWeight: 600, fontFamily: 'monospace' }}
+                    tick={{ fontSize: 11, fill: '#0f172a', fontWeight: 600, fontFamily: 'var(--font-sans)' }}
                   />
                   <Tooltip content={<CustomSiteBarTooltip />} />
                   <Bar dataKey="totalUnits" name="Allocated Units" radius={[0, 4, 4, 0]} barSize={16}>
@@ -2734,7 +2734,7 @@ export default function ForecastingReports() {
                         <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px' }}>{idx + 1}</td>
                         <td>
                           <span style={{
-                            fontFamily: 'var(--font-mono, monospace)',
+                            fontFamily: 'var(--font-sans)',
                             fontWeight: 700,
                             background: site.isMM ? '#eff6ff' : '#f0fdf4',
                             color: site.isMM ? '#0284c7' : '#15803d',
@@ -2848,7 +2848,7 @@ export default function ForecastingReports() {
 
                     return (
                       <tr key={it.part_number} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ fontFamily: 'monospace', fontWeight: 700, color: '#0284c7' }}>{it.part_number}</td>
+                        <td style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0284c7' }}>{it.part_number}</td>
                         <td style={{ fontWeight: 600, color: '#0f172a' }}>{it.description}</td>
                         <td style={{ textAlign: 'center', color: '#475569' }}>{avg} / mo</td>
                         <td style={{ textAlign: 'center' }}>

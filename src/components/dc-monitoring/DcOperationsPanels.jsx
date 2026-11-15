@@ -439,7 +439,69 @@ export function TransfersShippingPanel({ analytics, _onSaveShippingCosts, onUplo
 
   const destinationSites = useMemo(() => ta?.transferDestinationBreakdown || [], [ta?.transferDestinationBreakdown]);
   const topSite = destinationSites[0] || { toStock: 'GLS', count: 0 };
-  const monthlyVolume = useMemo(() => ta?.monthlyTransferVolume || [], [ta?.monthlyTransferVolume]);
+  const monthlyVolume = useMemo(() => {
+    const base = ta?.monthlyTransferVolume || [];
+    const MONTH_ORDER = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    const currentMonth = MONTH_ORDER[new Date().getMonth()];
+    if (base.some(m => m.month === currentMonth)) return base;
+    return [...base, { month: currentMonth, count: 0, value: 0 }].sort(
+      (a, b) => MONTH_ORDER.indexOf(a.month) - MONTH_ORDER.indexOf(b.month)
+    );
+  }, [ta?.monthlyTransferVolume]);
+
+  const courierMonthSummaries = useMemo(() => {
+    const MONTH_ORDER = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    const now = new Date();
+    const currentMonth = MONTH_ORDER[now.getMonth()];
+    const currentYear = now.getFullYear();
+
+    const transferCountByMonth = new Map();
+    for (const m of monthlyVolume) {
+      if (m?.month) transferCountByMonth.set(m.month, m.count || 0);
+    }
+
+    const grouped = new Map();
+    for (const o of orderList) {
+      const m = String(o.month || '').trim();
+      if (!m) continue;
+      const y = Number(o.year) || currentYear;
+      const key = `${y}-${m}`;
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          monthName: m,
+          year: y,
+          label: `${m} ${y}`,
+          count: 0,
+          transferCount: transferCountByMonth.get(m) || 0
+        });
+      }
+      if (!o.status || o.status === 'Completed') {
+        grouped.get(key).count += 1;
+      }
+    }
+
+    const currentKey = `${currentYear}-${currentMonth}`;
+    if (!grouped.has(currentKey)) {
+      grouped.set(currentKey, {
+        monthName: currentMonth,
+        year: currentYear,
+        label: `${currentMonth} ${currentYear}`,
+        count: 0,
+        transferCount: transferCountByMonth.get(currentMonth) || 0
+      });
+    }
+
+    return Array.from(grouped.values()).sort((a, b) => {
+      if (a.year !== b.year) return a.year - b.year;
+      return MONTH_ORDER.indexOf(a.monthName) - MONTH_ORDER.indexOf(b.monthName);
+    });
+  }, [orderList, monthlyVolume]);
   const peakTransferMonth = useMemo(() => {
     if (monthlyVolume.length === 0) return { month: 'August', count: 905 };
     return [...monthlyVolume].sort((a, b) => (b.count || 0) - (a.count || 0))[0];
@@ -598,7 +660,7 @@ export function TransfersShippingPanel({ analytics, _onSaveShippingCosts, onUplo
           <h4 style={{ fontSize: '15px', marginBottom: '12px' }}>Monthly DC Stock Transfer Volume</h4>
           <div style={{ width: '100%', height: 270 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={ta?.monthlyTransferVolume || []}>
+              <BarChart data={monthlyVolume}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis dataKey="month" tick={{ fontSize: 11.5 }} />
                 <YAxis tick={{ fontSize: 11.5 }} />
@@ -699,30 +761,64 @@ export function TransfersShippingPanel({ analytics, _onSaveShippingCosts, onUplo
                 </tr>
               </thead>
               <tbody>
-                {[
-                  { month: 'August 2026', courier: 'Lalamove', runs: '74 completed deliveries', status: 'Verified Delivery Runs' },
-                  { month: 'September 2026', courier: 'Lalamove', runs: '41 completed deliveries', status: 'Verified Delivery Runs' },
-                  { month: 'October 2026', courier: 'Lalamove', runs: '37 completed deliveries', status: 'Verified Delivery Runs' }
-                ].map(r => (
-                  <tr key={r.month} style={{ borderBottom: '1px solid var(--border-light)' }}>
-                    <td style={{ padding: '8px 8px', fontWeight: 600 }}>{r.month}</td>
-                    <td style={{ padding: '8px 8px' }}>{r.courier}</td>
-                    <td style={{ padding: '8px 8px', color: '#1d4ed8', fontWeight: 500 }}>{r.runs}</td>
+                {courierMonthSummaries.map(r => (
+                  <tr key={r.label} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                    <td style={{ padding: '8px 8px', fontWeight: 600 }}>{r.label}</td>
+                    <td style={{ padding: '8px 8px' }}>{r.count > 0 ? 'Lalamove' : (r.transferCount > 0 ? 'Stock Transfer' : 'Lalamove')}</td>
+                    <td style={{ padding: '8px 8px', color: (r.count > 0 || r.transferCount > 0) ? '#1d4ed8' : 'var(--text-muted)', fontWeight: 500 }}>
+                      {r.count > 0
+                        ? `${r.count} completed deliveries`
+                        : r.transferCount > 0
+                        ? `${r.transferCount} outbound transfers recorded`
+                        : '0 completed deliveries (awaiting log)'}
+                    </td>
                     <td style={{ padding: '8px 8px' }}>
-                      <span style={{
-                        background: '#ecfdf5',
-                        color: '#059669',
-                        border: '1px solid #a7f3d0',
-                        borderRadius: '4px',
-                        padding: '2px 6px',
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px'
-                      }}>
-                        <CheckCircle2 size={12} /> {r.status}
-                      </span>
+                      {r.count > 0 ? (
+                        <span style={{
+                          background: '#ecfdf5',
+                          color: '#059669',
+                          border: '1px solid #a7f3d0',
+                          borderRadius: '4px',
+                          padding: '2px 6px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}>
+                          <CheckCircle2 size={12} /> Verified Delivery Runs
+                        </span>
+                      ) : r.transferCount > 0 ? (
+                        <span style={{
+                          background: '#eff6ff',
+                          color: '#1d4ed8',
+                          border: '1px solid #bfdbfe',
+                          borderRadius: '4px',
+                          padding: '2px 6px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}>
+                          <CheckCircle2 size={12} /> Stock Transfer Synced
+                        </span>
+                      ) : (
+                        <span style={{
+                          background: '#fef3c7',
+                          color: '#b45309',
+                          border: '1px solid #fde68a',
+                          borderRadius: '4px',
+                          padding: '2px 6px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}>
+                          Current Period — Pending Log
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -775,7 +871,7 @@ export function TransfersShippingPanel({ analytics, _onSaveShippingCosts, onUplo
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <ShieldCheck size={20} color="#059669" />
                   <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 700 }}>
-                    Lalamove Delivery Run Log (August to October 2026)
+                    Lalamove Delivery Run Log ({courierMonthSummaries[0]?.monthName || 'August'} to {courierMonthSummaries[courierMonthSummaries.length - 1]?.label || 'November 2026'})
                   </h3>
                   <span style={{ fontSize: '11px', background: '#ecfdf5', color: '#059669', padding: '2px 8px', borderRadius: '12px', fontWeight: 600, border: '1px solid #a7f3d0' }}>
                     Verified Runs
@@ -798,34 +894,28 @@ export function TransfersShippingPanel({ analytics, _onSaveShippingCosts, onUplo
             <div style={{ padding: '14px 20px', background: '#f8fafc', borderBottom: '1px solid var(--border-light)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '10px' }}>
               <div style={{ background: '#ffffff', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>TOTAL COURIER DELIVERIES</div>
-                <div style={{ fontSize: '18px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>152 runs</div>
+                <div style={{ fontSize: '18px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>{orderList.length} runs</div>
                 <div style={{ fontSize: '11px', color: '#059669', fontWeight: 500 }}>Completed runs</div>
               </div>
-              <div style={{ background: '#ffffff', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>AUGUST 2026</div>
-                <div style={{ fontSize: '18px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>74 orders</div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Verified deliveries</div>
-              </div>
-              <div style={{ background: '#ffffff', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>SEPTEMBER 2026</div>
-                <div style={{ fontSize: '18px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>41 orders</div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Verified deliveries</div>
-              </div>
-              <div style={{ background: '#ffffff', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>OCTOBER 2026</div>
-                <div style={{ fontSize: '18px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>37 orders</div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Verified deliveries</div>
-              </div>
+              {courierMonthSummaries.map(m => (
+                <div key={m.label} style={{ background: '#ffffff', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>{m.label.toUpperCase()}</div>
+                  <div style={{ fontSize: '18px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>
+                    {m.count > 0 ? `${m.count} orders` : m.transferCount > 0 ? `${m.transferCount} transfers` : '0 orders'}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    {m.count > 0 ? 'Verified deliveries' : m.transferCount > 0 ? 'Stock transfer synced' : 'Pending dispatch log'}
+                  </div>
+                </div>
+              ))}
             </div>
 
             {/* Filter and Search Bar */}
             <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-              <div style={{ display: 'flex', gap: '6px' }}>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                 {[
                   ['ALL', `All (${orderList.length})`],
-                  ['August', 'August (74)'],
-                  ['September', 'September (41)'],
-                  ['October', 'October (37)']
+                  ...courierMonthSummaries.map(m => [m.monthName, `${m.monthName} (${m.count})`])
                 ].map(([m, label]) => (
                   <button
                     key={m}
@@ -898,7 +988,7 @@ export function TransfersShippingPanel({ analytics, _onSaveShippingCosts, onUplo
                   ) : (
                     paginatedOrders.map(o => (
                       <tr key={o.orderId} style={{ borderBottom: '1px solid var(--border-light)' }}>
-                        <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontWeight: 600 }}>{o.orderId}</td>
+                        <td style={{ padding: '7px 10px', fontFamily: 'var(--font-sans)', fontWeight: 600 }}>{o.orderId}</td>
                         <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{o.completedTime || o.createdTime}</td>
                         <td style={{ padding: '7px 10px' }}>
                           <span style={{ background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 500 }}>

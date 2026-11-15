@@ -903,7 +903,7 @@ export default function UserAccessManagement() {
                                 </span>
                               )}
                             </div>
-                            <div style={{ fontSize: '11px', color: '#64748b', fontFamily: 'var(--font-mono)', marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            <div style={{ fontSize: '11px', color: '#64748b', fontFamily: 'var(--font-sans)', marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                               {user.email}
                             </div>
                           </div>
@@ -1723,7 +1723,7 @@ export default function UserAccessManagement() {
                     placeholder="Enter new secure password..."
                     style={{
                       paddingRight: '70px',
-                      fontFamily: showPasswordText ? 'var(--font-mono)' : 'inherit',
+                      fontFamily: showPasswordText ? 'var(--font-sans)' : 'inherit',
                       background: requireNextLogin ? '#f1f5f9' : '#ffffff'
                     }}
                     required={!requireNextLogin}

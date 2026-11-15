@@ -1223,10 +1223,10 @@ export default function Shipments() {
             );
           })()}
         </td>
-        <td style={{ textAlign: 'center', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
+        <td style={{ textAlign: 'center', fontWeight: 600, fontFamily: 'var(--font-sans)' }}>
           {sh.items?.length || 0}
         </td>
-        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>
+        <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)' }}>
           {sh.box_number_label || (sh.box_number ? `${sh.box_number}/${sh.total_boxes || 1}` : `${sh.total_boxes || 1}`)}
         </td>
         <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
@@ -2016,7 +2016,7 @@ export default function Shipments() {
               <div style={{ fontSize: '11px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                 Pending Pickup
               </div>
-              <div style={{ fontSize: '22px', fontWeight: 800, color: '#b45309', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
+              <div style={{ fontSize: '22px', fontWeight: 800, color: '#b45309', marginTop: '2px', fontFamily: 'var(--font-sans)' }}>
                 {kpiMetrics.pendingManifests}
               </div>
               <div style={{ fontSize: '11.5px', color: '#92400e', marginTop: '2px' }}>
@@ -2048,7 +2048,7 @@ export default function Shipments() {
               <div style={{ fontSize: '11px', fontWeight: 700, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                 In Transit
               </div>
-              <div style={{ fontSize: '22px', fontWeight: 800, color: '#0369a1', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
+              <div style={{ fontSize: '22px', fontWeight: 800, color: '#0369a1', marginTop: '2px', fontFamily: 'var(--font-sans)' }}>
                 {kpiMetrics.shippedManifests}
               </div>
               <div style={{ fontSize: '11.5px', color: '#0284c7', marginTop: '2px' }}>
@@ -2080,7 +2080,7 @@ export default function Shipments() {
               <div style={{ fontSize: '11px', fontWeight: 700, color: '#047857', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                 Received Confirmed
               </div>
-              <div style={{ fontSize: '22px', fontWeight: 800, color: '#047857', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
+              <div style={{ fontSize: '22px', fontWeight: 800, color: '#047857', marginTop: '2px', fontFamily: 'var(--font-sans)' }}>
                 {kpiMetrics.receivedManifests}
               </div>
               <div style={{ fontSize: '11.5px', color: '#059669', marginTop: '2px' }}>
@@ -2112,7 +2112,7 @@ export default function Shipments() {
               <div style={{ fontSize: '11px', fontWeight: 700, color: '#4338ca', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                 Today's Dispatches
               </div>
-              <div style={{ fontSize: '22px', fontWeight: 800, color: '#3730a3', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
+              <div style={{ fontSize: '22px', fontWeight: 800, color: '#3730a3', marginTop: '2px', fontFamily: 'var(--font-sans)' }}>
                 {kpiMetrics.todayManifests}
               </div>
               <div style={{ fontSize: '11.5px', color: '#4f46e5', marginTop: '2px' }}>
@@ -3610,7 +3610,7 @@ export default function Shipments() {
 
                   <div>
                     <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Vehicle Plate #</div>
-                    <div style={{ fontWeight: 600, fontSize: '12.5px', color: '#0f172a', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
+                    <div style={{ fontWeight: 600, fontSize: '12.5px', color: '#0f172a', marginTop: '2px', fontFamily: 'var(--font-sans)' }}>
                       {viewPackageModalState.shipment?.vehicle_plate || 'N/A'}
                     </div>
                   </div>
@@ -3777,7 +3777,7 @@ export default function Shipments() {
                       onFocus={(e) => e.target.select()}
                       style={{
                         width: '100%',
-                        fontFamily: 'var(--font-mono)',
+                        fontFamily: 'var(--font-sans)',
                         fontSize: '11.5px',
                         background: '#ffffff',
                         border: '1px solid #86efac',
@@ -3895,7 +3895,7 @@ export default function Shipments() {
                           return (
                             <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
                               <td style={{ padding: '8px 12px', color: '#64748b' }}>{idx + 1}</td>
-                              <td style={{ padding: '8px 12px', fontWeight: 600, fontFamily: 'var(--font-mono)', color: '#0f172a' }}>
+                              <td style={{ padding: '8px 12px', fontWeight: 600, fontFamily: 'var(--font-sans)', color: '#0f172a' }}>
                                 {it.part_number || it.partNumber || 'N/A'}
                               </td>
                               <td style={{ padding: '8px 12px', color: '#334155' }}>
@@ -3904,7 +3904,7 @@ export default function Shipments() {
                               <td style={{ padding: '8px 12px' }}>
                                 {sn ? (
                                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#0369a1' }}>
+                                    <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#0369a1' }}>
                                       {sn}
                                     </span>
                                     <button
@@ -4335,7 +4335,7 @@ export default function Shipments() {
                         onFocus={(e) => e.target.select()}
                         style={{
                           width: '100%',
-                          fontFamily: 'var(--font-mono)',
+                          fontFamily: 'var(--font-sans)',
                           fontSize: '11.5px',
                           background: '#f8fafc',
                           border: '1px solid #cbd5e1',

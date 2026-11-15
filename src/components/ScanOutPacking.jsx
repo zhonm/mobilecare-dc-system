@@ -2235,7 +2235,7 @@ export default function ScanOutPacking() {
               <input
                 type="text"
                 placeholder="TS # (Manual)"
-                style={{ background: '#1e293b', color: '#fff', border: '1px solid #334155', borderRadius: '6px', fontSize: '11px', padding: '4px 6px', height: '30px', fontFamily: 'var(--font-mono)' }}
+                style={{ background: '#1e293b', color: '#fff', border: '1px solid #334155', borderRadius: '6px', fontSize: '11px', padding: '4px 6px', height: '30px', fontFamily: 'var(--font-sans)' }}
                 value={currentShipment.transfer_slip_number || ''}
                 onChange={(e) => setCurrentShipment(prev => ({ ...prev, transfer_slip_number: e.target.value }))}
                 title="Transfer Slip Number (e.g. TS-2026-0089)"
@@ -2372,7 +2372,7 @@ export default function ScanOutPacking() {
             </div>
             <div>
               <div style={{ fontSize: '10px', color: '#a7f3d0' }}>Declared Value (85 PHP):</div>
-              <div style={{ fontSize: '14.5px', fontWeight: 800, color: '#34d399', fontFamily: 'var(--font-mono)', lineHeight: 1.2 }}>
+              <div style={{ fontSize: '14.5px', fontWeight: 800, color: '#34d399', fontFamily: 'var(--font-sans)', lineHeight: 1.2 }}>
                 ₱{totalDeclaredValuePHP.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
             </div>
@@ -3345,9 +3345,9 @@ export default function ScanOutPacking() {
                     return (
                       <tr key={i} className={i % 2 === 1 ? 'packing-table-row-alt' : ''}>
                         <td style={{ textAlign: 'center', color: '#64748b' }}>{i + 1}</td>
-                        <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{it.part_number}</td>
+                        <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-sans)' }}>{it.part_number}</td>
                         <td style={{ textAlign: 'left', paddingLeft: '10px' }}>{it.description}</td>
-                        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{it.serial_number}</td>
+                        <td style={{ textAlign: 'center', fontFamily: 'var(--font-sans)' }}>{it.serial_number}</td>
                         <td style={{ textAlign: 'center' }}>{itemBoxDisplay}</td>
                         <td className="hide-on-print" style={{ textAlign: 'center', padding: '2px' }}>
                           <button
@@ -4866,7 +4866,7 @@ export default function ScanOutPacking() {
                                   borderRadius: '5px',
                                   fontSize: '12px',
                                   fontWeight: 700,
-                                  fontFamily: 'var(--font-mono, monospace)'
+                                  fontFamily: 'var(--font-sans)'
                                 }}
                               >
                                 {site.code}
@@ -4875,7 +4875,7 @@ export default function ScanOutPacking() {
                                 {site.region || 'Metro Manila'}
                               </span>
                               {site.ship_to && (
-                                <span style={{ fontSize: '11px', fontWeight: 700, color: '#0369a1', background: '#e0f2fe', padding: '2px 7px', borderRadius: '4px', fontFamily: 'var(--font-mono, monospace)', letterSpacing: '0.4px' }}>
+                                <span style={{ fontSize: '11px', fontWeight: 700, color: '#0369a1', background: '#e0f2fe', padding: '2px 7px', borderRadius: '4px', fontFamily: 'var(--font-sans)', letterSpacing: '0.4px' }}>
                                   Ship-To: {site.ship_to}
                                 </span>
                               )}
@@ -4906,7 +4906,7 @@ export default function ScanOutPacking() {
                             {site.contact_person && (
                               <div>
                                 Supervisor: <strong style={{ color: '#0f172a' }}>{site.contact_person}</strong>
-                                {site.contact_phone ? <span style={{ color: '#0284c7', fontFamily: 'var(--font-mono, monospace)', marginLeft: '5px' }}>• {site.contact_phone}</span> : ''}
+                                {site.contact_phone ? <span style={{ color: '#0284c7', fontFamily: 'var(--font-sans)', marginLeft: '5px' }}>• {site.contact_phone}</span> : ''}
                               </div>
                             )}
                             {site.contact_email && (
