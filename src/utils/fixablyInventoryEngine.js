@@ -805,7 +805,7 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
       return { success: false, error: 'Required column "Part Number" was not found in the CSV header.' };
     }
 
-    const currentDate = options.currentDate || new Date('2026-10-09T00:00:00Z');
+    const currentDate = options.currentDate || new Date();
     const dynamicDcSerials = options.dynamicDcSerials instanceof Set ? options.dynamicDcSerials : null;
     const kgbUsedMap = options.kgbUsedMap instanceof Map ? options.kgbUsedMap : null;
     const serialTransferMap = options.serialTransferMap instanceof Map ? options.serialTransferMap : null;
@@ -1940,8 +1940,22 @@ export function hydrateFixablySnapshot(snapshot, sitesList = []) {
     }
   }
 
-  // If sites are already present and have complete segmented lists, return as-is
+  // If sites are already present and have complete segmented lists, ensure investigation counts stay synced with items
   if (Array.isArray(snapshot.sites) && snapshot.sites.length > 0 && snapshot.sites[0]?.metrics?.segmentedLists) {
+    const syncedInvestigationItems = snapshot.items.filter(it => it.isInvestigation);
+    if (
+      snapshot.globalMetrics?.investigationCount !== syncedInvestigationItems.length ||
+      (snapshot.investigationItems?.length ?? 0) !== syncedInvestigationItems.length
+    ) {
+      return {
+        ...snapshot,
+        investigationItems: syncedInvestigationItems,
+        globalMetrics: {
+          ...(snapshot.globalMetrics || {}),
+          investigationCount: syncedInvestigationItems.length
+        }
+      };
+    }
     return snapshot;
   }
 

@@ -658,7 +658,7 @@ export default function FixablyInventoryDashboard({
                 siteStockContent: savedSiteStock.content,
                 kgbUsedContent: savedKgb?.content || null,
                 stockTransferContent: savedTransfer?.content || null,
-                options: { sites: sitesRef.current, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
+                options: { sites: sitesRef.current, currentDate: new Date(), expandQuantity: true }
               });
               if (autoReconciled.success && autoReconciled.items?.length > 0) {
                 winningSnapshot = autoReconciled;
@@ -937,7 +937,7 @@ export default function FixablyInventoryDashboard({
         siteStockContent: siteStockText,
         kgbUsedContent: kgbText,
         stockTransferContent: transferText,
-        options: { sites: sitesRef.current, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
+        options: { sites: sitesRef.current, currentDate: new Date(), expandQuantity: true }
       });
 
       if (!reconciled.success) {
@@ -1816,20 +1816,24 @@ export default function FixablyInventoryDashboard({
     }
 
     // Default: system-wide network analytics for Superadmins
+    const actualInvestigationCount = Array.isArray(snapshot?.items)
+      ? snapshot.items.filter(it => it.isInvestigation).length
+      : (snapshot?.investigationItems?.length ?? snapshot?.globalMetrics?.investigationCount ?? 0);
+
     return {
       isScopedToBranch: false,
       totalUnits: snapshot?.globalMetrics?.totalUnits || 0,
       totalValue: snapshot?.globalMetrics?.totalValue || 0,
       uniqueParts: snapshot?.globalMetrics?.uniqueParts || 0,
       sitesCount: snapshot?.globalMetrics?.sitesCount || 0,
-      investigationCount: snapshot?.globalMetrics?.investigationCount || snapshot?.investigationItems?.length || 0,
+      investigationCount: actualInvestigationCount,
       agingCounts: snapshot?.globalMetrics?.agingCounts || {},
       deadStockPercent: snapshot?.globalMetrics?.deadStockPercent || '0.0',
       nonMovingPercent: snapshot?.globalMetrics?.nonMovingPercent || '0.0',
       slowMovingPercent: snapshot?.globalMetrics?.slowMovingPercent || '0.0',
       inStockPercent: snapshot?.globalMetrics?.inStockPercent || '0.0'
     };
-  }, [isSuperadmin, isPmgUser, userSiteData, userSiteCodeClean, snapshot?.globalMetrics, snapshot?.investigationItems]);
+  }, [isSuperadmin, isPmgUser, userSiteData, userSiteCodeClean, snapshot?.items, snapshot?.globalMetrics, snapshot?.investigationItems]);
 
   // Auto-switch to part aggregations or all stock if a PMG user views another site
   useEffect(() => {
@@ -3831,7 +3835,7 @@ export default function FixablyInventoryDashboard({
                   onChange={(e) => setInvestigationFilter(e.target.value)}
                 >
                   <option value="ALL">All Audit Statuses</option>
-                  <option value="INVESTIGATION_ONLY">Flagged in Closed Repairs ({snapshot?.investigationItems?.length || snapshot?.globalMetrics?.investigationCount || 0})</option>
+                  <option value="INVESTIGATION_ONLY">Flagged in Closed Repairs ({displayMetrics?.investigationCount ?? 0})</option>
                   <option value="CLEAN_ONLY">Verified Clean Stock</option>
                 </select>
               </div>

@@ -414,12 +414,10 @@ export function matchAndReconcileKgbConsumption({
   let updatedSnapshot = null;
   if (fixablySnapshot && Array.isArray(fixablySnapshot.items)) {
     const kgbMatchedSerialsSet = new Set(processedKgbSerials);
-    let invReductionCount = 0;
 
     const reconciledItems = fixablySnapshot.items.map(it => {
       const s = String(it.serialNumber || it.serial_number || '').trim().toUpperCase();
       if (s && kgbMatchedSerialsSet.has(s)) {
-        if (it.isInvestigation) invReductionCount++;
         return {
           ...it,
           status: 'used',
@@ -435,12 +433,58 @@ export function matchAndReconcileKgbConsumption({
     });
 
     const activeInStockItems = reconciledItems.filter(it => it.status !== 'used');
-    const newInvCount = Math.max(0, (fixablySnapshot.summary?.investigationCount || 0) - invReductionCount);
+    const remainingInvestigationItems = reconciledItems.filter(it => it.isInvestigation);
+    const newInvCount = remainingInvestigationItems.length;
+
+    const updatedSites = Array.isArray(fixablySnapshot.sites)
+      ? fixablySnapshot.sites.map(site => {
+          const siteItems = Array.isArray(site.items)
+            ? site.items.map(it => {
+                const s = String(it.serialNumber || it.serial_number || '').trim().toUpperCase();
+                if (s && kgbMatchedSerialsSet.has(s)) {
+                  return {
+                    ...it,
+                    status: 'used',
+                    isInvestigation: false,
+                    isFlaggedInvestigation: false,
+                    isConsumedInKgb: true,
+                    investigationDetails: null,
+                    usedInKgb: true,
+                    updated_at: nowIso
+                  };
+                }
+                return it;
+              })
+            : site.items;
+          const siteInvItems = Array.isArray(siteItems) ? siteItems.filter(it => it.isInvestigation) : [];
+          return {
+            ...site,
+            items: siteItems,
+            investigationCount: siteInvItems.length,
+            ...(site.metrics?.segmentedLists
+              ? {
+                  metrics: {
+                    ...site.metrics,
+                    segmentedLists: {
+                      ...site.metrics.segmentedLists,
+                      investigation: siteInvItems
+                    }
+                  }
+                }
+              : {})
+          };
+        })
+      : fixablySnapshot.sites;
 
     updatedSnapshot = {
       ...fixablySnapshot,
       items: reconciledItems,
-      investigationItems: reconciledItems.filter(it => it.isInvestigation),
+      investigationItems: remainingInvestigationItems,
+      sites: updatedSites,
+      globalMetrics: {
+        ...(fixablySnapshot.globalMetrics || {}),
+        investigationCount: newInvCount
+      },
       summary: {
         ...(fixablySnapshot.summary || {}),
         totalUnits: activeInStockItems.length,
