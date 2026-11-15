@@ -561,8 +561,8 @@ export function useCloudSync({
         let localInvUpdatedAt = null;
         let localInvCount = 0;
         try {
-          localInvUpdatedAt = localStorage.getItem('mdc_live_inventory_updated_at');
-          localInvCount = parseInt(localStorage.getItem('mdc_live_inventory_count') || '0', 10);
+          localInvUpdatedAt = localStorage.getItem('mdc_inventory_units_updated_at');
+          localInvCount = parseInt(localStorage.getItem('mdc_inventory_units_count') || '0', 10);
         } catch (e) {}
 
         let cachedUnits = null;
@@ -634,11 +634,11 @@ export function useCloudSync({
                   }
                   const mergedUnits = Array.from(mergedMap.values());
                   try {
-                    localStorage.setItem('mdc_live_inventory_updated_at', maxDeltaUpdatedAt);
-                    localStorage.setItem('mdc_live_inventory_count', String(mergedUnits.length));
+                    localStorage.setItem('mdc_inventory_units_updated_at', maxDeltaUpdatedAt);
+                    localStorage.setItem('mdc_inventory_units_count', String(mergedUnits.length));
                   } catch (e) {}
-                  dbStorage.setItem('mdc_live_inventory_updated_at', maxDeltaUpdatedAt);
-                  dbStorage.setItem('mdc_live_inventory_count', mergedUnits.length);
+                  dbStorage.setItem('mdc_inventory_units_updated_at', maxDeltaUpdatedAt);
+                  dbStorage.setItem('mdc_inventory_units_count', mergedUnits.length);
                   console.debug(`[CloudSync Delta] inventory_units merged ${deltaRows.length} changed row(s) into ${mergedUnits.length} cached units.`);
                   return { data: mergedUnits, error: null, fromDelta: true };
                 }
@@ -681,11 +681,11 @@ export function useCloudSync({
           }
           if (maxUpdatedAt) {
             try {
-              localStorage.setItem('mdc_live_inventory_updated_at', maxUpdatedAt);
-              localStorage.setItem('mdc_live_inventory_count', String(rows.length));
+              localStorage.setItem('mdc_inventory_units_updated_at', maxUpdatedAt);
+              localStorage.setItem('mdc_inventory_units_count', String(rows.length));
             } catch (e) {}
-            dbStorage.setItem('mdc_live_inventory_updated_at', maxUpdatedAt);
-            dbStorage.setItem('mdc_live_inventory_count', rows.length);
+            dbStorage.setItem('mdc_inventory_units_updated_at', maxUpdatedAt);
+            dbStorage.setItem('mdc_inventory_units_count', rows.length);
           }
         }
 
@@ -3806,13 +3806,15 @@ export function useCloudSync({
       return { success: true, throttled: true, reason: 'cooldown_active' };
     }
 
-    lastRefreshTimeRef.current = now;
     activeSyncCountRef.current += 1;
     setIsAutoRefreshing(true);
     console.debug('[AutoRefresh] Sync trigger:', reason, tables ? `(Tables: ${tables.join(', ')})` : '(Full)');
 
     try {
       const success = await hydrateFromSupabase(tables, Boolean(force || isManual));
+      if (success) {
+        lastRefreshTimeRef.current = Date.now();
+      }
       if (!silent) {
         if (success) {
           showToast('Successfully synced latest live data from database!', 'success');

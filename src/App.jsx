@@ -1,4 +1,4 @@
-import { Component, lazy as reactLazy, Suspense } from 'react';
+import { Component, lazy as reactLazy, Suspense, useEffect } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import Login from './components/Login';
 import CreatePassword from './components/CreatePassword';
@@ -67,6 +67,26 @@ function MainApp() {
     isCommandPaletteOpen,
     setIsCommandPaletteOpen
   } = useApp();
+
+  // Preload core operational route chunks in the background after authentication
+  // so tab transitions (Receive Scan-In, Pack Scan-Out, Shipments, etc.) render without delay.
+  useEffect(() => {
+    if (!currentUser?.id || isInitialSyncing) return;
+    const preloadCoreModules = () => {
+      import('./components/ScanInReceiving').catch(() => {});
+      import('./components/ScanOutPacking').catch(() => {});
+      import('./components/Shipments').catch(() => {});
+      import('./components/RequestParts').catch(() => {});
+      import('./components/SiteTransfersFifoReport').catch(() => {});
+      import('./components/DcStockMonitoring').catch(() => {});
+    };
+    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+      const idleId = window.requestIdleCallback(preloadCoreModules, { timeout: 2500 });
+      return () => window.cancelIdleCallback(idleId);
+    }
+    const timer = setTimeout(preloadCoreModules, 1200);
+    return () => clearTimeout(timer);
+  }, [currentUser?.id, isInitialSyncing]);
 
   // 1. Auth Guard: Show CreatePassword or Login if not authenticated or password not set
   if (!currentUser || currentUser.hasSetPassword === false || !currentUser.hasSetPassword) {
