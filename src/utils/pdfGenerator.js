@@ -5,6 +5,7 @@ import { calculateWeeklySplit, getRowParityOffset } from './allocationEngine.js'
 import { getPartCategory, getCategoryBadgeStyle } from './categoryFilter.js';
 import { formatAuditEntityDisplay } from './appContextHelpers.js';
 import { getShipmentCourierDisplay, getShipmentRiderName, healShipmentItem, resolveSiteBranchCode, calculateDeclaredValuePHP, getPackingListFileName, resolvePackingListSiteCode } from './shipmentHelpers.js';
+import { appendChartsSectionToPdf } from './pdfChartCapture.js';
 
 export { getPackingListFileName, resolvePackingListSiteCode };
 
@@ -2372,6 +2373,15 @@ export function exportForecastingReportToPDF(forecastItems = [], metadata = {}) 
 
   // ══════════════════════════════════════════════════════════════════════════
   // PAGE NUMBERING FOOTER ON ALL PAGES
+  // Optional Visual Analytics & Charts captured from UI
+  if (Array.isArray(metadata?.chartImages) && metadata.chartImages.length > 0) {
+    appendChartsSectionToPdf(doc, metadata.chartImages, {
+      sectionTitle: 'Visual Analytics & Charts',
+      sectionSubtitle: `Parts Usage & Forecasting Visualizations (${periodLabel})`,
+      startOnNewPage: true
+    });
+  }
+
   // ══════════════════════════════════════════════════════════════════════════
   const totalPages = doc.internal.getNumberOfPages();
   for (let i = 1; i <= totalPages; i++) {

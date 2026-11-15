@@ -245,11 +245,11 @@ export function initOfflineDriveSyncListener(onItemSynced) {
 
   window.addEventListener('online', handleOnline);
 
-  // Periodic polling every 45s if online
+  // Periodic polling every 45s if online and tab is visible
   const intervalId = setInterval(() => {
-    if (typeof navigator === 'undefined' || navigator.onLine) {
-      processOfflineDriveQueue({ onItemSynced });
-    }
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+    processOfflineDriveQueue({ onItemSynced });
   }, 45000);
 
   return () => {

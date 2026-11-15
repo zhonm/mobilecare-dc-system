@@ -300,12 +300,13 @@ export function useAutoLogout({
         }
       }
 
-      // Smooth countdown when modal is open or in test mode; throttled by minute otherwise
-      const currentMinute = Math.floor(remainingMs / 60000);
+      // Smooth countdown when modal is open or in test mode; throttled to 15-min buckets otherwise
+      // to avoid re-rendering the entire AppContext tree every 60 seconds
+      const currentBucket = Math.floor(remainingMs / 900000);
       if (isWarningOpen || isTestMode) {
         setTimeRemainingMs(remainingMs);
-      } else if (lastReportedMinuteRef.current !== currentMinute) {
-        lastReportedMinuteRef.current = currentMinute;
+      } else if (lastReportedMinuteRef.current !== currentBucket) {
+        lastReportedMinuteRef.current = currentBucket;
         setTimeRemainingMs(remainingMs);
       }
     };
@@ -313,9 +314,14 @@ export function useAutoLogout({
     // Immediate check on effect run
     evaluateSessionSchedule();
 
-    // Use 1-second interval when modal is open or in test mode; 10 seconds in background
-    const intervalMs = (isWarningOpen || isTestMode) ? 1000 : 10000;
-    const intervalId = setInterval(evaluateSessionSchedule, intervalMs);
+    // Use 1-second interval when modal is open or in test mode; 30 seconds in background (skip when hidden)
+    const intervalMs = (isWarningOpen || isTestMode) ? 1000 : 30000;
+    const intervalId = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden' && !isWarningOpen && !isTestMode) {
+        return;
+      }
+      evaluateSessionSchedule();
+    }, intervalMs);
 
     // Event listeners to instantly check when device wakes from sleep or tab regains focus
     const handleVisibilityChange = () => {

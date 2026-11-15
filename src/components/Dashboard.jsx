@@ -50,6 +50,7 @@ import {
   exportDcInventoryToExcel,
   exportDcInventoryToPDF
 } from '../utils/dashboardReportExporter';
+import { captureChartsFromContainer } from '../utils/pdfChartCapture';
 import {
   getMasterlistSummary,
   getMasterlistParts,
@@ -478,7 +479,7 @@ export default function Dashboard() {
     }
   };
 
-  const handleExportPDF = (mode = 'current') => {
+  const handleExportPDF = async (mode = 'current') => {
     try {
       setIsExportingPDF(true);
       const tabTitle =
@@ -500,6 +501,10 @@ export default function Dashboard() {
         ? getMasterlistSites({ search: '', limit: 'ALL', region: 'ALL', categories: null }, activeMasterlist, activePeriod)
         : masterSitesReport;
 
+      const chartImages = await captureChartsFromContainer(
+        typeof document !== 'undefined' ? (document.querySelector('.dashboard-page') || document.body) : null
+      );
+
       exportDashboardReportToPDF({
         activeTab: reportTab,
         masterPartsReport: partsReportToExport,
@@ -511,7 +516,8 @@ export default function Dashboard() {
         reportSearch: mode === 'all' ? '' : reportSearch,
         periodLabel: currentPeriodLabel,
         exportMode: mode,
-        supervisorSettings
+        supervisorSettings,
+        chartImages
       });
 
       showToast?.(

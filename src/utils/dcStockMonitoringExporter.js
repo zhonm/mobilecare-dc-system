@@ -3,6 +3,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { sanitizeForSpreadsheet } from './security.js';
 import { MOBILECARE_LOGO_BASE64, MOBILECARE_NO_BG_LOGO_BASE64 } from '../assets/logoBase64.js';
+import { captureChartsFromContainer, appendChartsSectionToPdf } from './pdfChartCapture.js';
 
 const getPdfDoc = (options = {}) => {
   const Constructor = typeof jsPDF === 'function' ? jsPDF : (jsPDF.jsPDF || jsPDF.default);
@@ -227,11 +228,14 @@ export async function exportDcMonitoringToExcel(analytics, remarksMap = {}, file
  * Generates an executive PDF Summary specifically for SDR & RepTAT Breakdown Analytics
  * (2025 Baseline vs 2026 DC Stock, TAT buckets, Warranty Mix, Multi-Site Shift).
  */
-export function buildSdrRepTatPdfDocument(analytics) {
+export function buildSdrRepTatPdfDocument(analytics, options = {}) {
   const doc = getPdfDoc({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
   const kpis = analytics?.kpis || {};
   const rep = analytics?.sdrAndRepTat || {};
+  const all2026 = rep.allOrders2026 || {};
+  const dcStock = rep.dcStock || {};
+  const baseline2025 = rep.baseline2025 || {};
 
   // Header Banner
   doc.setFillColor(15, 23, 42);
@@ -249,14 +253,67 @@ export function buildSdrRepTatPdfDocument(analytics) {
   doc.setFont('helvetica', 'normal');
   doc.text(`Generated: ${new Date().toLocaleString()} | DC SDR Rate: ${(kpis.dcSdrRatePct || 0).toFixed(2)}% vs 2025 Non-DC: ${(kpis.baseline2025SdrRatePct || 0).toFixed(2)}%`, 40, 17.5);
 
+  // Executive KPI Summary Cards
+  const sdrLiftPp = (kpis.dcSdrRatePct || 0) - (kpis.baseline2025SdrRatePct || 0);
+  const kpiCards = [
+    {
+      label: '2026 DC STOCK SDR RATE',
+      value: `${(kpis.dcSdrRatePct || 0).toFixed(2)}%`,
+      sub: `${(dcStock.sdrCount || 0).toLocaleString()} / ${(dcStock.totalMatched || 0).toLocaleString()} RepTAT matched`,
+      accent: [22, 163, 74]
+    },
+    {
+      label: '2025 NON-DC BASELINE',
+      value: `${(kpis.baseline2025SdrRatePct || 0).toFixed(2)}%`,
+      sub: `${(baseline2025.sdrCount || 0).toLocaleString()} / ${(baseline2025.totalCompleted || 0).toLocaleString()} completed`,
+      accent: [100, 116, 139]
+    },
+    {
+      label: 'DC VS NON-DC SDR LIFT',
+      value: `${sdrLiftPp >= 0 ? '+' : ''}${sdrLiftPp.toFixed(2)} pp`,
+      sub: 'Same-Day Repair rate improvement',
+      accent: [37, 99, 235]
+    },
+    {
+      label: 'ALL-ORDERS 2026 SDR',
+      value: `${(kpis.all2026SdrRatePct || 0).toFixed(2)}%`,
+      sub: `${(all2026.sdrCount || 0).toLocaleString()} / ${(all2026.totalCompleted || 0).toLocaleString()} • Avg ${(kpis.all2026AvgTatDays || 0).toFixed(1)}d TAT`,
+      accent: [2, 132, 199]
+    }
+  ];
+
+  const cardGap = 4;
+  const kpiWidth = (pageWidth - 28 - cardGap * 3) / 4;
+  kpiCards.forEach((c, idx) => {
+    const cx = 14 + idx * (kpiWidth + cardGap);
+    const cy = 28;
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(cx, cy, kpiWidth, 18, 1.5, 1.5, 'FD');
+    doc.setFillColor(...c.accent);
+    doc.rect(cx, cy, 1.4, 18, 'F');
+    doc.setTextColor(100, 116, 139);
+    doc.setFontSize(6.8);
+    doc.setFont('helvetica', 'bold');
+    doc.text(c.label, cx + 3.5, cy + 4.8);
+    doc.setTextColor(...c.accent);
+    doc.setFontSize(12);
+    doc.text(c.value, cx + 3.5, cy + 11.2);
+    doc.setTextColor(100, 116, 139);
+    doc.setFontSize(6.8);
+    doc.setFont('helvetica', 'normal');
+    doc.text(c.sub, cx + 3.5, cy + 15.6);
+  });
+
   // Section 1: TAT Distribution Comparison
   doc.setTextColor(15, 23, 42);
   doc.setFontSize(11);
   doc.setFont('helvetica', 'bold');
-  doc.text('1. Turnaround Time (TAT) Distribution: 2025 Non-DC Stock vs 2026 DC Stock', 14, 32);
+  doc.text('1. Turnaround Time (TAT) Distribution: 2025 Non-DC Stock vs 2026 DC Stock', 14, 53);
 
   autoTable(doc, {
-    startY: 35,
+    startY: 56,
     head: [['TAT Category', '2025 Non-DC Count', '2025 Share %', '2026 DC Stock Count', '2026 DC Share %', 'Shift (pp)']],
     body: (rep.repTatComparison?.tatComparison || []).map(r => [
       r.category,
@@ -273,7 +330,7 @@ export function buildSdrRepTatPdfDocument(analytics) {
   });
 
   // Section 2: Multi-Site SDR Growth Top 15
-  const afterY = (doc.lastAutoTable?.finalY || 95) + 8;
+  const afterY = (doc.lastAutoTable?.finalY || 115) + 8;
   doc.setFontSize(11);
   doc.setFont('helvetica', 'bold');
   doc.text('2. Multi-Site SDR Volume Shift (2025 Non-DC Baseline vs 2026 DC Stock)', 14, afterY);
@@ -293,11 +350,22 @@ export function buildSdrRepTatPdfDocument(analytics) {
     margin: { left: 14, right: 14 }
   });
 
+  // Section 3: Visual Analytics & Charts (captured from rendered Recharts components)
+  if (Array.isArray(options?.chartImages) && options.chartImages.length > 0) {
+    appendChartsSectionToPdf(doc, options.chartImages, {
+      sectionTitle: '3. SDR & RepTAT Visual Analytics & Charts',
+      sectionSubtitle: `DC SDR Rate: ${(kpis.dcSdrRatePct || 0).toFixed(2)}% vs 2025 Non-DC Baseline: ${(kpis.baseline2025SdrRatePct || 0).toFixed(2)}%`,
+      startOnNewPage: true
+    });
+  }
+
   return doc;
 }
 
-export function exportSdrRepTatToPdf(analytics, fileName = 'MDC_SDR_RepTAT_Breakdown_Report') {
-  const doc = buildSdrRepTatPdfDocument(analytics);
+export async function exportSdrRepTatToPdf(analytics, fileName = 'MDC_SDR_RepTAT_Breakdown_Report', options = {}) {
+  const targetEl = options?.containerEl || (typeof document !== 'undefined' ? document.querySelector('.dc-monitoring-sdr-panel') : null);
+  const chartImages = await captureChartsFromContainer(targetEl);
+  const doc = buildSdrRepTatPdfDocument(analytics, { ...options, chartImages });
   const dateTag = new Date().toISOString().slice(0, 10);
   doc.save(`${fileName}_${dateTag}.pdf`);
 }

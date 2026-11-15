@@ -714,7 +714,13 @@ export function useAuth({
           body: JSON.stringify({ token: captchaToken })
         });
         const verifyData = await verifyRes.json().catch(() => ({}));
-        if (!verifyRes.ok || !verifyData?.success) {
+        const isLocalDevHost = Boolean(import.meta.env?.DEV) &&
+          typeof window !== 'undefined' &&
+          ['localhost', '127.0.0.1'].includes(window.location.hostname);
+
+        if (verifyRes.status === 404 && isLocalDevHost) {
+          console.debug('[Auth] Local Vite dev server has no /api/verify-turnstile route; proceeding with client Turnstile token.');
+        } else if (!verifyRes.ok || !verifyData?.success) {
           return {
             success: false,
             error: 'Security verification failed or expired. Please complete the check and try again.'

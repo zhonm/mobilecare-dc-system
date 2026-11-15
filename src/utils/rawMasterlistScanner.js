@@ -1,8 +1,10 @@
 import rawDataAugust from '../data/rawMasterlistData_august.json' with { type: 'json' };
-import rawDataSeptember from '../data/rawMasterlistData_september.json' with { type: 'json' };
 import rawDataOctober from '../data/rawMasterlistData_october.json' with { type: 'json' };
 import rawData from '../data/rawMasterlistData.json' with { type: 'json' };
 import { isPartMatchingCategoryFilter } from './categoryFilter.js';
+
+// rawMasterlistData.json is the canonical September 2026 baseline dataset
+const rawDataSeptember = rawData;
 
 const USD_TO_PHP_RATE = 57;
 
@@ -42,7 +44,7 @@ export function getCategoryBadge(categoryName) {
 export const KNOWN_PART_PRICES = {};
 export const KNOWN_PART_CATEGORIES = {};
 
-[rawDataOctober, rawDataSeptember, rawDataAugust, rawData].forEach(ds => {
+[rawDataOctober, rawDataSeptember, rawDataAugust].forEach(ds => {
   if (ds?.partsSummary) {
     ds.partsSummary.forEach(p => {
       if (p.part_number) {

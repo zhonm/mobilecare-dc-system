@@ -9,6 +9,7 @@ import {
   exportForecastingReportToPDF,
   printForecastingReportDirect
 } from '../utils/pdfGenerator';
+import { captureChartsFromContainer } from '../utils/pdfChartCapture';
 import {
   calculateForecastByModel,
   calculateItemForecast,
@@ -803,18 +804,22 @@ export default function ForecastingReports() {
     );
   };
 
-  const handleExportPDF = (scope = 'all') => {
+  const handleExportPDF = async (scope = 'all') => {
     try {
       const itemsToExport = (scope === 'filtered' && isFiltered) ? filteredItems : activeDatasetItems;
       if (itemsToExport.length === 0) {
         showToast('No forecasting data to export', 'warning');
         return;
       }
+      const chartImages = await captureChartsFromContainer(
+        typeof document !== 'undefined' ? document.querySelector('.main-content') || document.body : null
+      );
       exportForecastingReportToPDF(itemsToExport, {
         periodLabel: currentPeriodLabel,
         pastMonthLabel: `August ${activePeriod?.year || 2026}`,
         sites: serviceBranches,
-        analytics
+        analytics,
+        chartImages
       });
       showToast(
         scope === 'filtered'

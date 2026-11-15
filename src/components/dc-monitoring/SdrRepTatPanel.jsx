@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import {
   ResponsiveContainer,
   BarChart,
@@ -57,6 +57,7 @@ const ChartTooltip = ({ active, payload, label, pctSuffix = false }) => {
 };
 
 export default function SdrRepTatPanel({ analytics, onExportSdrPdf }) {
+  const panelRef = useRef(null);
   const [viewCohort, setViewCohort] = useState('comparative'); // 'comparative' | 'all_2026' | 'orders_drilldown'
   const [tatMetricMode, setTatMetricMode] = useState('pct'); // 'pct' | 'count'
   const [siteFilter, setSiteFilter] = useState('ALL');
@@ -150,7 +151,7 @@ export default function SdrRepTatPanel({ analytics, onExportSdrPdf }) {
   const delayReductionPp = (delay16Plus2025 - delay16Plus2026) * 100;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    <div ref={panelRef} className="dc-monitoring-sdr-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* KPI Hero Ribbon */}
       <div style={{
         display: 'grid',
@@ -237,7 +238,7 @@ export default function SdrRepTatPanel({ analytics, onExportSdrPdf }) {
         </div>
 
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          <button type="button" className="btn btn-secondary" onClick={onExportSdrPdf}>
+          <button type="button" className="btn btn-secondary" onClick={() => onExportSdrPdf?.(panelRef.current)}>
             <Download size={15} /> Export RepTAT Executive PDF
           </button>
         </div>

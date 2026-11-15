@@ -497,9 +497,14 @@ export function useConsumablesAndTools({
       }
     }
 
+    let lastVisibilitySyncAt = Date.now();
     const handleVisibilityChange = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        syncCtFromCloud({ force: false });
+        const now = Date.now();
+        if (now - lastVisibilitySyncAt >= 60000) {
+          lastVisibilitySyncAt = now;
+          syncCtFromCloud({ force: false });
+        }
       }
     };
     if (typeof document !== 'undefined') {

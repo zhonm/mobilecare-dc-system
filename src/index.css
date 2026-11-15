@@ -530,3 +530,16 @@ h1, h2, h3, h4, h5, h6 {
   }
 }
 
+/* Performance & Low-Spec Device Rendering Optimizations */
+.table-container {
+  contain: layout style;
+}
+
+@media (max-width: 768px), (prefers-reduced-motion: reduce) {
+  .mobile-nav-backdrop,
+  .modal-overlay {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+

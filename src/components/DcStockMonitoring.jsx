@@ -579,7 +579,7 @@ export default function DcStockMonitoring() {
           {activeSubTab === 'sdr-reptat' && (
             <SdrRepTatPanel
               analytics={analytics}
-              onExportSdrPdf={() => exportSdrRepTatToPdf(analytics)}
+              onExportSdrPdf={(containerEl) => exportSdrRepTatToPdf(analytics, 'MDC_SDR_RepTAT_Breakdown_Report', { containerEl })}
             />
           )}
           {activeSubTab === 'site-stocks' && (

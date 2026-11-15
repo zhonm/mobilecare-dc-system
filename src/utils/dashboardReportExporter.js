@@ -3,6 +3,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { sanitizeForSpreadsheet } from './security.js';
 import { getPartCategory, HARDWARE_CATEGORIES } from './categoryFilter.js';
+import { appendChartsSectionToPdf } from './pdfChartCapture.js';
 
 const USD_TO_PHP_RATE = 57;
 
@@ -617,7 +618,8 @@ export function exportDashboardReportToPDF({
   reportSearch = '',
   periodLabel = 'September 2026',
   exportMode = 'current', // 'current' | 'all'
-  supervisorSettings = {}
+  supervisorSettings = {},
+  chartImages = []
 } = {}) {
   const cleanPeriodLabel = typeof periodLabel === 'string'
     ? periodLabel
@@ -883,6 +885,15 @@ export function exportDashboardReportToPDF({
     });
 
     filename = `MDC_Branch_Report_${selectedSiteName.replace(/[^a-zA-Z0-9]/g, '_')}_${cleanPeriodLabel.replace(/\s+/g, '_')}.pdf`;
+  }
+
+  // Append captured dashboard charts if available
+  if (Array.isArray(chartImages) && chartImages.length > 0) {
+    appendChartsSectionToPdf(doc, chartImages, {
+      sectionTitle: 'Visual Analytics & Charts',
+      sectionSubtitle: `Distribution Intelligence Charts — ${cleanPeriodLabel}`,
+      startOnNewPage: true
+    });
   }
 
   // Attach footers to all pages
