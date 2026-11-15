@@ -703,7 +703,7 @@ export default function FixablyInventoryDashboard({
 
     // 3. Supabase Realtime Channel: Instantly receives snapshot when another user uploads
     if (supabase) {
-      const channelId = `fixably_sync_${Math.random().toString(36).substring(7)}`;
+      const channelId = 'mdc_fixably_snapshot_room';
       realtimeChannel = supabase
         .channel(channelId)
         .on(

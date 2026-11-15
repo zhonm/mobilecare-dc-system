@@ -157,6 +157,11 @@ export function useCloudSync({
   const trailingRefreshTimerRef = useRef(null);
   const autoRefreshDataRef = useRef(null);
   const inFlightHydrationRef = useRef(null);
+  const inFlightSelectiveRef = useRef(new Map());
+  const activeSyncCountRef = useRef(0);
+  const savedRecordsHeaderCacheRef = useRef(new Map());
+  const shipmentRecordsCacheRef = useRef({ maxUpdatedAt: null, rowsById: new Map() });
+  const lastSessionRefreshAttemptRef = useRef(0);
 
   const [activePackingStations, setActivePackingStations] = useState({});
   const activePackingStationsRef = useRef({});
@@ -447,13 +452,35 @@ export function useCloudSync({
   const hydrateFromSupabase = useCallback(async (selectiveTables = null, isForce = false) => {
     if (!supabase) return false;
 
+    const selectiveKey = Array.isArray(selectiveTables) && selectiveTables.length > 0
+      ? [...selectiveTables].sort().join(',')
+      : null;
+
     // Deduplicate concurrent full-hydration calls (e.g. FirstLoginLoadingScreen + login transition autoRefresh)
-    if (!selectiveTables) {
+    if (!selectiveKey) {
       const existing = inFlightHydrationRef.current;
       if (existing && (!isForce || existing.isForce)) {
         return existing.promise;
       }
+    } else {
+      // If a full hydration is already in flight (and not forced), reuse it instead of firing duplicate queries
+      const existingFull = inFlightHydrationRef.current;
+      if (existingFull && !isForce) {
+        return existingFull.promise;
+      }
+      const existingSelective = inFlightSelectiveRef.current.get(selectiveKey);
+      if (existingSelective && (!isForce || existingSelective.isForce)) {
+        return existingSelective.promise;
+      }
     }
+
+    const withTimeout = (promise, ms, label) => {
+      let timerId;
+      const timeoutPromise = new Promise((_, reject) => {
+        timerId = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      });
+      return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timerId));
+    };
 
     const executeHydration = async () => {
     const liveState = liveStateRef.current || {};
@@ -462,10 +489,15 @@ export function useCloudSync({
     // Guard: Only hydrate cloud operational tables if an active authenticated session exists
     let session = null;
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
+      const { data: sessionData } = await withTimeout(supabase.auth.getSession(), 4000, 'auth.getSession');
       session = sessionData?.session;
-      if (!session && curUser?.id) {
-        const { data: refreshed } = await supabase.auth.refreshSession().catch(() => ({ data: {} }));
+      if (!session && curUser?.id && (Date.now() - lastSessionRefreshAttemptRef.current > 60000)) {
+        lastSessionRefreshAttemptRef.current = Date.now();
+        const { data: refreshed } = await withTimeout(
+          supabase.auth.refreshSession().catch(() => ({ data: {} })),
+          4000,
+          'auth.refreshSession'
+        );
         session = refreshed?.session;
       }
     } catch (authErr) {
@@ -544,6 +576,9 @@ export function useCloudSync({
 
         const hasValidLocalCache = Array.isArray(cachedUnits) && cachedUnits.length > 0;
 
+        const pageSize = 1000;
+        const INVENTORY_COLUMNS = 'id, part_id, serial_number, current_site_id, po_id, status, box_number, received_at, received_by, allocated_at, allocated_by, shipped_at, shipped_by, received_confirmed_at, received_confirmed_by, notes, created_at, updated_at, is_deleted';
+
         if (!isForce && hasValidLocalCache && localInvUpdatedAt) {
           try {
             const { data: latestRow, count: totalDbCount, error: probeErr } = await supabase
@@ -562,15 +597,59 @@ export function useCloudSync({
                 console.debug(`[CloudSync Egress Defense] inventory_units unchanged (${cachedUnits.length} units, ${remoteUpdatedAt}). Skipped bulk download.`);
                 return { data: cachedUnits, error: null, fromCache: true };
               }
+
+              // Incremental Delta Sync: only fetch rows updated after localInvUpdatedAt when no hard-deletes occurred
+              if (totalDbCount === null || totalDbCount >= cachedUnits.length) {
+                const deltaRows = [];
+                let deltaError = null;
+                for (let offset = 0; ; offset += pageSize) {
+                  const deltaRes = await supabase
+                    .from('inventory_units')
+                    .select(INVENTORY_COLUMNS)
+                    .gt('updated_at', localInvUpdatedAt)
+                    .order('updated_at', { ascending: true })
+                    .range(offset, offset + pageSize - 1);
+                  if (deltaRes.error) {
+                    deltaError = deltaRes.error;
+                    break;
+                  }
+                  const page = deltaRes.data || [];
+                  deltaRows.push(...page);
+                  if (page.length < pageSize) break;
+                }
+
+                if (!deltaError && deltaRows.length > 0) {
+                  const mergedMap = new Map();
+                  for (const unit of cachedUnits) {
+                    const key = unit?.id || unit?.serial_number;
+                    if (key) mergedMap.set(key, unit);
+                  }
+                  let maxDeltaUpdatedAt = localInvUpdatedAt;
+                  for (const unit of deltaRows) {
+                    const key = unit?.id || unit?.serial_number;
+                    if (key) mergedMap.set(key, unit);
+                    if (unit?.updated_at && unit.updated_at > maxDeltaUpdatedAt) {
+                      maxDeltaUpdatedAt = unit.updated_at;
+                    }
+                  }
+                  const mergedUnits = Array.from(mergedMap.values());
+                  try {
+                    localStorage.setItem('mdc_live_inventory_updated_at', maxDeltaUpdatedAt);
+                    localStorage.setItem('mdc_live_inventory_count', String(mergedUnits.length));
+                  } catch (e) {}
+                  dbStorage.setItem('mdc_live_inventory_updated_at', maxDeltaUpdatedAt);
+                  dbStorage.setItem('mdc_live_inventory_count', mergedUnits.length);
+                  console.debug(`[CloudSync Delta] inventory_units merged ${deltaRows.length} changed row(s) into ${mergedUnits.length} cached units.`);
+                  return { data: mergedUnits, error: null, fromDelta: true };
+                }
+              }
             }
           } catch (probeEx) {
             console.debug('[CloudSync Egress Defense] Probe check note:', probeEx?.message);
           }
         }
 
-        const pageSize = 1000;
         const rows = [];
-        const INVENTORY_COLUMNS = 'id, part_id, serial_number, current_site_id, po_id, status, box_number, received_at, received_by, allocated_at, allocated_by, shipped_at, shipped_by, received_confirmed_at, received_confirmed_by, notes, created_at, updated_at, is_deleted';
 
         for (let offset = 0; ; offset += pageSize) {
           let response = await supabase
@@ -684,20 +763,106 @@ export function useCloudSync({
           ];
           const LIGHTWEIGHT_SYSTEM_DOC_IDS = SYSTEM_DOC_IDS.filter(id => !HEAVY_DOC_IDS.includes(id));
 
+          const fetchChangedLightweightDocs = async () => {
+            if (isForce || savedRecordsHeaderCacheRef.current.size === 0) {
+              const res = await supabase.from('saved_records').select('*').in('id', LIGHTWEIGHT_SYSTEM_DOC_IDS);
+              if (!res.error && Array.isArray(res.data)) {
+                res.data.forEach(row => {
+                  if (row?.id) savedRecordsHeaderCacheRef.current.set(row.id, { updated_at: row.updated_at, row });
+                });
+              }
+              return res;
+            }
+            const { data: headers, error: hdrErr } = await supabase
+              .from('saved_records')
+              .select('id, updated_at')
+              .in('id', LIGHTWEIGHT_SYSTEM_DOC_IDS);
+            if (hdrErr || !Array.isArray(headers)) {
+              return supabase.from('saved_records').select('*').in('id', LIGHTWEIGHT_SYSTEM_DOC_IDS);
+            }
+            const changedIds = [];
+            const headerIds = new Set();
+            for (const h of headers) {
+              headerIds.add(h.id);
+              const cached = savedRecordsHeaderCacheRef.current.get(h.id);
+              if (!cached || cached.updated_at !== h.updated_at) {
+                changedIds.push(h.id);
+              }
+            }
+            if (changedIds.length > 0) {
+              const { data: changedRows, error: chgErr } = await supabase
+                .from('saved_records')
+                .select('*')
+                .in('id', changedIds);
+              if (chgErr) {
+                return supabase.from('saved_records').select('*').in('id', LIGHTWEIGHT_SYSTEM_DOC_IDS);
+              }
+              (changedRows || []).forEach(row => {
+                if (row?.id) savedRecordsHeaderCacheRef.current.set(row.id, { updated_at: row.updated_at, row });
+              });
+            }
+            const merged = [];
+            for (const id of LIGHTWEIGHT_SYSTEM_DOC_IDS) {
+              if (headerIds.has(id)) {
+                const entry = savedRecordsHeaderCacheRef.current.get(id);
+                if (entry?.row) merged.push(entry.row);
+              } else {
+                savedRecordsHeaderCacheRef.current.delete(id);
+              }
+            }
+            return { data: merged, error: null };
+          };
+
+          const fetchIncrementalShipments = async () => {
+            const shipCache = shipmentRecordsCacheRef.current;
+            if (!isForce && shipCache.maxUpdatedAt && shipCache.rowsById.size > 0) {
+              const deltaRes = await supabase
+                .from('saved_records')
+                .select('*')
+                .eq('record_type', 'shipment')
+                .gt('updated_at', shipCache.maxUpdatedAt)
+                .order('updated_at', { ascending: true })
+                .limit(150);
+              if (!deltaRes.error && Array.isArray(deltaRes.data)) {
+                for (const row of deltaRes.data) {
+                  if (row?.id) shipCache.rowsById.set(row.id, row);
+                  if (row?.updated_at && row.updated_at > shipCache.maxUpdatedAt) {
+                    shipCache.maxUpdatedAt = row.updated_at;
+                  }
+                }
+                return { data: Array.from(shipCache.rowsById.values()), error: null };
+              }
+            }
+            const fullRes = await supabase
+              .from('saved_records')
+              .select('*')
+              .eq('record_type', 'shipment')
+              .gte('created_at', archiveCutoffIsoTimestamp)
+              .order('created_at', { ascending: false })
+              .limit(150);
+            if (!fullRes.error && Array.isArray(fullRes.data)) {
+              shipCache.rowsById.clear();
+              let maxTs = null;
+              for (const row of fullRes.data) {
+                if (row?.id) shipCache.rowsById.set(row.id, row);
+                if (row?.updated_at && (!maxTs || row.updated_at > maxTs)) {
+                  maxTs = row.updated_at;
+                }
+              }
+              shipCache.maxUpdatedAt = maxTs;
+            }
+            return fullRes;
+          };
+
           const [resSystem, resHeavyHeaders, resStockHeader, resShipments] = await Promise.all([
-            supabase.from('saved_records').select('*').in('id', LIGHTWEIGHT_SYSTEM_DOC_IDS),
+            fetchChangedLightweightDocs(),
             // Bandwidth Egress Defense: Check updated_at timestamps first for multi-megabyte JSON trees
             supabase.from('saved_records')
               .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, updated_at')
               .in('id', HEAVY_DOC_IDS),
             Promise.resolve({ data: null }),
-            // Self-healing: load recent active operational shipment documents (<60 days) with full snapshot_data
-            supabase.from('saved_records')
-              .select('*')
-              .eq('record_type', 'shipment')
-              .gte('created_at', archiveCutoffIsoTimestamp)
-              .order('created_at', { ascending: false })
-              .limit(150)
+            // Self-healing: load recent active operational shipment documents (<60 days) incrementally
+            fetchIncrementalShipments()
           ]);
           const systemRows = resSystem.data || [];
           const heavyHeaders = resHeavyHeaders?.data || [];
@@ -3569,8 +3734,14 @@ export function useCloudSync({
     }
     };
 
-    if (!selectiveTables) {
-      const promise = executeHydration().finally(() => {
+    const runWithWatchdog = () =>
+      withTimeout(executeHydration(), 25000, 'hydrateFromSupabase').catch((err) => {
+        console.warn('[CloudSync] Hydration aborted/timed out:', err?.message);
+        return false;
+      });
+
+    if (!selectiveKey) {
+      const promise = runWithWatchdog().finally(() => {
         if (inFlightHydrationRef.current?.promise === promise) {
           inFlightHydrationRef.current = null;
         }
@@ -3579,7 +3750,13 @@ export function useCloudSync({
       return promise;
     }
 
-    return executeHydration();
+    const promise = runWithWatchdog().finally(() => {
+      if (inFlightSelectiveRef.current.get(selectiveKey)?.promise === promise) {
+        inFlightSelectiveRef.current.delete(selectiveKey);
+      }
+    });
+    inFlightSelectiveRef.current.set(selectiveKey, { promise, isForce });
+    return promise;
   }, [setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setIsInventoryLoaded, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setShipments, setSites, setUploadAuditLogs, setUsersList, setAutoLogoutConfig, setSessionAuditLogs, setSystemAuditLogs, setSupervisorSettings, setFixablySnapshot, broadcastCloudEvent, _dcIntakeRecords, _fixablySnapshot, _forecastingModel, _shipments, _usersList, activePackingStations, activePeriod, allocations, categories, currentUser, forecastItems, inventoryUnits, masterlistData, parts, sites]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
@@ -3630,6 +3807,7 @@ export function useCloudSync({
     }
 
     lastRefreshTimeRef.current = now;
+    activeSyncCountRef.current += 1;
     setIsAutoRefreshing(true);
     console.debug('[AutoRefresh] Sync trigger:', reason, tables ? `(Tables: ${tables.join(', ')})` : '(Full)');
 
@@ -3650,9 +3828,10 @@ export function useCloudSync({
       }
       return { success: false, error: err.message };
     } finally {
-      setTimeout(() => {
+      activeSyncCountRef.current = Math.max(0, activeSyncCountRef.current - 1);
+      if (activeSyncCountRef.current === 0) {
         setIsAutoRefreshing(false);
-      }, 300);
+      }
     }
   }, [hydrateFromSupabase, showToast, isDataSyncPaused, resetInactivityTimer]);
 
@@ -4336,7 +4515,7 @@ export function useCloudSync({
                 dbStorage.setItem('mdc_live_inventory_updated_at', nowIso);
                 dbStorage.setItem('mdc_live_inventory_count', bPayload.units.length);
                 autoRefreshData({
-                  force: true,
+                  force: false,
                   silent: true,
                   isManual: false,
                   reason: `WebSocket Broadcast [${bType} - Metas]`,
@@ -4365,15 +4544,15 @@ export function useCloudSync({
                 }).catch(err => console.warn('Realtime refresh note:', err));
               }
             } else if (['SHIPMENT_RECEIVED', 'BRANCH_STOCK_UPDATED'].includes(bType)) {
-              autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]`, tables: ['shipments', 'saved_records', 'inventory_units'] });
+              autoRefreshData({ force: false, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]`, tables: ['shipments', 'saved_records', 'inventory_units'] });
             } else if (['SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
               if (['STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
                 triggerDebouncedRealtimeSync(`WebSocket Broadcast [${bType}]`, 'inventory_units');
               } else {
-                autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]`, tables: ['shipments', 'saved_records'] });
+                autoRefreshData({ force: false, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]`, tables: ['shipments', 'saved_records'] });
               }
             } else if (bType === 'STOCK_TRANSFERS_UPDATED') {
-              autoRefreshData({ force: true, silent: true, isManual: false, reason: 'WebSocket Broadcast [STOCK_TRANSFERS_UPDATED]', tables: ['saved_records'] });
+              autoRefreshData({ force: false, silent: true, isManual: false, reason: 'WebSocket Broadcast [STOCK_TRANSFERS_UPDATED]', tables: ['saved_records'] });
             } else if (bType === 'STOCK_TRANSFERS_CLEARED') {
               if (setStockTransferReports) setStockTransferReports([]);
               if (setStockTransferMetadata) setStockTransferMetadata(null);
@@ -4662,7 +4841,7 @@ export function useCloudSync({
           if (status === 'SUBSCRIBED') {
             setRealtimeConnected(true);
             setCloudSyncStatus(prev => ({ ...prev, isOnline: true }));
-          } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
+          } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
             setRealtimeConnected(false);
           }
         });

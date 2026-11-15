@@ -564,6 +564,15 @@ export default function SiteTransfersFifoReport() {
       }
     })();
 
+    let fifoReloadTimer = null;
+    const scheduleFifoReload = () => {
+      if (fifoReloadTimer) clearTimeout(fifoReloadTimer);
+      fifoReloadTimer = setTimeout(() => {
+        fifoReloadTimer = null;
+        loadDataFromAllStocks({ force: false, silent: true });
+      }, 1500);
+    };
+
     let realtimeChannel = null;
     if (supabase) {
       realtimeChannel = supabase.channel('mdc_fifo_audit_realtime_room')
@@ -577,7 +586,7 @@ export default function SiteTransfersFifoReport() {
             p.type === 'KGB_USED_REPORT_SYNCED' ||
             p.type === 'STOCK_UPDATED'
           )) {
-            loadDataFromAllStocks({ force: false, silent: true });
+            scheduleFifoReload();
           }
         })
         .on('postgres_changes', {
@@ -586,7 +595,7 @@ export default function SiteTransfersFifoReport() {
           table: 'saved_records',
           filter: `id=eq.${FIFO_TRANSFERS_DOC_ID}`
         }, () => {
-          loadDataFromAllStocks({ force: false, silent: true });
+          scheduleFifoReload();
         })
         .on('postgres_changes', {
           event: '*',
@@ -594,7 +603,7 @@ export default function SiteTransfersFifoReport() {
           table: 'saved_records',
           filter: `id=eq.${FIFO_GSX_DOC_ID}`
         }, () => {
-          loadDataFromAllStocks({ force: false, silent: true });
+          scheduleFifoReload();
         })
         .subscribe();
     }
@@ -605,19 +614,19 @@ export default function SiteTransfersFifoReport() {
     try {
       bcFifo = new BroadcastChannel('mdc_fifo_audit_sync');
       bcFifo.onmessage = () => {
-        loadDataFromAllStocks({ force: false, silent: true });
+        scheduleFifoReload();
       };
     } catch (_) {}
     try {
       bcFixably = new BroadcastChannel('mdc_fixably_sync');
       bcFixably.onmessage = () => {
-        loadDataFromAllStocks({ force: false, silent: true });
+        scheduleFifoReload();
       };
     } catch (_) {}
     try {
       bcSyncBus = new BroadcastChannel('mdc_sync_bus');
       bcSyncBus.onmessage = () => {
-        loadDataFromAllStocks({ force: false, silent: true });
+        scheduleFifoReload();
       };
     } catch (_) {}
 
@@ -630,12 +639,13 @@ export default function SiteTransfersFifoReport() {
         e.key === 'mdc_site_transfers_records' ||
         e.key === 'mdc_gsx_used_records'
       ) {
-        loadDataFromAllStocks({ force: false, silent: true });
+        scheduleFifoReload();
       }
     };
     window.addEventListener('storage', handleStorageChange);
 
     return () => {
+      if (fifoReloadTimer) clearTimeout(fifoReloadTimer);
       if (realtimeChannel && supabase) {
         supabase.removeChannel(realtimeChannel);
       }
