@@ -695,6 +695,39 @@ export function useAuth({
       };
     }
 
+    // Server-side Cloudflare Turnstile siteverify gate
+    const turnstileConfigured = Boolean(import.meta.env?.VITE_CLOUDFLARE_TURNSTILE_SITE_KEY);
+    const isDevBypass = Boolean(import.meta.env?.DEV) && captchaToken === 'dev-bypass-token';
+
+    if (turnstileConfigured && !isDevBypass) {
+      if (typeof captchaToken !== 'string' || !captchaToken || captchaToken === 'dev-bypass-token') {
+        return {
+          success: false,
+          error: 'Please complete the security verification check before signing in.'
+        };
+      }
+
+      try {
+        const verifyRes = await fetch('/api/verify-turnstile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: captchaToken })
+        });
+        const verifyData = await verifyRes.json().catch(() => ({}));
+        if (!verifyRes.ok || !verifyData?.success) {
+          return {
+            success: false,
+            error: 'Security verification failed or expired. Please complete the check and try again.'
+          };
+        }
+      } catch {
+        return {
+          success: false,
+          error: 'Unable to verify security check. Please try again.'
+        };
+      }
+    }
+
     let deletedSet = new Set();
     try {
       const local = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
@@ -898,8 +931,7 @@ export function useAuth({
       try {
         const authPayload = {
           email: user.email,
-          password: cleanPassword,
-          ...(captchaToken && captchaToken !== 'dev-bypass-token' ? { options: { captchaToken } } : {})
+          password: cleanPassword
         };
         const { data: authData, error: authError } = await supabase.auth.signInWithPassword(authPayload);
         if (!authError && authData?.session) {

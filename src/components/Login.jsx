@@ -32,7 +32,8 @@ export default function Login() {
   // Cloudflare Turnstile Configuration & Stable Handlers
   const turnstileOptions = useMemo(() => ({
     theme: 'dark',
-    size: 'normal'
+    size: 'normal',
+    action: 'login'
   }), []);
 
   const handleTurnstileSuccess = useCallback((token) => {
@@ -148,6 +149,9 @@ export default function Login() {
     try {
       const res = await signInWithPassword(emailInput, passwordInput, turnstileToken);
       if (!res.success) {
+        if (TURNSTILE_SITE_KEY && turnstileToken !== 'dev-bypass-token') {
+          handleResetTurnstile();
+        }
         if (res.error?.includes('lockout active') || res.error?.includes('Too many failed')) {
           setErrorMessage(res.error);
         } else {
