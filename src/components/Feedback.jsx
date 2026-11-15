@@ -391,16 +391,16 @@ export default function Feedback() {
         </p>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
           <div style={{ background: '#f8fafc', padding: '10px 14px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px', color: '#334155' }}>
-            📍 <strong>Your Branch:</strong> {userSite.name} ({userSite.code})
+            <strong>Your Branch:</strong> {userSite.name} ({userSite.code})
           </div>
           <div style={{ background: '#f8fafc', padding: '10px 14px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px', color: '#334155' }}>
-            🏷️ <strong>Reference:</strong> Part Number, Serial #, or Request ID
+            <strong>Reference:</strong> Part Number, Serial #, or Request ID
           </div>
           <div style={{ background: '#f8fafc', padding: '10px 14px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px', color: '#334155' }}>
-            📸 <strong>Screenshots:</strong> Take a photo or screenshot of the screen/error
+            <strong>Screenshots:</strong> Take a photo or screenshot of the screen/error
           </div>
           <div style={{ background: '#f8fafc', padding: '10px 14px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px', color: '#334155' }}>
-            ⚡ <strong>Urgent Blockers:</strong> Message either contact directly via Viber
+            <strong>Urgent Blockers:</strong> Message either contact directly via Viber
           </div>
         </div>
       </div>

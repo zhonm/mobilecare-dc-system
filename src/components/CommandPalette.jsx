@@ -614,7 +614,9 @@ export default function CommandPalette({ isOpen, onClose }) {
                           </strong>
                         ) : sd.isHistoricalTransfer ? (
                           <strong style={{ color: '#fbbf24', fontSize: '11.5px' }}>
-                            Historical / Consumed ({sd.latestTransferType || 'Site-to-Site Transfer'})
+                            {sd.kgbOrderId
+                              ? `Consumed · Order #${sd.kgbOrderId}`
+                              : `Historical / Consumed (${sd.latestTransferType || 'Site-to-Site Transfer'})`}
                           </strong>
                         ) : (
                           <strong style={{ color: '#4ade80', fontSize: '11.5px' }}>

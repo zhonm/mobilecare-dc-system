@@ -4326,7 +4326,7 @@ export function useCloudSync({
                 await clearOperationalLocalStorage({ keepSession: true });
                 try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
                 lastRefreshTimeRef.current = 0;
-                showToast(`🔄 Global Update: Clearing cache and reloading to latest version...`, 'info');
+                showToast(`Global Update: Clearing cache and reloading to latest version...`, 'info');
                 setTimeout(() => {
                   window.location.reload();
                 }, 800);
@@ -4724,7 +4724,7 @@ export function useCloudSync({
               await clearOperationalLocalStorage({ keepSession: true });
               try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
               lastRefreshTimeRef.current = 0;
-              showToast(`🔄 Global Update: Clearing cache and reloading to latest version...`, 'info');
+              showToast(`Global Update: Clearing cache and reloading to latest version...`, 'info');
               setTimeout(() => {
                 window.location.reload();
               }, 800);
@@ -5911,7 +5911,7 @@ export function useCloudSync({
       await autoRefreshData({ force: true, silent: true, isManual: true, reason: 'Superadmin Initiated Global Sync' });
 
       setLastSyncedAt(new Date());
-      showToast('🚀 Global Cloud Sync Complete: Pushed latest data to PostgreSQL and triggered cache reload on all user devices!', 'success');
+      showToast('Global Cloud Sync Complete: Pushed latest data to PostgreSQL and triggered cache reload on all user devices.', 'success');
       return { success: true, timestamp: syncBeaconPayload.syncedAt };
     } catch (err) {
       console.error('Global cloud sync error:', err);

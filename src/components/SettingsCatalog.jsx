@@ -2023,7 +2023,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                     When the <strong>Packing List &amp; Site Transfer Declaration Form PDF</strong> is generated and printed, an underline is provided above the supervisor’s printed name for a manual wet-ink signature.
                   </p>
                   <div style={{ marginTop: '14px', padding: '12px 14px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px', fontSize: '12.5px', color: '#1e40af' }}>
-                    ℹ️ <strong>Manual Sign-Off:</strong> Ensure DC supervisor physically reviews, verifies, and wet-signs Page 2 of the printed document prior to handover to logistics / courier rider.
+                    <strong>Manual Sign-Off:</strong> Ensure DC supervisor physically reviews, verifies, and wet-signs Page 2 of the printed document prior to handover to logistics / courier rider.
                   </div>
                 </div>
               </div>

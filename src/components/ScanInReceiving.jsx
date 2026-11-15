@@ -2084,7 +2084,7 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
                   </label>
                   {isPmgUser && (
                     <span style={{ fontSize: '11.5px', color: '#38bdf8', background: 'rgba(2, 132, 199, 0.15)', border: '1px solid rgba(56, 189, 248, 0.3)', padding: '2px 8px', borderRadius: '4px', fontWeight: 600 }}>
-                      ⚡ PMG Fast Barcode Intake Active
+                      PMG Fast Barcode Intake Active
                     </span>
                   )}
                 </div>

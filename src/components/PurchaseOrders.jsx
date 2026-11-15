@@ -930,7 +930,7 @@ export default function PurchaseOrders() {
 
                   {parseError && (
                     <div style={{ marginTop: '12px', color: '#dc2626', fontSize: '12px', fontWeight: 500 }}>
-                      ⚠️ {parseError}
+                      {parseError}
                     </div>
                   )}
                 </div>

@@ -3041,7 +3041,6 @@ export default function Dashboard() {
                   gap: '8px'
                 }}
               >
-                <span style={{ fontSize: '14px' }}>🛡️</span>
                 <span>
                   <strong>Superadmin Exclusive:</strong> PMG users cannot view or download the Declaration Form in the system and are restricted to Packing List (PL Only).
                 </span>

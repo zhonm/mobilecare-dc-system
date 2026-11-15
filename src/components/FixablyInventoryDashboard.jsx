@@ -40,6 +40,7 @@ import SerialDossierModal from './SerialDossierModal.jsx';
 import MovementHistoryModal from './MovementHistoryModal.jsx';
 import {
   validateFixablyFile,
+  parseKgbUsedCsv,
   reconcileFixablyMultiFile,
   compactFixablySnapshot,
   hydrateFixablySnapshot,
@@ -108,6 +109,77 @@ export default function FixablyInventoryDashboard({
   }, [isSuperadmin, viewMode]);
 
   const [localSnapshot, setLocalSnapshot] = useState(propSnapshot || null);
+  const [fallbackKgbMap, setFallbackKgbMap] = useState(() => new Map());
+
+  useEffect(() => {
+    const activeSnap = propSnapshot || localSnapshot;
+    if (activeSnap?.kgbUsedBySerial && Object.keys(activeSnap.kgbUsedBySerial).length > 0) return;
+    let cancelled = false;
+    dbStorage.getItem('mdc_uploaded_slot_kgb_used').then(async (slot) => {
+      if (cancelled || !slot?.content) return;
+      const parsed = await parseKgbUsedCsv(slot.content);
+      if (!cancelled && parsed?.success && parsed.kgbMap instanceof Map && parsed.kgbMap.size > 0) {
+        setFallbackKgbMap(parsed.kgbMap);
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [propSnapshot, localSnapshot]);
+
+  const kgbOrderLookup = useMemo(() => {
+    const map = new Map();
+    if (fallbackKgbMap instanceof Map) {
+      fallbackKgbMap.forEach((val, sn) => {
+        if (sn && (val?.orderId || val?.gsxRepairNumber)) {
+          map.set(sn, val);
+        }
+      });
+    }
+    const activeSnap = propSnapshot || localSnapshot;
+    if (activeSnap?.kgbUsedBySerial && typeof activeSnap.kgbUsedBySerial === 'object') {
+      Object.entries(activeSnap.kgbUsedBySerial).forEach(([sn, val]) => {
+        if (sn && val && (val.orderId || val.gsxRepairNumber)) {
+          map.set(String(sn).trim().toUpperCase(), val);
+        }
+      });
+    }
+    if (Array.isArray(activeSnap?.transfers)) {
+      activeSnap.transfers.forEach(tr => {
+        const sn = String(tr.serialNumber || tr.serial_number || '').trim().toUpperCase();
+        if (sn && (tr.kgbOrderId || tr.kgbRepairNumber) && !map.has(sn)) {
+          map.set(sn, {
+            orderId: tr.kgbOrderId || '',
+            gsxRepairNumber: tr.kgbRepairNumber || '',
+            repairClosedDate: tr.kgbClosedDate || ''
+          });
+        }
+      });
+    }
+    if (Array.isArray(repairUsageRecords)) {
+      repairUsageRecords.forEach(r => {
+        const sn = String(r.serial_number || r.serialNumber || '').trim().toUpperCase();
+        const orderId = String(r.order_id || r.orderId || r.work_order_number || '').trim();
+        const gsxRepairNumber = String(r.gsx_repair_number || r.gsxRepairNumber || '').trim();
+        if (sn && (orderId || gsxRepairNumber) && !map.has(sn)) {
+          map.set(sn, {
+            orderId,
+            gsxRepairNumber,
+            repairClosedDate: r.used_at || r.date_used || ''
+          });
+        }
+      });
+    }
+    return map;
+  }, [fallbackKgbMap, propSnapshot, localSnapshot, repairUsageRecords]);
+
+  const formatConsumedOrderLabel = useCallback((serial, transfer = null) => {
+    const cleanSn = String(serial || '').trim().toUpperCase();
+    const info = (transfer?.kgbOrderId || transfer?.kgbRepairNumber)
+      ? { orderId: transfer.kgbOrderId || '', gsxRepairNumber: transfer.kgbRepairNumber || '', repairClosedDate: transfer.kgbClosedDate || '' }
+      : (cleanSn ? kgbOrderLookup.get(cleanSn) : null);
+    if (info?.orderId) return `Consumed · Order #${info.orderId}`;
+    if (info?.gsxRepairNumber) return `Consumed · ${info.gsxRepairNumber}`;
+    return 'Historical / Consumed';
+  }, [kgbOrderLookup]);
   const snapshotTimestampRef = useRef(propSnapshot?.timestamp || '');
   const snapshotHasTransfersRef = useRef(Boolean(propSnapshot?.transfers?.length > 0));
   const sitesRef = useRef(sites);
@@ -1605,7 +1677,7 @@ export default function FixablyInventoryDashboard({
           lastReceivedDate: latestTr.receivedDate || '—',
           agingDays: 0,
           agingBracket: 'IN_STOCK',
-          statusLabel: 'Historical / Consumed',
+          statusLabel: formatConsumedOrderLabel(sn, latestTr),
           badgeColor: '#6d28d9',
           badgeBg: '#f5f3ff',
           partValue: Number(latestTr.transferValue || 0),
@@ -1627,7 +1699,7 @@ export default function FixablyInventoryDashboard({
     }
 
     return activeMatches;
-  }, [snapshot, siteFilter, agingFilter, classificationFilter, investigationFilter, transferFilter, masterSearch]);
+  }, [snapshot, siteFilter, agingFilter, classificationFilter, investigationFilter, transferFilter, masterSearch, formatConsumedOrderLabel]);
 
   // Pagination for Master Table
   const paginatedMasterItems = useMemo(() => {
@@ -1923,7 +1995,7 @@ export default function FixablyInventoryDashboard({
               siteCode: tr.toSiteName || tr.toSiteCode || 'BRANCH',
               siteName: tr.toSiteName || `MOBILECARE - ${tr.toSiteCode || 'BRANCH'}`,
               agingDays: 0,
-              statusLabel: 'Historical / Consumed',
+              statusLabel: formatConsumedOrderLabel(sn, tr),
               badgeBg: '#f5f3ff',
               badgeColor: '#6d28d9',
               stockType: tr.isSiteToSite ? 'Site-to-Site Transfer' : 'Transfer Ledger',
@@ -1947,7 +2019,7 @@ export default function FixablyInventoryDashboard({
     });
 
     return matches;
-  }, [snapshot?.items, snapshot?.transfers, partSearchInput]);
+  }, [snapshot?.items, snapshot?.transfers, partSearchInput, formatConsumedOrderLabel]);
 
   // Autocomplete filtered list based on user search input
   const filteredPartCatalog = useMemo(() => {
@@ -1996,7 +2068,7 @@ export default function FixablyInventoryDashboard({
           siteCode: latestTr.toSiteName || latestTr.toSiteCode || 'BRANCH',
           siteName: latestTr.toSiteName || `MOBILECARE - ${latestTr.toSiteCode || 'BRANCH'}`,
           agingDays: 0,
-          statusLabel: 'Historical / Consumed',
+          statusLabel: formatConsumedOrderLabel(latestTr.serialNumber || latestTr.serial_number, latestTr),
           badgeBg: '#f5f3ff',
           badgeColor: '#6d28d9',
           stockType: latestTr.isSiteToSite ? 'Site-to-Site Transfer' : 'Transfer Ledger',
@@ -2007,7 +2079,7 @@ export default function FixablyInventoryDashboard({
     }
 
     return null;
-  }, [selectedSerialUnit, partSearchQuery, partSearchInput, snapshot?.items, snapshot?.transfers]);
+  }, [selectedSerialUnit, partSearchQuery, partSearchInput, snapshot?.items, snapshot?.transfers, formatConsumedOrderLabel]);
 
   // Available stock per site for the currently searched part number or located serial
   const partStockBySite = useMemo(() => {
@@ -4740,11 +4812,31 @@ export default function FixablyInventoryDashboard({
                                         </span>
                                       )}
                                     </div>
-                                  ) : (
-                                    <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>
-                                      Historical / Consumed
-                                    </span>
-                                  )}
+                                  ) : (() => {
+                                    const rowSn = String(tr.serialNumber || '').trim().toUpperCase();
+                                    const kgbInfo = (tr.kgbOrderId || tr.kgbRepairNumber)
+                                      ? { orderId: tr.kgbOrderId || '', gsxRepairNumber: tr.kgbRepairNumber || '', repairClosedDate: tr.kgbClosedDate || '' }
+                                      : (rowSn ? kgbOrderLookup.get(rowSn) : null);
+                                    if (kgbInfo?.orderId || kgbInfo?.gsxRepairNumber) {
+                                      return (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#0369a1', fontWeight: 700, fontSize: '11.5px', fontFamily: 'var(--font-mono)' }}>
+                                            {kgbInfo.orderId ? `Consumed · Order #${kgbInfo.orderId}` : `Consumed · ${kgbInfo.gsxRepairNumber}`}
+                                          </span>
+                                          {(kgbInfo.gsxRepairNumber && kgbInfo.orderId) && (
+                                            <span style={{ fontSize: '10.5px', color: '#64748b', fontWeight: 600 }}>
+                                              GSX: {kgbInfo.gsxRepairNumber}{kgbInfo.repairClosedDate ? ` (${kgbInfo.repairClosedDate})` : ''}
+                                            </span>
+                                          )}
+                                        </div>
+                                      );
+                                    }
+                                    return (
+                                      <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>
+                                        Historical / Consumed
+                                      </span>
+                                    );
+                                  })()}
                                 </td>
                                 <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-sans)', fontWeight: 800, color: '#0f172a', whiteSpace: 'nowrap' }}>
                                   ${Number(tr.transferValue || 0).toFixed(2)}

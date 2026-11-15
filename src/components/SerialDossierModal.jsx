@@ -212,13 +212,25 @@ export default function SerialDossierModal({
               <span>Usage / Stock Status</span>
             </div>
             <div style={{ fontSize: '14px', fontWeight: 800, color: serialDetails.isUsed ? '#6d28d9' : serialDetails.isHistoricalTransfer ? '#92400e' : '#166534' }}>
-              {serialDetails.isUsed ? 'Used in Customer Repair' : serialDetails.isHistoricalTransfer ? 'Historical / Consumed Transfer' : 'Available & Unused Stock'}
+              {serialDetails.isUsed
+                ? 'Used in Customer Repair'
+                : serialDetails.isHistoricalTransfer
+                  ? (serialDetails.kgbOrderId ? `Consumed · Order #${serialDetails.kgbOrderId}` : 'Historical / Consumed Transfer')
+                  : 'Available & Unused Stock'}
             </div>
             <div style={{ fontSize: '11.5px', color: serialDetails.isUsed ? '#5b21b6' : serialDetails.isHistoricalTransfer ? '#b45309' : '#15803d', marginTop: '2px' }}>
               {serialDetails.isUsed ? (
                 <>Date Used: <strong>{serialDetails.dateUsedFormatted || 'Recorded'}</strong> &bull; WO: <strong>{serialDetails.workOrderNumber}</strong></>
               ) : serialDetails.isHistoricalTransfer ? (
-                <span>Recorded in Stock Transfer Ledger ({serialDetails.latestTransferType || 'Site-to-Site Transfer'})</span>
+                serialDetails.kgbOrderId ? (
+                  <span>
+                    {serialDetails.kgbRepairNumber ? `GSX: ${serialDetails.kgbRepairNumber} · ` : ''}
+                    {serialDetails.kgbClosedDate ? `Closed: ${serialDetails.kgbClosedDate} · ` : ''}
+                    {serialDetails.latestTransferType || 'Site-to-Site Transfer'}
+                  </span>
+                ) : (
+                  <span>Recorded in Stock Transfer Ledger ({serialDetails.latestTransferType || 'Site-to-Site Transfer'})</span>
+                )
               ) : (
                 <span>Active in inventory ready for work order allocation</span>
               )}

@@ -739,7 +739,7 @@ export default function ScanOutPacking() {
     // Security Check: Alert if entered value is an Apple Part Number (e.g. 661-xxxxx) instead of a serial
     if (/^(?:ZP|PP|Z|1P|P)?66[0-9]-?\d{4,6}$/i.test(cleanSerial) || /^\d{3}-\d{4,6}$/.test(cleanSerial)) {
       barcodeAudio?.playError?.();
-      const msg = `⚠️ "${cleanSerial}" is an Apple Part Number (P/N), not a Serial Number. Please scan the part's unique Serial Number (S/N).`;
+      const msg = `"${cleanSerial}" is an Apple Part Number (P/N), not a Serial Number. Please scan the part's unique Serial Number (S/N).`;
       setScanResult({ type: 'error', message: msg, isNotSerial: true });
       showToast(msg, 'warning');
       highlightSerialInput(cleanSerial);
@@ -749,7 +749,7 @@ export default function ScanOutPacking() {
     // Security Check: Alert if entered value has invalid characters or is too short to be an Apple serial
     if (/[^A-Z0-9]/i.test(cleanSerial) || cleanSerial.length < 8) {
       barcodeAudio?.playError?.();
-      const msg = `⚠️ "${cleanSerial}" is not a valid Apple Serial Number. Please scan the component's unique Serial Number barcode (S/N).`;
+      const msg = `"${cleanSerial}" is not a valid Apple Serial Number. Please scan the component's unique Serial Number barcode (S/N).`;
       setScanResult({ type: 'error', message: msg, isNotSerial: true });
       showToast(msg, 'warning');
       highlightSerialInput(cleanSerial);
@@ -931,7 +931,7 @@ export default function ScanOutPacking() {
         : '';
       setScanResult({
         type: 'success',
-        message: `⚡ ${allowOverride ? 'Override Packed' : 'Auto-Packed'}: ${res.item.description || effectiveUnit.description || 'Part'} (SN: ${cleanSerial})${overrideLabel} → Box ${boxNumber}`
+        message: `${allowOverride ? 'Override Packed' : 'Auto-Packed'}: ${res.item.description || effectiveUnit.description || 'Part'} (SN: ${cleanSerial})${overrideLabel} → Box ${boxNumber}`
       });
       showToast(`Packed ${effectiveUnit.part_number} (${cleanSerial})${allowOverride ? ' [Override]' : ''} into Box #${boxNumber}`, 'success');
 
@@ -2419,7 +2419,7 @@ export default function ScanOutPacking() {
                 title={autoAdd ? "Auto-Add is active: Click to turn OFF" : "Auto-Add is disabled: Click to turn ON"}
               >
                 <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: autoAdd ? '#10b981' : '#64748b' }} />
-                <span>{autoAdd ? '⚡ Auto-Add: ON' : 'Auto-Add: OFF'}</span>
+                <span>{autoAdd ? 'Auto-Add: ON' : 'Auto-Add: OFF'}</span>
               </button>
             </div>
             <span style={{ fontSize: '11px', color: '#94a3b8' }}>
@@ -2511,7 +2511,7 @@ export default function ScanOutPacking() {
                 <span style={{ fontSize: '13px', fontWeight: 600 }}>{scanResult.message}</span>
                 {scanResult.type === 'error' && (
                   <span style={{ fontSize: '11.5px', color: '#fca5a5', fontWeight: 600 }}>
-                    ⚡ Text auto-highlighted: scan next barcode or type to overwrite directly without clicking &ldquo;✕&rdquo;.
+                    Text auto-highlighted: scan next barcode or type to overwrite directly without clicking &ldquo;✕&rdquo;.
                   </span>
                 )}
               </div>

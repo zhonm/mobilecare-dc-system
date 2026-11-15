@@ -18,9 +18,10 @@ import {
 function resolveEffectiveFixablySources(fixablyItems = [], fixablyTransfers = []) {
   let effectiveFixablyItems = Array.isArray(fixablyItems) ? fixablyItems : [];
   let effectiveFixablyTransfers = Array.isArray(fixablyTransfers) ? fixablyTransfers : [];
+  let effectiveKgbUsedBySerial = null;
 
   if (
-    (effectiveFixablyItems.length === 0 || effectiveFixablyTransfers.length === 0) &&
+    (effectiveFixablyItems.length === 0 || effectiveFixablyTransfers.length === 0 || !effectiveKgbUsedBySerial) &&
     typeof localStorage !== 'undefined'
   ) {
     try {
@@ -33,6 +34,9 @@ function resolveEffectiveFixablySources(fixablyItems = [], fixablyTransfers = []
         if (effectiveFixablyTransfers.length === 0 && Array.isArray(parsedSnap?.transfers)) {
           effectiveFixablyTransfers = parsedSnap.transfers;
         }
+        if (parsedSnap?.kgbUsedBySerial && typeof parsedSnap.kgbUsedBySerial === 'object') {
+          effectiveKgbUsedBySerial = parsedSnap.kgbUsedBySerial;
+        }
       }
     } catch {
       // Ignore storage parse warnings
@@ -43,6 +47,7 @@ function resolveEffectiveFixablySources(fixablyItems = [], fixablyTransfers = []
   return {
     effectiveFixablyItems,
     effectiveFixablyTransfers,
+    effectiveKgbUsedBySerial,
     localHistory: Array.isArray(localHistory) ? localHistory : []
   };
 }
@@ -144,7 +149,8 @@ export function resolveSerialFullDetails(serialInput, {
   sites = [],
   parts = [],
   fixablyItems = [],
-  fixablyTransfers = []
+  fixablyTransfers = [],
+  kgbUsedBySerial = null
 } = {}) {
   const cleanSerial = cleanSerialNumberInput(serialInput);
   if (!cleanSerial) return null;
@@ -152,6 +158,7 @@ export function resolveSerialFullDetails(serialInput, {
   const {
     effectiveFixablyItems,
     effectiveFixablyTransfers,
+    effectiveKgbUsedBySerial,
     localHistory
   } = resolveEffectiveFixablySources(fixablyItems, fixablyTransfers);
 
@@ -231,6 +238,9 @@ export function resolveSerialFullDetails(serialInput, {
       isSiteToSite,
       isReturnToDc,
       isAdjustment,
+      kgbOrderId: tr.kgbOrderId || tr.kgb_order_id || null,
+      kgbRepairNumber: tr.kgbRepairNumber || tr.kgb_repair_number || null,
+      kgbClosedDate: tr.kgbClosedDate || tr.kgb_closed_date || null,
       rowIndex: tr.rowIndex ?? idx
     });
   };
@@ -395,6 +405,13 @@ export function resolveSerialFullDetails(serialInput, {
     isShipmentActive(linkedShipment)
   );
 
+  const kgbMatch = (kgbUsedBySerial && kgbUsedBySerial[cleanSerial])
+    || (effectiveKgbUsedBySerial && effectiveKgbUsedBySerial[cleanSerial])
+    || null;
+  const kgbOrderId = kgbMatch?.orderId || latestMatchedTransfer?.kgbOrderId || null;
+  const kgbRepairNumber = kgbMatch?.gsxRepairNumber || latestMatchedTransfer?.kgbRepairNumber || null;
+  const kgbClosedDate = kgbMatch?.repairClosedDate || latestMatchedTransfer?.kgbClosedDate || null;
+
   let statusKey;
   let statusBadgeLabel;
   let statusBadgeType;
@@ -414,7 +431,9 @@ export function resolveSerialFullDetails(serialInput, {
       statusBadgeType = 'dc';
     } else {
       statusKey = 'transferred_historical';
-      statusBadgeLabel = `${latestMatchedTransfer?.isSiteToSite ? 'Site-to-Site Transfer' : 'Transferred'} to ${siteName} (Historical / Consumed)`;
+      statusBadgeLabel = kgbOrderId
+        ? `${latestMatchedTransfer?.isSiteToSite ? 'Site-to-Site Transfer' : 'Transferred'} to ${siteName} (Consumed · Order #${kgbOrderId})`
+        : `${latestMatchedTransfer?.isSiteToSite ? 'Site-to-Site Transfer' : 'Transferred'} to ${siteName} (Historical / Consumed)`;
       statusBadgeType = 'site';
     }
   } else if (!isDcSite) {
@@ -579,6 +598,9 @@ export function resolveSerialFullDetails(serialInput, {
     technician_name: usedByName,
     workOrderNumber,
     work_order_number: workOrderNumber,
+    kgbOrderId,
+    kgbRepairNumber,
+    kgbClosedDate,
     usageNotes,
     // Site Arrival Details
     siteArrivalDate,

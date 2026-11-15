@@ -162,7 +162,7 @@ export function validateAppleSerialNumber(rawSerial, currentPn = '', partsCatalo
     return {
       isValid: false,
       error: isComponentPart
-        ? `⚠️ Incomplete Serial Number (${cleanSerial.length} chars). Apple component replacement serials must be complete (17 characters, min 15). Please scan the full barcode.`
+        ? `Incomplete Serial Number (${cleanSerial.length} chars). Apple component replacement serials must be complete (17 characters, min 15). Please scan the full barcode.`
         : `Serial Number too short (${cleanSerial.length} chars). Apple serial numbers must be at least 8-10 alphanumeric characters.`,
       cleanSerial
     };

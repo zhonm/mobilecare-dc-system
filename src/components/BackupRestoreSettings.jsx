@@ -473,8 +473,8 @@ export default function BackupRestoreSettings() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ color: driveConfigured ? '#6ee7b7' : '#fcd34d', fontSize: '11.5px', fontWeight: 600 }}>
-              {driveConfigured ? '✓ Google Drive Connected' : '⚠️ Drive Credentials Pending'}
+            <span style={{ color: driveConfigured ? '#6ee7b7' : '#fcd34d', fontSize: '11.5px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              {driveConfigured ? <><CheckCircle2 size={13} /> Google Drive Connected</> : <><AlertTriangle size={13} /> Drive Credentials Pending</>}
             </span>
             <button
               type="button"
@@ -926,22 +926,22 @@ export default function BackupRestoreSettings() {
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
                   <div style={{ background: '#f1f5f9', padding: '8px 12px', borderRadius: '6px', fontSize: '12.5px' }}>
-                    📦 <strong>Inventory Units:</strong> {inspectingPackage.validation?.stats?.inventoryUnitsCount || 0}
+                    <strong>Inventory Units:</strong> {inspectingPackage.validation?.stats?.inventoryUnitsCount || 0}
                   </div>
                   <div style={{ background: '#f1f5f9', padding: '8px 12px', borderRadius: '6px', fontSize: '12.5px' }}>
-                    🚚 <strong>Shipments:</strong> {inspectingPackage.validation?.stats?.shipmentsCount || 0}
+                    <strong>Shipments:</strong> {inspectingPackage.validation?.stats?.shipmentsCount || 0}
                   </div>
                   <div style={{ background: '#f1f5f9', padding: '8px 12px', borderRadius: '6px', fontSize: '12.5px' }}>
-                    📱 <strong>Parts Master:</strong> {inspectingPackage.validation?.stats?.partsCount || 0}
+                    <strong>Parts Master:</strong> {inspectingPackage.validation?.stats?.partsCount || 0}
                   </div>
                   <div style={{ background: '#f1f5f9', padding: '8px 12px', borderRadius: '6px', fontSize: '12.5px' }}>
-                    🏢 <strong>Service Sites:</strong> {inspectingPackage.validation?.stats?.sitesCount || 0}
+                    <strong>Service Sites:</strong> {inspectingPackage.validation?.stats?.sitesCount || 0}
                   </div>
                   <div style={{ background: '#f1f5f9', padding: '8px 12px', borderRadius: '6px', fontSize: '12.5px' }}>
-                    📑 <strong>Purchase Orders:</strong> {inspectingPackage.validation?.stats?.purchaseOrdersCount || 0}
+                    <strong>Purchase Orders:</strong> {inspectingPackage.validation?.stats?.purchaseOrdersCount || 0}
                   </div>
                   <div style={{ background: '#f1f5f9', padding: '8px 12px', borderRadius: '6px', fontSize: '12.5px' }}>
-                    👥 <strong>User Accounts:</strong> {inspectingPackage.validation?.stats?.usersCount || 0}
+                    <strong>User Accounts:</strong> {inspectingPackage.validation?.stats?.usersCount || 0}
                   </div>
                 </div>
               </div>
@@ -1003,8 +1003,8 @@ export default function BackupRestoreSettings() {
             <div className="modal-body" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
               
               <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '12px 14px' }}>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: '#92400e', marginBottom: '4px' }}>
-                  ⚠️ Critical Notice: Full System State Replacement
+                <div style={{ fontSize: '13px', fontWeight: 700, color: '#92400e', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <AlertTriangle size={14} /> Critical Notice: Full System State Replacement
                 </div>
                 <div style={{ fontSize: '12.5px', color: '#b45309', lineHeight: 1.45 }}>
                   Restoring will hydrate the live system state with the records contained in this backup package. Current database records will be replaced and synchronized to Supabase PostgreSQL, and peer sessions will be notified.
@@ -1144,8 +1144,8 @@ export default function BackupRestoreSettings() {
                 <div style={{ fontSize: '13px', fontWeight: 700, color: '#1e293b' }}>
                   {GOOGLE_DRIVE_CONFIG.clientEmail}
                 </div>
-                <div style={{ fontSize: '11.5px', color: driveConfigured ? '#059669' : '#b45309', marginTop: '4px', fontWeight: 600 }}>
-                  Status: {driveConfigured ? '✓ Key Configured and Active' : '⚠️ Private Key Not Yet Loaded'}
+                <div style={{ fontSize: '11.5px', color: driveConfigured ? '#059669' : '#b45309', marginTop: '4px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  Status: {driveConfigured ? <><CheckCircle2 size={13} /> Key Configured and Active</> : <><AlertTriangle size={13} /> Private Key Not Yet Loaded</>}
                 </div>
               </div>
 

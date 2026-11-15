@@ -1296,16 +1296,47 @@ export async function reconcileFixablyMultiFile({
     // 2. Parse KGB Used (if provided)
     let kgbUsedMap = new Map();
     let kgbStats = null;
+    const kgbUsedBySerial = {};
     if (kgbUsedContent) {
       const kgbRes = await parseKgbUsedCsv(kgbUsedContent);
       if (kgbRes.success) {
         kgbUsedMap = kgbRes.kgbMap;
+        kgbUsedMap.forEach((val, sn) => {
+          if (val && (val.orderId || val.gsxRepairNumber)) {
+            kgbUsedBySerial[sn] = {
+              orderId: val.orderId || '',
+              gsxRepairNumber: val.gsxRepairNumber || '',
+              repairClosedDate: val.repairClosedDate || '',
+              locationName: val.locationName || ''
+            };
+          }
+        });
         kgbStats = {
           totalRows: kgbRes.totalRows,
           totalClosed: kgbRes.totalClosed,
           uniqueSerials: kgbRes.uniqueSerials
         };
       }
+    }
+
+    // Attach KGB Order ID & GSX Repair metadata to transfer ledger records
+    if (kgbUsedMap.size > 0 && Array.isArray(transfers) && transfers.length > 0) {
+      const enrichTransferWithKgb = (t) => {
+        const sn = String(t.serialNumber || t.serial_number || '').trim().toUpperCase();
+        const kgbMatch = sn ? kgbUsedMap.get(sn) : null;
+        if (!kgbMatch) return t;
+        return {
+          ...t,
+          ...(kgbMatch.orderId ? { kgbOrderId: kgbMatch.orderId } : {}),
+          ...(kgbMatch.gsxRepairNumber ? { kgbRepairNumber: kgbMatch.gsxRepairNumber } : {}),
+          ...(kgbMatch.repairClosedDate ? { kgbClosedDate: kgbMatch.repairClosedDate } : {})
+        };
+      };
+      transfers = transfers.map(enrichTransferWithKgb);
+      siteToSiteTransfers = siteToSiteTransfers.map(enrichTransferWithKgb);
+      dcToSiteTransfers = dcToSiteTransfers.map(enrichTransferWithKgb);
+      returnToDcTransfers = returnToDcTransfers.map(enrichTransferWithKgb);
+      adjustmentTransfers = adjustmentTransfers.map(enrichTransferWithKgb);
     }
 
     // 3. Parse Site Stocks with joined cross-file sets
@@ -1353,6 +1384,7 @@ export async function reconcileFixablyMultiFile({
       dcToSiteTransfers,
       returnToDcTransfers,
       adjustmentTransfers,
+      kgbUsedBySerial,
       transferStats: enrichedTransferStats,
       validationSummary: transferValidation,
       batchSummary
@@ -1823,6 +1855,9 @@ export function compactFixablySnapshot(snapshot) {
         if (t.isAdjustment) ct.isAdjustment = true;
         if (t.imei) ct.imei = t.imei;
         if (t.quantity && t.quantity !== 1) ct.quantity = t.quantity;
+        if (t.kgbOrderId) ct.kgbOrderId = t.kgbOrderId;
+        if (t.kgbRepairNumber) ct.kgbRepairNumber = t.kgbRepairNumber;
+        if (t.kgbClosedDate) ct.kgbClosedDate = t.kgbClosedDate;
         return ct;
       })
     : [];

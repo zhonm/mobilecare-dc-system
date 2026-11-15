@@ -73,7 +73,7 @@ export default function AuditTrail() {
   const [masterDateFilter, setMasterDateFilter] = useState('ALL');
   const [masterSearch, setMasterSearch] = useState('');
   const [masterPage, setMasterPage] = useState(1);
-  const masterPageSize = 15;
+  const [masterPageSize, setMasterPageSize] = useState(25);
   const [selectedEventForDossier, setSelectedEventForDossier] = useState(null);
 
   // Search & Filter State
@@ -876,7 +876,7 @@ export default function AuditTrail() {
   const paginatedMasterEvents = useMemo(() => {
     const start = (masterPage - 1) * masterPageSize;
     return filteredMasterEvents.slice(start, start + masterPageSize);
-  }, [filteredMasterEvents, masterPage]);
+  }, [filteredMasterEvents, masterPage, masterPageSize]);
 
   const totalMasterPages = Math.ceil(filteredMasterEvents.length / masterPageSize) || 1;
 
@@ -1877,19 +1877,20 @@ export default function AuditTrail() {
             </div>
 
             {/* Quick Category Filter Chips */}
-            <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '6px', marginBottom: '12px' }}>
+            <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '6px', marginBottom: '12px', alignItems: 'center' }}>
               {[
-                { id: 'ALL', label: 'All Activities', count: allMasterEvents.length },
-                { id: 'REQUISITION', label: '📋 Requisitions', count: allMasterEvents.filter(e => e.category === 'REQUISITION').length },
-                { id: 'LOGISTICS', label: '🚚 Logistics & Shipments', count: allMasterEvents.filter(e => e.category === 'LOGISTICS').length },
-                { id: 'CONSUMPTION', label: '🔧 Repairs & Parts Used', count: allMasterEvents.filter(e => e.category === 'CONSUMPTION').length },
-                { id: 'INVENTORY', label: '📦 Stock & Intake', count: allMasterEvents.filter(e => e.category === 'INVENTORY').length },
-                { id: 'HARDWARE_SCAN', label: '⚡ Barcode Scans', count: allMasterEvents.filter(e => e.category === 'HARDWARE_SCAN').length },
-                { id: 'DATA_IMPORT', label: '📁 Master Imports', count: allMasterEvents.filter(e => e.category === 'DATA_IMPORT').length },
-                { id: 'SECURITY_SESSION', label: '🛡️ Security & Sessions', count: allMasterEvents.filter(e => e.category === 'SECURITY_SESSION').length },
-                { id: 'DELETION', label: '🗑️ Deletions & Purges', count: allMasterEvents.filter(e => e.category === 'DELETION').length }
+                { id: 'ALL', label: 'All Activities', icon: Activity, count: allMasterEvents.length },
+                { id: 'REQUISITION', label: 'Requisitions', icon: ClipboardList, count: allMasterEvents.filter(e => e.category === 'REQUISITION').length },
+                { id: 'LOGISTICS', label: 'Logistics & Shipments', icon: Truck, count: allMasterEvents.filter(e => e.category === 'LOGISTICS').length },
+                { id: 'CONSUMPTION', label: 'Repairs & Parts Used', icon: Wrench, count: allMasterEvents.filter(e => e.category === 'CONSUMPTION').length },
+                { id: 'INVENTORY', label: 'Stock & Intake', icon: Box, count: allMasterEvents.filter(e => e.category === 'INVENTORY').length },
+                { id: 'HARDWARE_SCAN', label: 'Barcode Scans', icon: History, count: allMasterEvents.filter(e => e.category === 'HARDWARE_SCAN').length },
+                { id: 'DATA_IMPORT', label: 'Master Imports', icon: UploadCloud, count: allMasterEvents.filter(e => e.category === 'DATA_IMPORT').length },
+                { id: 'SECURITY_SESSION', label: 'Security & Sessions', icon: ShieldCheck, count: allMasterEvents.filter(e => e.category === 'SECURITY_SESSION').length },
+                { id: 'DELETION', label: 'Deletions & Purges', icon: Trash2, count: allMasterEvents.filter(e => e.category === 'DELETION').length }
               ].map(cat => {
                 const isActive = masterCategoryFilter === cat.id;
+                const CatIcon = cat.icon;
                 return (
                   <button
                     key={cat.id}
@@ -1900,7 +1901,7 @@ export default function AuditTrail() {
                       color: isActive ? '#ffffff' : '#475569',
                       border: '1px solid ' + (isActive ? '#0f172a' : '#e2e8f0'),
                       borderRadius: '20px',
-                      padding: '4px 12px',
+                      padding: '5px 12px',
                       fontSize: '11.5px',
                       fontWeight: isActive ? 700 : 500,
                       cursor: 'pointer',
@@ -1911,11 +1912,12 @@ export default function AuditTrail() {
                       transition: 'all 0.15s ease'
                     }}
                   >
+                    <CatIcon size={12} />
                     <span>{cat.label}</span>
                     <span style={{
                       background: isActive ? 'rgba(255,255,255,0.2)' : '#e2e8f0',
                       color: isActive ? '#ffffff' : '#64748b',
-                      padding: '1px 5px',
+                      padding: '1px 6px',
                       borderRadius: '10px',
                       fontSize: '10px',
                       fontWeight: 700
@@ -2014,19 +2016,43 @@ export default function AuditTrail() {
                 </select>
               </div>
             </div>
+
+            {(masterCategoryFilter !== 'ALL' || masterRoleFilter !== 'ALL' || masterSiteFilter !== 'ALL' || masterDateFilter !== 'ALL' || masterSearch.trim() !== '') && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed #e2e8f0', flexWrap: 'wrap', gap: '8px' }}>
+                <span style={{ fontSize: '12px', color: '#475569' }}>
+                  Showing <strong>{filteredMasterEvents.length}</strong> matching {filteredMasterEvents.length === 1 ? 'record' : 'records'}
+                  {masterCategoryFilter !== 'ALL' ? ` in ${masterCategoryFilter.replace(/_/g, ' ')}` : ''}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    setMasterCategoryFilter('ALL');
+                    setMasterRoleFilter('ALL');
+                    setMasterSiteFilter('ALL');
+                    setMasterDateFilter('ALL');
+                    setMasterSearch('');
+                    setMasterPage(1);
+                  }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', fontWeight: 600 }}
+                >
+                  <X size={12} />
+                  <span>Reset Filters</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Master Table */}
-          <div className="table-scroll-wrapper" style={{ overflowX: 'auto', width: '100%' }}>
-            <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '12px', minWidth: '1175px' }}>
-              <thead>
+          <div className="table-scroll-wrapper" style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: '640px', width: '100%' }}>
+            <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '12px', minWidth: '1010px' }}>
+              <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}>
                 <tr style={{ background: '#0f172a', color: '#f8fafc', borderBottom: '1px solid #1e293b' }}>
                   <th style={{ width: '48px', textAlign: 'center', padding: '12px 8px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>#</th>
                   <th style={{ width: '210px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Timestamp</th>
                   <th style={{ width: '210px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Action &amp; Category</th>
                   <th style={{ width: '215px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Operator &amp; Role</th>
                   <th style={{ textAlign: 'left', padding: '12px 14px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Target Entity &amp; Details</th>
-                  <th style={{ width: '165px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Location</th>
                   <th style={{ width: '110px', textAlign: 'center', padding: '12px 8px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Status</th>
                   <th style={{ width: '96px', textAlign: 'center', padding: '12px 10px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Dossier</th>
                 </tr>
@@ -2034,7 +2060,7 @@ export default function AuditTrail() {
               <tbody>
                 {filteredMasterEvents.length === 0 ? (
                   <tr>
-                    <td colSpan={8} style={{ textAlign: 'center', padding: '56px 20px', color: '#94a3b8' }}>
+                    <td colSpan={7} style={{ textAlign: 'center', padding: '56px 20px', color: '#94a3b8' }}>
                       <ClipboardList size={40} style={{ margin: '0 auto 10px', color: '#cbd5e1' }} />
                       <p style={{ margin: '0 0 6px', fontSize: '15px', fontWeight: 700, color: '#475569' }}>
                         No matching audit activities found
@@ -2238,47 +2264,7 @@ export default function AuditTrail() {
                           </div>
                         </td>
 
-                        {/* 6. Location */}
-                        <td style={{ padding: '12px 12px', overflow: 'hidden', verticalAlign: 'middle' }}>
-                          <div>
-                            <span
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '4px',
-                                background: '#f8fafc',
-                                border: '1px solid #e2e8f0',
-                                padding: '2px 7px',
-                                borderRadius: '6px',
-                                whiteSpace: 'nowrap',
-                                maxWidth: '100%',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis'
-                              }}
-                            >
-                              <MapPin size={11} color="#0284c7" style={{ flexShrink: 0 }} />
-                              <span style={{ fontWeight: 700, color: '#0f172a', fontSize: '11px', whiteSpace: 'nowrap' }}>
-                                {evt.siteCode || 'DC-MDC'}
-                              </span>
-                            </span>
-                          </div>
-                          <div
-                            style={{
-                              fontSize: '10.5px',
-                              color: '#64748b',
-                              marginTop: '3px',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                              maxWidth: '100%'
-                            }}
-                            title={evt.siteName || 'Distribution Center'}
-                          >
-                            {evt.siteName || 'Distribution Center'}
-                          </div>
-                        </td>
-
-                        {/* 7. Status */}
+                        {/* 6. Status */}
                         <td style={{ textAlign: 'center', padding: '12px 8px', overflow: 'hidden', verticalAlign: 'middle' }}>
                           <span
                             style={{
@@ -2332,10 +2318,35 @@ export default function AuditTrail() {
           {/* Pagination Bar */}
           {filteredMasterEvents.length > 0 && (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 18px', borderTop: '1px solid #e2e8f0', background: '#f8fafc', flexWrap: 'wrap', gap: '10px' }}>
-              <div style={{ fontSize: '12px', color: '#64748b' }}>
-                Showing <strong>{(masterPage - 1) * masterPageSize + 1}</strong> - <strong>{Math.min(masterPage * masterPageSize, filteredMasterEvents.length)}</strong> of <strong>{filteredMasterEvents.length}</strong> activity records
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                <div style={{ fontSize: '12px', color: '#64748b' }}>
+                  Showing <strong>{(masterPage - 1) * masterPageSize + 1}</strong> - <strong>{Math.min(masterPage * masterPageSize, filteredMasterEvents.length)}</strong> of <strong>{filteredMasterEvents.length}</strong> activity records
+                </div>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b' }}>
+                  <span>Rows:</span>
+                  <select
+                    value={masterPageSize}
+                    onChange={(e) => { setMasterPageSize(Number(e.target.value)); setMasterPage(1); }}
+                    className="form-select"
+                    style={{ height: '28px', padding: '2px 8px', fontSize: '11.5px', borderRadius: '6px', width: 'auto' }}
+                  >
+                    <option value={15}>15</option>
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                </label>
               </div>
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={masterPage === 1}
+                  onClick={() => setMasterPage(1)}
+                  style={{ padding: '4px 8px', fontSize: '11.5px' }}
+                >
+                  First
+                </button>
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
@@ -2358,6 +2369,15 @@ export default function AuditTrail() {
                 >
                   <span>Next</span>
                   <ChevronRight size={13} />
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={masterPage >= totalMasterPages}
+                  onClick={() => setMasterPage(totalMasterPages)}
+                  style={{ padding: '4px 8px', fontSize: '11.5px' }}
+                >
+                  Last
                 </button>
               </div>
             </div>

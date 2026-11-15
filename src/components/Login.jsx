@@ -709,13 +709,13 @@ export default function Login() {
 
             <div style={{ background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.25)', borderRadius: '10px', padding: '12px 14px', marginBottom: '16px' }}>
               <div style={{ fontSize: '12px', color: '#e2e8f0', lineHeight: 1.5, marginBottom: '6px' }}>
-                📦 Contact <strong>Joshua Juvida</strong> for <strong>MDC concerns</strong> (branch requisitions, replenishment, parts).
+                Contact <strong>Joshua Juvida</strong> for <strong>MDC concerns</strong> (branch requisitions, replenishment, parts).
               </div>
               <div style={{ fontSize: '12px', color: '#e2e8f0', lineHeight: 1.5, marginBottom: '6px' }}>
-                💻 Contact <strong>Zhon Manaois</strong> for <strong>system-related issues</strong> (login errors, bugs, glitches).
+                Contact <strong>Zhon Manaois</strong> for <strong>system-related issues</strong> (login errors, bugs, glitches).
               </div>
               <div style={{ fontSize: '11.5px', color: '#94a3b8', lineHeight: 1.4, borderTop: '1px solid rgba(255, 255, 255, 0.1)', paddingTop: '6px' }}>
-                🤝 <em>Note: You may reach out to either of them for any concern.</em>
+                <em>Note: You may reach out to either of them for any concern.</em>
               </div>
             </div>
 
