@@ -826,7 +826,7 @@ export async function uploadToGoogleDrive({
  */
 export async function downloadFromGoogleDrive(fileId) {
   const accessToken = await getGoogleDriveAccessToken();
-  const res = await fetch(
+  const res = await fetchDrive(
     `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`,
     {
       headers: { Authorization: `Bearer ${accessToken}` }
@@ -862,7 +862,7 @@ export async function listFilesInDriveFolder(folderType = 'shipments', pageSize 
     
     let parentIds = [folderId];
     try {
-      const subRes = await fetch(subUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+      const subRes = await fetchDrive(subUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
       if (subRes.ok) {
         const subData = await subRes.json();
         if (subData.files && subData.files.length > 0) {
@@ -871,7 +871,7 @@ export async function listFilesInDriveFolder(folderType = 'shipments', pageSize 
           for (const subF of subData.files.slice(0, 15)) {
             const deepQuery = `mimeType = 'application/vnd.google-apps.folder' and '${subF.id}' in parents and trashed = false`;
             const deepUrl = `https://www.googleapis.com/drive/v3/files?corpora=drive&driveId=${GOOGLE_DRIVE_CONFIG.sharedDriveId}&includeItemsFromAllDrives=true&supportsAllDrives=true&q=${encodeURIComponent(deepQuery)}&fields=files(id,name)`;
-            const deepRes = await fetch(deepUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+            const deepRes = await fetchDrive(deepUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
             if (deepRes.ok) {
               const deepData = await deepRes.json();
               if (deepData.files?.length > 0) {
@@ -885,13 +885,16 @@ export async function listFilesInDriveFolder(folderType = 'shipments', pageSize 
 
     const parentClauses = parentIds.map(id => `'${id}' in parents`).join(' or ');
     const query = `(${parentClauses}) and trashed = false and mimeType != 'application/vnd.google-apps.folder'`;
-    const url = `https://www.googleapis.com/drive/v3/files?corpora=drive&driveId=${GOOGLE_DRIVE_CONFIG.sharedDriveId}&includeItemsFromAllDrives=true&supportsAllDrives=true&q=${encodeURIComponent(query)}&pageSize=${pageSize}&fields=files(id,name,mimeType,size,createdTime,webViewLink,webContentLink,parents,appProperties)&orderBy=createdTime desc`;
+    const url = `https://www.googleapis.com/drive/v3/files?corpora=drive&driveId=${GOOGLE_DRIVE_CONFIG.sharedDriveId}&includeItemsFromAllDrives=true&supportsAllDrives=true&q=${encodeURIComponent(query)}&pageSize=${pageSize}&fields=files(id,name,mimeType,size,createdTime,modifiedTime,webViewLink,webContentLink,parents,appProperties)&orderBy=createdTime desc`;
 
-    const res = await fetch(url, {
+    const res = await fetchDrive(url, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     const data = await res.json();
-    return data.files || [];
+    return (data.files || []).map(f => ({
+      ...f,
+      size: f.size !== undefined ? Number(f.size) || 0 : 0
+    }));
   } catch (err) {
     console.error('[Google Drive] Failed to list folder files:', err);
     return [];
@@ -940,16 +943,19 @@ export async function searchDriveFiles({
     }
 
     const fullQ = clauses.join(' and ');
-    const url = `https://www.googleapis.com/drive/v3/files?corpora=drive&driveId=${GOOGLE_DRIVE_CONFIG.sharedDriveId}&includeItemsFromAllDrives=true&supportsAllDrives=true&q=${encodeURIComponent(fullQ)}&pageSize=${pageSize}&fields=files(id,name,mimeType,size,createdTime,webViewLink,webContentLink,parents,appProperties)&orderBy=createdTime desc`;
+    const url = `https://www.googleapis.com/drive/v3/files?corpora=drive&driveId=${GOOGLE_DRIVE_CONFIG.sharedDriveId}&includeItemsFromAllDrives=true&supportsAllDrives=true&q=${encodeURIComponent(fullQ)}&pageSize=${pageSize}&fields=files(id,name,mimeType,size,createdTime,modifiedTime,webViewLink,webContentLink,parents,appProperties)&orderBy=createdTime desc`;
 
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const res = await fetchDrive(url, { headers: { Authorization: `Bearer ${accessToken}` } });
     if (!res.ok) {
       const errTxt = await res.text();
       console.warn('[Google Drive] Search query failed:', errTxt);
       return [];
     }
     const data = await res.json();
-    return data.files || [];
+    return (data.files || []).map(f => ({
+      ...f,
+      size: f.size !== undefined ? Number(f.size) || 0 : 0
+    }));
   } catch (err) {
     console.error('[Google Drive] Search error:', err);
     return [];
@@ -962,7 +968,7 @@ export async function searchDriveFiles({
 export async function trashFileInDrive(fileId) {
   try {
     const accessToken = await getGoogleDriveAccessToken();
-    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, {
+    const res = await fetchDrive(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, {
       method: 'PATCH',
       headers: {
         Authorization: `Bearer ${accessToken}`,

@@ -77,15 +77,21 @@ export function formatTransferDate(isoString, includeTime = true) {
   }
 }
 
+let memoryTransferHistoryFallback = [];
+
 /**
  * Loads all transfer history records from LocalStorage and IndexedDB
  */
 export function loadLocalTransferHistory() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } else {
+      return memoryTransferHistoryFallback;
     }
   } catch (e) {
     console.warn('[TransferHistory] Error reading localStorage:', e);
@@ -98,8 +104,11 @@ export function loadLocalTransferHistory() {
  */
 export function saveLocalTransferHistory(records) {
   if (!Array.isArray(records)) return;
+  memoryTransferHistoryFallback = records;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+    }
   } catch (e) {
     console.warn('[TransferHistory] localStorage write warning:', e);
   }

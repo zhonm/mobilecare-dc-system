@@ -6,7 +6,12 @@ import { fileURLToPath } from 'node:url';
 import {
   importGsxCatalogFromCsv,
   mergeGsxPartsIntoCatalog,
-  classifyGsxDeviceStatus
+  classifyGsxDeviceStatus,
+  loadGsxSeedParts,
+  getCachedGsxSeedParts,
+  persistPartsCatalog,
+  GSX_CATALOG_MIN_EXPECTED_PARTS,
+  FULL_MERGED_CATALOG_MIN_PARTS
 } from '../utils/gsxCatalogImporter.js';
 import { importPriorityPartsFromCsv } from '../utils/priorityPartsImporter.js';
 import { resolvePartInfo } from '../utils/partResolver.js';
@@ -130,4 +135,81 @@ assert.equal(getPartCategory({ description: 'Display, iPhone 15 Pro', part_numbe
 assert.ok(nonBatResolved && nonBatResolved.part_number === sampleNon661.part_number, 'General GSX PN resolves from embedded string');
 
 console.log('  ✓ PASS: Battery/Display & GSX regex regression checks passed');
+
+// 5. Localhost vs Production Parity (514 Cloud Parts + 4,640 GSX Seed Parts = 4,711 Parts)
+const loadedSeed = await loadGsxSeedParts();
+assert.equal(loadedSeed.length, GSX_CATALOG_MIN_EXPECTED_PARTS, 'loadGsxSeedParts() returns 4,640 GSX seed parts');
+assert.equal(getCachedGsxSeedParts()?.length, GSX_CATALOG_MIN_EXPECTED_PARTS, 'getCachedGsxSeedParts() caches loaded seed parts');
+
+// Simulate 514 Supabase public.parts rows (443 overlapping with GSX seed + 71 non-overlapping legacy/custom rows)
+const simulated514CloudParts = [
+  ...loadedSeed.slice(100, 543).map((p, idx) => ({
+    id: `cloud-uuid-${idx}`,
+    part_number: p.part_number,
+    description: p.description,
+    iphone_model: 'iPhone', // generic DB placeholder
+    stocking_price: 99,     // dummy fallback price
+    category_id: p.category_id,
+    is_active: true
+  })),
+  ...Array.from({ length: 71 }, (_, idx) => ({
+    id: `legacy-uuid-${idx}`,
+    part_number: `661-04${String(400 + idx).padStart(3, '0')}`,
+    description: `Legacy Battery Kit ${idx + 1}`,
+    iphone_model: 'iPhone',
+    stocking_price: 61.61,
+    category_id: 'cat-battery',
+    is_active: true
+  }))
+];
+assert.equal(simulated514CloudParts.length, 514, 'Simulated cloud parts count is 514');
+
+const parityMerge = mergeGsxPartsIntoCatalog(simulated514CloudParts, loadedSeed, DEFAULT_PART_CATEGORIES);
+assert.equal(parityMerge.merged.length, 4711, 'Merging 514 cloud parts with 4,640 GSX parts yields exact 4,711 parts');
+assert.ok(parityMerge.merged.length >= FULL_MERGED_CATALOG_MIN_PARTS, 'Merged catalog meets FULL_MERGED_CATALOG_MIN_PARTS threshold');
+assert.equal(parityMerge.merged[0].part_number, '076-00306', 'Catalog is deterministically sorted starting with 076-00306');
+assert.equal(parityMerge.merged[1].part_number, '606-00097', 'Second catalog item is 606-00097 matching production');
+
+// Verify generic 'iPhone' model and dummy $99 price on overlapping cloud row were upgraded from GSX seed
+const sampleOverlappingPn = loadedSeed[105].part_number;
+const sampleMergedRow = parityMerge.merged.find(p => p.part_number === sampleOverlappingPn);
+assert.equal(sampleMergedRow.id, 'cloud-uuid-5', 'Cloud UUID preserved on overlapping part');
+assert.equal(sampleMergedRow.iphone_model, loadedSeed[105].iphone_model, 'Generic iPhone model upgraded to specific GSX model');
+if (loadedSeed[105].stocking_price > 0) {
+  assert.equal(sampleMergedRow.stocking_price, loadedSeed[105].stocking_price, 'Dummy $99 fallback upgraded to genuine GSX stocking price');
+}
+
+// Verify quota-resilient persistence never leaves stale 514-part list in localStorage
+let idbSaved = null;
+const mockDbStorage = {
+  setItem: async (k, v) => {
+    idbSaved = { k, v };
+  }
+};
+const storeMap = new Map([['mdc_parts', JSON.stringify(simulated514CloudParts)]]);
+const prevWindow = globalThis.window;
+globalThis.window = {
+  localStorage: {
+    getItem: (k) => (storeMap.has(k) ? storeMap.get(k) : null),
+    setItem: (k, v) => {
+      // Simulate 5MB quota exceeded when writing full 1.97MB JSON, but allow compact JSON (<1.2MB)
+      if (k === 'mdc_parts' && v.length > 1500000) {
+        throw new Error('QuotaExceededError');
+      }
+      storeMap.set(k, v);
+    },
+    removeItem: (k) => storeMap.delete(k)
+  }
+};
+try {
+  persistPartsCatalog(parityMerge.merged, mockDbStorage);
+  const persistedLocal = JSON.parse(storeMap.get('mdc_parts') || '[]');
+  assert.equal(persistedLocal.length, 4711, 'Compact fallback persists all 4,711 parts when full JSON hits QuotaExceededError');
+  assert.equal(idbSaved?.v?.length, 4711, 'Full 4,711 parts persisted to IndexedDB');
+  assert.equal(storeMap.get('mdc_gsx_seed_merged_v1'), '1', 'Merge completion flag set');
+} finally {
+  globalThis.window = prevWindow;
+}
+
+console.log('  ✓ PASS: 514 -> 4,711 localhost/production parity, deterministic sorting, and quota-resilient persistence verified');
 console.log('ALL GSX CATALOG & PRIORITY SEED TESTS PASSED');

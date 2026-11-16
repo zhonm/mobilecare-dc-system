@@ -99,12 +99,24 @@ class DbStorage {
 
     // 1. Sync to localStorage only when needed (skip for large IDB-primary keys when IndexedDB is active)
     if (!skipLocal) {
-      try {
-        if (typeof window !== 'undefined' && window.localStorage) {
-          window.localStorage.setItem(key, JSON.stringify(value));
+      if (typeof window !== 'undefined' && window.localStorage) {
+        let serialized = null;
+        try {
+          serialized = JSON.stringify(value);
+          window.localStorage.setItem(key, serialized);
+        } catch (err) {
+          try {
+            window.localStorage.removeItem(key);
+            if (serialized !== null) {
+              window.localStorage.setItem(key, serialized);
+            }
+          } catch (retryErr) {
+            if (db) {
+              try { window.localStorage.removeItem(key); } catch {}
+            }
+            console.debug('LocalStorage quota note:', retryErr || err);
+          }
         }
-      } catch (err) {
-        console.debug('LocalStorage quota note:', err);
       }
     }
 

@@ -10,7 +10,14 @@ import {
 } from '../utils/categoryFilter.js';
 import { resolveSafeRegion } from '../constants/config.js';
 import { OFFICIAL_BRANCH_DIRECTORY, enrichSiteWithDirectory } from '../constants/branchDirectory.js';
-import { importGsxCatalogFromCsv, mergeGsxPartsIntoCatalog } from '../utils/gsxCatalogImporter.js';
+import {
+  importGsxCatalogFromCsv,
+  mergeGsxPartsIntoCatalog,
+  loadGsxSeedParts,
+  persistPartsCatalog,
+  GSX_CATALOG_MIN_EXPECTED_PARTS,
+  FULL_MERGED_CATALOG_MIN_PARTS
+} from '../utils/gsxCatalogImporter.js';
 
 export const DEFAULT_SUPERVISOR_SETTINGS = {
   supervisor_name: 'Anjo Alcazar',
@@ -207,7 +214,9 @@ export function useCatalogAndSites({
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          return parsed.slice().sort((a, b) =>
+            String(a.part_number || '').localeCompare(String(b.part_number || ''))
+          );
         }
       }
       return [];
@@ -216,63 +225,108 @@ export function useCatalogAndSites({
     }
   });
 
-  // Lazily hydrate & merge GSX Parts Catalog seed in the background so the 2.7MB JSON never blocks initial page refresh
-  const hasAttemptedGsxSeedMergeRef = useRef(false);
+  const categoriesRef = useRef(categories);
   useEffect(() => {
-    if (hasAttemptedGsxSeedMergeRef.current) return;
-    let alreadyMerged = false;
-    try {
-      alreadyMerged = localStorage.getItem('mdc_gsx_seed_merged_v1') === '1' && parts.length > 0;
-    } catch {
-      // Ignore storage access errors
-    }
-    if (alreadyMerged) {
-      hasAttemptedGsxSeedMergeRef.current = true;
+    categoriesRef.current = categories;
+  }, [categories]);
+
+  const isUnmountedRef = useRef(false);
+  useEffect(() => {
+    isUnmountedRef.current = false;
+    return () => {
+      isUnmountedRef.current = true;
+    };
+  }, []);
+
+  const cloudDbPartsCacheRef = useRef([]);
+  const hasAttemptedCloudPartsFetchRef = useRef(false);
+  const isMergingGsxCatalogRef = useRef(false);
+
+  // Hydrate & merge authoritative Parts Master Catalog (IndexedDB + 4,640 GSX seed parts + 514 Supabase cloud parts = 4,711 parts)
+  // NOTE: Do NOT include `categories` in the dependency array or cancel in-flight merges when `categories` or `parts.length` updates;
+  // cancelling a pending timer on state update was the root cause of localhost remaining stuck at 514 parts.
+  useEffect(() => {
+    if (isMergingGsxCatalogRef.current) return;
+    const needsGsxSeed = parts.length < GSX_CATALOG_MIN_EXPECTED_PARTS;
+    const needsCloudSupplement = parts.length < FULL_MERGED_CATALOG_MIN_PARTS && !hasAttemptedCloudPartsFetchRef.current;
+    if (!needsGsxSeed && !needsCloudSupplement) {
       return;
     }
 
-    hasAttemptedGsxSeedMergeRef.current = true;
-    let isMounted = true;
-    const runLazySeedMerge = async () => {
-      try {
-        const mod = await import('../data/gsxPartsCatalog.json');
-        if (!isMounted) return;
-        const gsxSeed = mod?.default || mod;
-        const seedParts = Array.isArray(gsxSeed?.parts) ? gsxSeed.parts : [];
-        if (seedParts.length === 0) return;
+    isMergingGsxCatalogRef.current = true;
 
-        setParts(prev => {
-          const normalizedSaved = (Array.isArray(prev) ? prev : []).map(p => {
-            const cleanPrice = parseFloat(p.stocking_price) > 0 ? parseFloat(p.stocking_price) : 99;
-            const { exchange_price: _exchangePrice, ...rest } = p;
-            const correctCatId = resolvePartCategoryId(p, categories);
-            return {
-              ...rest,
-              stocking_price: cleanPrice,
-              category_id: correctCatId
+    const hydrateAndMergeCatalog = async () => {
+      try {
+        const [idbParts, seedParts] = await Promise.all([
+          dbStorage.getItem('mdc_parts').catch(() => null),
+          loadGsxSeedParts()
+        ]);
+        if (isUnmountedRef.current) return;
+
+        const applyCatalogMerge = (extraCloudParts = []) => {
+          const activeCats = categoriesRef.current || DEFAULT_PART_CATEGORIES;
+          setParts(prev => {
+            const combinedExistingMap = new Map();
+            const ingestList = (list) => {
+              if (!Array.isArray(list)) return;
+              for (const item of list) {
+                const pn = String(item?.part_number || '').trim().toUpperCase();
+                if (!pn) continue;
+                const prior = combinedExistingMap.get(pn);
+                combinedExistingMap.set(pn, prior ? { ...prior, ...item, part_number: pn } : { ...item, part_number: pn });
+              }
             };
+
+            // Layer IndexedDB cache, current React state, and authoritative Supabase cloud rows
+            ingestList(idbParts);
+            ingestList(prev);
+            ingestList(cloudDbPartsCacheRef.current);
+            ingestList(extraCloudParts);
+
+            const normalizedExisting = Array.from(combinedExistingMap.values()).map(p => {
+              const rawPrice = parseFloat(p.stocking_price);
+              const { exchange_price: _exchangePrice, ...rest } = p;
+              const correctCatId = resolvePartCategoryId(p, activeCats);
+              return {
+                ...rest,
+                stocking_price: rawPrice > 0 ? rawPrice : 99,
+                category_id: correctCatId
+              };
+            });
+
+            const merged = mergeGsxPartsIntoCatalog(normalizedExisting, seedParts, activeCats).merged;
+            persistPartsCatalog(merged, dbStorage);
+            return merged;
           });
-          const merged = mergeGsxPartsIntoCatalog(normalizedSaved, seedParts, categories).merged;
-          try {
-            localStorage.setItem('mdc_parts', JSON.stringify(merged));
-            localStorage.setItem('mdc_gsx_seed_merged_v1', '1');
-          } catch (e) {}
-          dbStorage.setItem('mdc_parts', merged).catch(() => {});
-          return merged;
-        });
+        };
+
+        // 1. Immediately merge local/IndexedDB parts with the 4,640 GSX seed parts
+        if (seedParts.length > 0 || (Array.isArray(idbParts) && idbParts.length > parts.length)) {
+          applyCatalogMerge([]);
+        }
+
+        // 2. Ensure Supabase public.parts (514 rows, 71 non-overlapping with GSX CSV) are also merged for 4,711 parity
+        if (supabase && !hasAttemptedCloudPartsFetchRef.current) {
+          hasAttemptedCloudPartsFetchRef.current = true;
+          const { data: dbParts, error } = await supabase
+            .from('parts')
+            .select('*')
+            .order('part_number', { ascending: true });
+          if (isUnmountedRef.current) return;
+          if (!error && Array.isArray(dbParts) && dbParts.length > 0) {
+            cloudDbPartsCacheRef.current = dbParts;
+            applyCatalogMerge(dbParts);
+          }
+        }
       } catch (e) {
-        console.debug('[useCatalogAndSites] Lazy GSX seed merge note:', e?.message);
+        console.debug('[useCatalogAndSites] GSX catalog hydration note:', e?.message);
+      } finally {
+        isMergingGsxCatalogRef.current = false;
       }
     };
 
-    // If catalog is completely empty, load immediately (async); otherwise defer to idle so navigation stays instant
-    if (parts.length === 0) {
-      const timer = setTimeout(runLazySeedMerge, 50);
-      return () => { isMounted = false; clearTimeout(timer); };
-    }
-    const timer = setTimeout(runLazySeedMerge, 1800);
-    return () => { isMounted = false; clearTimeout(timer); };
-  }, [parts.length, categories]);
+    hydrateAndMergeCatalog();
+  }, [parts.length]);
 
   // Auto-heal part categories in the background (deferred so it never blocks initial render/navigation)
   const healedCatsSignatureRef = useRef('');
@@ -304,8 +358,7 @@ export function useCatalogAndSites({
 
       if (hasMismatches && !cancelled) {
         setParts(healed);
-        try { localStorage.setItem('mdc_parts', JSON.stringify(healed)); } catch (e) {}
-        dbStorage.setItem('mdc_parts', healed);
+        persistPartsCatalog(healed, dbStorage);
 
         if (supabase) {
           (async () => {
@@ -441,12 +494,7 @@ export function useCatalogAndSites({
         updated = [savedPartObj, ...prev];
       }
 
-      try {
-        localStorage.setItem('mdc_parts', JSON.stringify(updated));
-      } catch (e) {
-        console.warn('LocalStorage save error in savePart:', e);
-      }
-      dbStorage.setItem('mdc_parts', updated);
+      persistPartsCatalog(updated, dbStorage);
       return updated;
     });
 
@@ -483,8 +531,7 @@ export function useCatalogAndSites({
         console.error('Supabase part save error:', e.message);
         persistenceFailed = true;
         setParts(previousParts);
-        try { localStorage.setItem('mdc_parts', JSON.stringify(previousParts)); } catch (storageError) {}
-        dbStorage.setItem('mdc_parts', previousParts);
+        persistPartsCatalog(previousParts, dbStorage);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
         if (enqueueOfflineAction) {
           enqueueOfflineAction('PART_UPSERT', {
@@ -531,12 +578,14 @@ export function useCatalogAndSites({
       );
       if (match) deletedPart = match;
 
-      return prev.filter(p => {
+      const next = prev.filter(p => {
         if (targetId && p.id === targetId) return false;
         if (targetPN && targetDesc && p.part_number === targetPN && p.description === targetDesc) return false;
         if (targetPN && !targetDesc && !targetId && p.part_number === targetPN) return false;
         return true;
       });
+      persistPartsCatalog(next, dbStorage);
+      return next;
     });
 
     if (!deletedPart) {
@@ -560,8 +609,7 @@ export function useCatalogAndSites({
         console.error('Supabase part delete error:', e.message);
         persistenceFailed = true;
         setParts(previousParts);
-        try { localStorage.setItem('mdc_parts', JSON.stringify(previousParts)); } catch (storageError) {}
-        dbStorage.setItem('mdc_parts', previousParts);
+        persistPartsCatalog(previousParts, dbStorage);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
         if (enqueueOfflineAction) enqueueOfflineAction('PART_DELETE', { id: deletedPart.id, part_number: deletedPart.part_number });
         if (broadcastCloudEvent) broadcastCloudEvent('PART_DELETED', { partNumber: deletedPart.part_number, id: deletedPart.id });
@@ -885,8 +933,7 @@ export function useCatalogAndSites({
     const merged = mergeResult.merged;
 
     setParts(merged);
-    try { localStorage.setItem('mdc_parts', JSON.stringify(merged)); } catch (e) {}
-    try { await dbStorage.setItem('mdc_parts', merged); } catch (e) {}
+    persistPartsCatalog(merged, dbStorage);
 
     if (showToast) {
       showToast(

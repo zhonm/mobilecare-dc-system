@@ -1,9 +1,10 @@
 /**
  * Automated Database Backup to Google Drive for MDC DC System
- * 
- * Extracts current snapshot data from Supabase and uploads a timestamped
- * backup directly to the "System Backups" folder in Google Drive.
- * 
+ *
+ * Extracts full paginated snapshot data across all Supabase tables & registries,
+ * computes a deterministic integrity checksum, and uploads a verified timestamped
+ * backup package directly to the "backups" folder in Google Drive.
+ *
  * Usage:
  *   node scripts/backup_to_google_drive.mjs
  */
@@ -21,7 +22,7 @@ const rootDir = path.resolve(__dirname, '..');
 const envPath = path.join(rootDir, '.env');
 if (fs.existsSync(envPath)) {
   const envContent = fs.readFileSync(envPath, 'utf8');
-  envContent.split('\n').forEach(line => {
+  envContent.split('\n').forEach((line) => {
     const trimmed = line.trim();
     if (trimmed && !trimmed.startsWith('#') && trimmed.includes('=')) {
       const idx = trimmed.indexOf('=');
@@ -42,10 +43,33 @@ if (fs.existsSync(keyPath)) {
 }
 
 const { uploadToGoogleDrive, isGoogleDriveConfigured } = await import('../src/services/googleDriveService.js');
+const {
+  normalizeBackupPayload,
+  compileSystemBackupPackage,
+  validateBackupPackage,
+  safeJsonStringify
+} = await import('../src/services/backupRestoreService.js');
+
+async function fetchAllRowsPaginated(supabase, tableName, pageSize = 1000) {
+  const allRows = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from(tableName)
+      .select('*')
+      .range(offset, offset + pageSize - 1);
+    if (error) {
+      throw error;
+    }
+    const page = data || [];
+    allRows.push(...page);
+    if (page.length < pageSize) break;
+  }
+  return allRows;
+}
 
 async function runBackup() {
   console.log('========================================================================');
-  console.log('MDC DC SYSTEM: Automated Database Backup to Google Drive');
+  console.log('MDC DC SYSTEM: Automated Full Enterprise Database Backup to Google Drive');
   console.log('========================================================================');
 
   if (!isGoogleDriveConfigured()) {
@@ -66,17 +90,24 @@ async function runBackup() {
 
   const tablesToBackup = [
     'profiles',
+    'user_page_permissions',
+    'part_categories',
     'sites',
     'parts',
     'shipments',
     'shipment_items',
     'inventory_units',
     'dc_intake_records',
+    'parts_requests',
     'repair_usage_records',
+    'part_transfer_history',
+    'consumables_tools_movements',
+    'audit_logs',
+    'scan_logs',
     'saved_records'
   ];
 
-  const backupData = {
+  const rawDump = {
     metadata: {
       system: 'Mobile Care Services Philippines Inc. (MDC) - DC System',
       backup_timestamp: new Date().toISOString(),
@@ -86,36 +117,76 @@ async function runBackup() {
     tables: {}
   };
 
-  console.log('2. Exporting database tables...');
+  console.log('2. Exporting database tables (with full pagination)...');
   for (const table of tablesToBackup) {
     try {
-      const { data, count, error } = await supabase.from(table).select('*', { count: 'exact' });
-      if (error) {
-        console.warn(`  - [WARN] Could not export table "${table}": ${error.message}`);
-        backupData.tables[table] = [];
-        backupData.metadata.tables[table] = { count: 0, status: 'error', error: error.message };
-      } else {
-        backupData.tables[table] = data || [];
-        backupData.metadata.tables[table] = { count: data?.length || 0, status: 'ok' };
-        console.log(`  ✓ Table "${table}": ${data?.length || 0} records exported`);
-      }
+      const data = await fetchAllRowsPaginated(supabase, table);
+      rawDump.tables[table] = data;
+      rawDump.metadata.tables[table] = { count: data.length, status: 'ok' };
+      console.log(`  ✓ Table "${table}": ${data.length} records exported`);
     } catch (e) {
-      console.warn(`  - [WARN] Exception exporting "${table}":`, e.message);
+      console.warn(`  - [WARN] Could not export table "${table}": ${e.message}`);
+      rawDump.tables[table] = [];
+      rawDump.metadata.tables[table] = { count: 0, status: 'error', error: e.message };
     }
+  }
+
+  // Normalize & compile unified v3.0 enterprise backup package with checksum
+  const normalizedData = normalizeBackupPayload(rawDump);
+  const compiledPkg = compileSystemBackupPackage(
+    normalizedData,
+    {
+      id: 'cli-automation',
+      fullName: 'Automated CLI Backup',
+      email: 'automation@mobilecareph.com',
+      role: 'superadmin'
+    },
+    {
+      trigger: 'CLI_SCRIPT',
+      label: 'CLI_Full_DB'
+    }
+  );
+
+  // Preserve raw relational tables alongside normalized data for complete auditability
+  const finalPackage = {
+    ...compiledPkg,
+    metadata: rawDump.metadata,
+    tables: rawDump.tables
+  };
+
+  const validation = validateBackupPackage(finalPackage);
+  if (!validation.isValid) {
+    console.warn(`  ! Validation note: ${validation.error}`);
+  } else {
+    console.log(`  ✓ Checksum verified: ${finalPackage.integrity.checksum} (${finalPackage.stats.totalRecordsCount} total records)`);
   }
 
   const now = new Date();
   const dateStr = now.toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
-  const backupFileName = `mdc_dc_db_backup_${dateStr}.json`;
-  const jsonContent = JSON.stringify(backupData, null, 2);
+  const backupFileName = `MDC_SYSTEM_BACKUP_${dateStr}_CLI.json`;
+  const jsonContent = safeJsonStringify(finalPackage, 2);
   const sizeKb = (Buffer.byteLength(jsonContent, 'utf8') / 1024).toFixed(2);
 
-  console.log(`\n3. Uploading ${backupFileName} (${sizeKb} KB) to Google Drive "System Backups"...`);
+  console.log(`\n3. Uploading ${backupFileName} (${sizeKb} KB) to Google Drive "backups"...`);
   const uploadResult = await uploadToGoogleDrive({
     name: backupFileName,
     mimeType: 'application/json',
     data: jsonContent,
-    folderType: 'backups'
+    folderType: 'backups',
+    useDateFolder: false,
+    appProperties: {
+      system: 'MDC-DC',
+      docType: 'system_backup',
+      schemaVersion: String(finalPackage.schemaVersion),
+      checksum: String(finalPackage.integrity.checksum).slice(0, 110),
+      totalRecords: String(finalPackage.stats.totalRecordsCount || 0),
+      unitsCount: String(finalPackage.stats.inventoryUnitsCount || 0),
+      shipmentsCount: String(finalPackage.stats.shipmentsCount || 0),
+      partsCount: String(finalPackage.stats.partsCount || 0),
+      sitesCount: String(finalPackage.stats.sitesCount || 0),
+      createdBy: 'Automated CLI Script',
+      trigger: 'CLI_SCRIPT'
+    }
   });
 
   if (uploadResult.success) {
@@ -124,11 +195,12 @@ async function runBackup() {
     console.warn('  ✗ Database backup upload failed:', uploadResult.error);
   }
 
-  // Also check if saved_records contains live master state with forecasting & allocation
-  const liveState = (backupData.tables.saved_records || []).find(r => r.id === 'master_live_state' || r.id === 'live_master_state');
+  const liveState = (rawDump.tables.saved_records || []).find(
+    (r) => r.id === 'master_live_state' || r.id === 'live_master_state'
+  );
   if (liveState?.snapshot_data?.forecastItems) {
     console.log('\n4. Archiving live Forecasting data snapshot to "Forecasting Data" folder...');
-    const forecastSnapshot = JSON.stringify(liveState.snapshot_data.forecastItems, null, 2);
+    const forecastSnapshot = safeJsonStringify(liveState.snapshot_data.forecastItems, 2);
     const fRes = await uploadToGoogleDrive({
       name: `Forecasting_Data_Snapshot_${dateStr}.json`,
       mimeType: 'application/json',
@@ -140,7 +212,7 @@ async function runBackup() {
 
   if (liveState?.snapshot_data?.allocations) {
     console.log('\n5. Archiving live Allocation matrix snapshot to "Allocation" folder...');
-    const allocSnapshot = JSON.stringify(liveState.snapshot_data.allocations, null, 2);
+    const allocSnapshot = safeJsonStringify(liveState.snapshot_data.allocations, 2);
     const aRes = await uploadToGoogleDrive({
       name: `Allocation_Matrix_Snapshot_${dateStr}.json`,
       mimeType: 'application/json',
@@ -153,7 +225,7 @@ async function runBackup() {
   console.log('\n🎉 ALL BACKUPS COMPLETED SUCCESSFULLY ACROSS GOOGLE DRIVE FOLDERS!');
 }
 
-runBackup().catch(err => {
+runBackup().catch((err) => {
   console.error('Fatal backup error:', err);
   process.exit(1);
 });

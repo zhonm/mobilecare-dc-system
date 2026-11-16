@@ -311,11 +311,129 @@ export function importGsxCatalogFromCsv(csvText, options = {}) {
   };
 }
 
+export const GSX_CATALOG_MIN_EXPECTED_PARTS = 4640;
+export const FULL_MERGED_CATALOG_MIN_PARTS = 4700;
+
+let _cachedGsxSeedParts = null;
+let _gsxSeedLoadPromise = null;
+
+/**
+ * Lazily loads and caches the 4,640 current orderable GSX parts from `src/data/gsxPartsCatalog.json`.
+ * Subsequent calls resolve immediately from memory.
+ *
+ * @returns {Promise<Array<Object>>}
+ */
+export async function loadGsxSeedParts() {
+  if (Array.isArray(_cachedGsxSeedParts) && _cachedGsxSeedParts.length > 0) {
+    return _cachedGsxSeedParts;
+  }
+  if (_gsxSeedLoadPromise) {
+    return _gsxSeedLoadPromise;
+  }
+  _gsxSeedLoadPromise = import('../data/gsxPartsCatalog.json', { with: { type: 'json' } })
+    .then((mod) => {
+      const gsxSeed = mod?.default || mod;
+      const seedParts = Array.isArray(gsxSeed?.parts) ? gsxSeed.parts : [];
+      if (seedParts.length > 0) {
+        _cachedGsxSeedParts = seedParts;
+      }
+      return seedParts;
+    })
+    .catch((err) => {
+      console.debug('[gsxCatalogImporter] Failed to load gsxPartsCatalog.json:', err?.message);
+      return [];
+    })
+    .finally(() => {
+      _gsxSeedLoadPromise = null;
+    });
+  return _gsxSeedLoadPromise;
+}
+
+/**
+ * Returns the cached GSX seed parts array synchronously if already loaded, or null.
+ * @returns {Array<Object>|null}
+ */
+export function getCachedGsxSeedParts() {
+  return _cachedGsxSeedParts;
+}
+
+/**
+ * Safely persists the parts catalog to IndexedDB (`dbStorage`) and `localStorage`.
+ * If the full JSON (~1.97 MB) exceeds `localStorage` quota alongside inventory caches,
+ * falls back to a compact representation (~1.08 MB) and never leaves a stale 514-part
+ * entry in `localStorage`.
+ *
+ * @param {Array<Object>} partsArray
+ * @param {Object|null} dbStorageInstance
+ */
+export function persistPartsCatalog(partsArray, dbStorageInstance = null) {
+  if (!Array.isArray(partsArray)) return;
+
+  if (dbStorageInstance && typeof dbStorageInstance.setItem === 'function') {
+    dbStorageInstance.setItem('mdc_parts', partsArray, { skipLocalStorage: true }).catch(() => {});
+  }
+
+  if (typeof window === 'undefined' || !window.localStorage) return;
+
+  const markMergedFlag = () => {
+    if (partsArray.length >= GSX_CATALOG_MIN_EXPECTED_PARTS) {
+      try {
+        window.localStorage.setItem('mdc_gsx_seed_merged_v1', '1');
+      } catch {
+        // Ignore quota errors on flag
+      }
+    }
+  };
+
+  try {
+    const fullSerialized = JSON.stringify(partsArray);
+    try {
+      window.localStorage.setItem('mdc_parts', fullSerialized);
+      markMergedFlag();
+      return;
+    } catch {
+      window.localStorage.removeItem('mdc_parts');
+      window.localStorage.setItem('mdc_parts', fullSerialized);
+      markMergedFlag();
+      return;
+    }
+  } catch {
+    // Full JSON exceeded remaining 5MB localStorage quota; try compact representation
+    try {
+      const compactParts = partsArray.map((p) => ({
+        id: p.id,
+        part_number: p.part_number,
+        description: p.description,
+        iphone_model: p.iphone_model,
+        category_id: p.category_id,
+        stocking_price: p.stocking_price,
+        is_active: p.is_active ?? true,
+        ...(p.is_gsx_current ? { is_gsx_current: true } : {}),
+        ...(p.serialized_module ? { serialized_module: true } : {}),
+        ...(p.part_type && p.part_type !== 'Other' ? { part_type: p.part_type } : {})
+      }));
+      window.localStorage.removeItem('mdc_parts');
+      window.localStorage.setItem('mdc_parts', JSON.stringify(compactParts));
+      markMergedFlag();
+    } catch {
+      // Ensure stale partial (e.g. 514-part) localStorage cache is removed so IndexedDB + GSX seed govern
+      try {
+        window.localStorage.removeItem('mdc_parts');
+      } catch {
+        // Ignore
+      }
+      markMergedFlag();
+    }
+  }
+}
+
 /**
  * Idempotently merges imported GSX parts into an existing parts array.
  * - Preserves existing `id`, `safety_stock_pct`, and custom non-zero `stocking_price` / `category_id`
  *   so existing `inventory_units` and `po_items` foreign keys are NEVER broken.
  * - Re-running with the same catalog produces zero duplicates and zero unintended mutations.
+ * - Deterministically sorts the merged catalog by `part_number` ascending so `localhost` and production
+ *   always display identical ordering and counts.
  *
  * @param {Array<Object>} existingParts
  * @param {Array<Object>} gsxParts
@@ -323,6 +441,8 @@ export function importGsxCatalogFromCsv(csvText, options = {}) {
  * @returns {{ merged: Array<Object>, addedCount: number, updatedCount: number, unchangedCount: number }}
  */
 export function mergeGsxPartsIntoCatalog(existingParts = [], gsxParts = [], categories = DEFAULT_PART_CATEGORIES) {
+  const isGenericModel = (m) => !m || /^iphone(\s+model)?$/i.test(String(m).trim());
+
   const byPn = new Map();
   for (const existing of existingParts || []) {
     const pn = String(existing?.part_number || '').trim().toUpperCase();
@@ -353,10 +473,17 @@ export function mergeGsxPartsIntoCatalog(existingParts = [], gsxParts = [], cate
       continue;
     }
 
+    const existingPrice = parseFloat(existing.stocking_price);
+    const gsxPrice = parseFloat(gsx.stocking_price) || 0;
+    const isDummyFallbackPrice = existingPrice === 99 && !existing.is_gsx_current && gsxPrice > 0;
     const nextStockingPrice =
-      parseFloat(existing.stocking_price) > 0
-        ? parseFloat(existing.stocking_price)
-        : (parseFloat(gsx.stocking_price) || 0);
+      existingPrice > 0 && !isDummyFallbackPrice
+        ? existingPrice
+        : (gsxPrice > 0 ? gsxPrice : (existingPrice > 0 ? existingPrice : 0));
+
+    const resolvedModel = !isGenericModel(existing.iphone_model)
+      ? existing.iphone_model
+      : (gsx.iphone_model || existing.iphone_model || 'iPhone');
 
     const candidate = {
       ...existing,
@@ -364,8 +491,9 @@ export function mergeGsxPartsIntoCatalog(existingParts = [], gsxParts = [], cate
       id: existing.id || gsx.id,
       part_number: pn,
       description: existing.description || gsx.description,
-      iphone_model: existing.iphone_model || gsx.iphone_model,
+      iphone_model: resolvedModel,
       stocking_price: nextStockingPrice,
+      category_id: existing.category_id || resolvePartCategoryId({ ...existing, ...gsx }, categories),
       part_type: gsx.part_type || existing.part_type || 'Other',
       component_group: gsx.component_group ?? existing.component_group ?? null,
       serialized_module: gsx.serialized_module ?? existing.serialized_module ?? false,
@@ -383,6 +511,7 @@ export function mergeGsxPartsIntoCatalog(existingParts = [], gsxParts = [], cate
       existing.part_type !== candidate.part_type ||
       existing.is_gsx_current !== candidate.is_gsx_current ||
       existing.stocking_price !== candidate.stocking_price ||
+      existing.iphone_model !== candidate.iphone_model ||
       existing.serialized_module !== candidate.serialized_module ||
       JSON.stringify(existing.compatible_models || []) !== JSON.stringify(candidate.compatible_models || []);
 
@@ -394,8 +523,12 @@ export function mergeGsxPartsIntoCatalog(existingParts = [], gsxParts = [], cate
     byPn.set(pn, candidate);
   }
 
+  const merged = Array.from(byPn.values()).sort((a, b) =>
+    String(a.part_number || '').localeCompare(String(b.part_number || ''))
+  );
+
   return {
-    merged: Array.from(byPn.values()),
+    merged,
     addedCount,
     updatedCount,
     unchangedCount

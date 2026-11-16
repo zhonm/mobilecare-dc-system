@@ -1224,8 +1224,46 @@ export function useConsumablesAndTools({
     return { ...imported, catalog: nextCatalog, catalogItems: nextCatalog, orders: merged.orders };
   }, [resolveActor, ctCatalog, ctOrders, commitAndSyncState, showToast]);
 
+  const restoreCtState = useCallback((snapshot = {}) => {
+    const actor = resolveActor();
+    const nextState = {
+      catalog: Array.isArray(snapshot.catalog) ? snapshot.catalog : latestStateRef.current.catalog,
+      orders: Array.isArray(snapshot.orders)
+        ? normalizeLegacyCtOrders(snapshot.orders)
+        : latestStateRef.current.orders,
+      stock: Array.isArray(snapshot.stock) ? snapshot.stock : latestStateRef.current.stock,
+      toolAssets: Array.isArray(snapshot.toolAssets) ? snapshot.toolAssets : latestStateRef.current.toolAssets,
+      movements: Array.isArray(snapshot.movements)
+        ? stripSeedMovements(snapshot.movements)
+        : latestStateRef.current.movements,
+      shipments: Array.isArray(snapshot.shipments) ? snapshot.shipments : latestStateRef.current.shipments
+    };
+
+    latestStateRef.current = nextState;
+    setCtCatalog(nextState.catalog);
+    setCtOrders(nextState.orders);
+    setCtStock(nextState.stock);
+    setCtToolAssets(nextState.toolAssets);
+    setCtMovements(nextState.movements);
+    setCtShipments(nextState.shipments);
+
+    persistDual(LS_KEYS.catalog, nextState.catalog);
+    persistDual(LS_KEYS.orders, nextState.orders);
+    persistDual(LS_KEYS.stock, nextState.stock);
+    persistDual(LS_KEYS.toolAssets, nextState.toolAssets);
+    persistDual(LS_KEYS.movements, nextState.movements);
+    persistDual(LS_KEYS.shipments, nextState.shipments);
+
+    commitAndSyncState(nextState, {
+      reason: 'system_backup_restored',
+      actorName: actor.name
+    });
+    return { ok: true, state: nextState };
+  }, [resolveActor, commitAndSyncState]);
+
   return {
     ctCatalog: unifiedCatalog,
+    rawCtCatalog: ctCatalog,
     ctOrders,
     ctStock,
     ctToolAssets,
@@ -1233,6 +1271,7 @@ export function useConsumablesAndTools({
     ctShipments,
     ctSyncStatus,
     syncCtFromCloud,
+    restoreCtState,
     saveCtCatalogItem,
     addCtOrder,
     updateCtOrder,
