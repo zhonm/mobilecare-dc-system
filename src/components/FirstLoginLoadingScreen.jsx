@@ -12,7 +12,7 @@ import {
   Layers,
   Boxes
 } from 'lucide-react';
-import mobileCareLogo from '../assets/mobilecare_logo.png';
+import mobileCareLogo from '../assets/mdc logo-noBG.png';
 
 const SYNC_STEPS = [
   { id: 'auth', label: 'Authenticating cloud session & role permissions', icon: ShieldCheck },

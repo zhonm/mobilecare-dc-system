@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { Lock, ArrowRight, Eye, EyeOff, AlertCircle, RefreshCw, Mail, ShieldCheck, ArrowUp, Phone, Copy, Check, X, Clock, Smartphone } from 'lucide-react';
 import { Turnstile } from '@marsidev/react-turnstile';
-import mobileCareLogo from '../assets/mobilecare_logo.png';
+import mobileCareLogo from '../assets/mdc logo-noBG.png';
 import { loginRateLimiter } from '../utils/security';
 import { getStoredLogoutNotice, clearStoredLogoutNotice } from '../utils/autoLogoutManager';
 import MobileNoticeModal from './MobileNoticeModal';

@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { resolveSite } from '../utils/appContextHelpers';
-import mobileCareLogo from '../assets/mobilecareNoBGLogo.png';
+import mobileCareLogo from '../assets/mdc logo-noBG.png';
 import {
   Inbox,
   Wrench,

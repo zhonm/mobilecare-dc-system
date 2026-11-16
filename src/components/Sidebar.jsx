@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { resolveSite, isDraftSupersededOrFulfilled } from '../utils/appContextHelpers';
-import mobileCareLogo from '../assets/mobilecareNoBGLogo.png';
+import mobileCareLogo from '../assets/mdc logo-noBG.png';
 import {
   LayoutDashboard,
   UploadCloud,
