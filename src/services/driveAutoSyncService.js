@@ -145,7 +145,7 @@ export async function autoArchiveDatasetToDrive({
   forecastItems = [],
   allocations = [],
   sites = [],
-  periodLabel = 'October 2026',
+  periodLabel = `${new Date().toLocaleString('en-US', { month: 'long' })} ${new Date().getFullYear()}`,
   onProgress
 }) {
   try {
@@ -217,7 +217,7 @@ export async function autoArchiveDatasetToDrive({
  *   error?: string
  * }>}
  */
-export async function checkDriveDatasetStatusForPeriod(periodLabel = 'October 2026') {
+export async function checkDriveDatasetStatusForPeriod(periodLabel = `${new Date().toLocaleString('en-US', { month: 'long' })} ${new Date().getFullYear()}`) {
   const cleanPeriod = String(periodLabel || 'Current Period').trim();
   const normalizedPeriod = cleanPeriod.replace(/[\s/\\:]+/g, '_');
   const isConfigured = isGoogleDriveConfigured();

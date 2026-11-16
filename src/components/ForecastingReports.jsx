@@ -313,9 +313,9 @@ export default function ForecastingReports() {
     }
     const monthIdx = (activePeriod?.month && activePeriod.month >= 1 && activePeriod.month <= 12)
       ? (activePeriod.month - 1)
-      : (historyMonthCount < 12 ? historyMonthCount : 8);
-    const mName = ALL_MONTH_NAMES[monthIdx] || 'September';
-    return `${mName} ${activePeriod?.year || 2026}`;
+      : (historyMonthCount < 12 ? historyMonthCount : new Date().getMonth());
+    const mName = ALL_MONTH_NAMES[monthIdx] || new Date().toLocaleString('en-US', { month: 'long' });
+    return `${mName} ${activePeriod?.year || new Date().getFullYear()}`;
   })();
 
   // Dynamic Active Service Branches list (excluding Central DC)

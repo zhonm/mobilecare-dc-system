@@ -58,7 +58,7 @@ export default function ClearDataConfirmationModal({
   const totalAllocCount = allocations?.length || 0;
   const totalForecastUnits = (forecastItems || []).reduce((sum, it) => sum + (it.final_forecast || it.computed_forecast || 0), 0);
   const totalAllocUnits = (allocations || []).reduce((sum, it) => sum + (it.total_allocated_qty || 0), 0);
-  const currentPeriodLabel = activePeriod?.label || 'September 2026';
+  const currentPeriodLabel = activePeriod?.label || `${new Date().toLocaleString('en-US', { month: 'long' })} ${new Date().getFullYear()}`;
 
   // Check whether Forecasting and Allocation data for that month has been uploaded to Drive
   const fetchDriveStatus = useCallback(async () => {

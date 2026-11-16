@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { parseUniversalExcel, downloadSampleGsxFixablyCsv } from '../utils/excelParser';
 import ClearDataConfirmationModal from './ClearDataConfirmationModal';
@@ -67,29 +67,20 @@ export default function DataImport() {
     'July', 'August', 'September', 'October', 'November', 'December'
   ];
 
-  const [selectedMonth, setSelectedMonth] = useState(() => {
-    try {
-      const saved = localStorage.getItem('mdc_selected_ingestion_month');
-      return saved !== null ? saved : 'auto';
-    } catch {
-      return 'auto';
-    }
-  });
+  // Do not pre-select any month by default; require explicit manual selection
+  const [selectedMonth, setSelectedMonth] = useState('');
+  const monthSelectRef = useRef(null);
 
   const [previewTab, setPreviewTab] = useState('forecast'); // 'forecast' | 'allocation' | 'raw'
 
   const isSuperAdmin = currentUser?.role === 'superadmin';
 
-  // Sync selectedMonth when activePeriod changes from loading records or dataset
+  // Clear any legacy persisted month selection so the dropdown always starts on "Select a Month"
   useEffect(() => {
-    if (activePeriod?.month) {
-      const targetIdx = String(activePeriod.month - 1);
-      setSelectedMonth(targetIdx);
-      try {
-        localStorage.setItem('mdc_selected_ingestion_month', targetIdx);
-      } catch (e) {}
-    }
-  }, [activePeriod?.month]);
+    try {
+      localStorage.removeItem('mdc_selected_ingestion_month');
+    } catch (e) {}
+  }, []);
 
   // Determine if active operational data exists inside the system
   const hasExistingData = useMemo(() => {
@@ -122,6 +113,14 @@ export default function DataImport() {
     if (hasExistingData) {
       showToast('Upload Locked: Existing system data detected. You must delete current data first before uploading a new dataset.', 'error');
       if (e.target) e.target.value = '';
+      return;
+    }
+
+    const parsedMonthIdx = parseInt(selectedMonth, 10);
+    if (selectedMonth === '' || isNaN(parsedMonthIdx) || parsedMonthIdx < 0 || parsedMonthIdx > 11) {
+      showToast('Please select a Target Ingestion Month before uploading a dataset.', 'error');
+      if (e.target) e.target.value = '';
+      monthSelectRef.current?.focus();
       return;
     }
 
@@ -189,28 +188,25 @@ export default function DataImport() {
 
   const handleMonthChange = async (newMonth) => {
     setSelectedMonth(newMonth);
-    try {
-      localStorage.setItem('mdc_selected_ingestion_month', newMonth);
-    } catch (e) {}
 
-    // If user explicitly chooses a specific month, also update global activePeriod so Header and other views immediately match
-    if (newMonth !== 'auto') {
-      const mIdx = parseInt(newMonth, 10);
-      if (!isNaN(mIdx) && mIdx >= 0 && mIdx <= 11) {
+    const mIdx = parseInt(newMonth, 10);
+    if (!isNaN(mIdx) && mIdx >= 0 && mIdx <= 11) {
+      if (!hasExistingData) {
+        const targetYear = activePeriod?.year || new Date().getFullYear();
         const newPeriod = {
           month: mIdx + 1,
-          year: 2026,
-          label: `${MONTH_FULL_NAMES[mIdx]} 2026`
+          year: targetYear,
+          label: `${MONTH_FULL_NAMES[mIdx]} ${targetYear}`
         };
         setActivePeriod(newPeriod);
         try {
           localStorage.setItem('mdc_active_period', JSON.stringify(newPeriod));
         } catch (e) {}
       }
-    }
 
-    if (lastFileObj) {
-      await processFile(lastFileObj, filterScope, newMonth);
+      if (lastFileObj) {
+        await processFile(lastFileObj, filterScope, newMonth, allocationMode);
+      }
     }
   };
 
@@ -225,24 +221,21 @@ export default function DataImport() {
       return;
     }
 
+    const selectedIdx = parseInt(selectedMonth, 10);
+    if (selectedMonth === '' || isNaN(selectedIdx) || selectedIdx < 0 || selectedIdx > 11) {
+      showToast('Please select a Target Ingestion Month before applying the dataset.', 'error');
+      monthSelectRef.current?.focus();
+      return;
+    }
+
     const totalAllocUnits = parsedData.payload?.allocations?.reduce((s, a) => s + (a.total_allocated_qty || 0), 0) || parsedData.summary?.totalForecastedUnits || 0;
     const totalCost = parsedData.payload?.allocations?.reduce((s, a) => s + (a.total_stock_cost || 0), 0) || 0;
     const partsCount = parsedData.payload?.allocations?.length || parsedData.summary?.partsCount || 0;
     const sitesCount = parsedData.payload?.sites?.length || parsedData.summary?.sitesCount || 26;
 
-    let targetMonthName = 'September 2026';
-    let periodMonth = 9;
-    let periodYear = 2026;
-
-    if (selectedMonth !== 'auto') {
-      const idx = parseInt(selectedMonth, 10);
-      targetMonthName = `${MONTH_FULL_NAMES[idx]} 2026`;
-      periodMonth = idx + 1;
-    } else if (parsedData.detectedPeriod) {
-      targetMonthName = parsedData.detectedPeriod.label;
-      periodMonth = parsedData.detectedPeriod.month;
-      periodYear = parsedData.detectedPeriod.year;
-    }
+    const periodYear = parsedData.detectedPeriod?.year || activePeriod?.year || new Date().getFullYear();
+    const periodMonth = selectedIdx + 1;
+    const targetMonthName = `${MONTH_FULL_NAMES[selectedIdx]} ${periodYear}`;
 
     const auditMeta = {
       id: `log-import-${Date.now()}`,
@@ -324,6 +317,7 @@ export default function DataImport() {
     setParsedData(null);
     setFileName('');
     setLastFileObj(null);
+    setSelectedMonth('');
     setIsProcessing(false);
     setDriveModalState(prev => ({ ...prev, isOpen: false }));
     showToast('Master dataset applied and synced to Google Drive!', 'success');
@@ -422,13 +416,20 @@ export default function DataImport() {
               </strong>
             </div>
             <select
+              ref={monthSelectRef}
               className="form-select"
               value={selectedMonth}
               onChange={(e) => handleMonthChange(e.target.value)}
               disabled={!isSuperAdmin}
-              style={{ width: '100%', fontSize: '12.5px', padding: '7px 10px', background: '#fff' }}
+              style={{
+                width: '100%',
+                fontSize: '12.5px',
+                padding: '7px 10px',
+                background: '#fff',
+                color: selectedMonth === '' ? 'var(--text-muted)' : 'var(--text-main)'
+              }}
             >
-              <option value="auto">Auto-Detect from Dates in File</option>
+              <option value="" disabled>Select a Month</option>
               <option value="0">January (Jan)</option>
               <option value="1">February (Feb)</option>
               <option value="2">March (Mar)</option>
@@ -552,12 +553,30 @@ export default function DataImport() {
           </div>
         ) : (
           <div
+            onClick={() => {
+              if (isSuperAdmin && selectedMonth === '') {
+                showToast('Please select a Target Ingestion Month before uploading a dataset.', 'error');
+                monthSelectRef.current?.focus();
+              }
+            }}
+            onDragOver={(e) => {
+              if (isSuperAdmin && selectedMonth === '') {
+                e.preventDefault();
+              }
+            }}
+            onDrop={(e) => {
+              if (isSuperAdmin && selectedMonth === '') {
+                e.preventDefault();
+                showToast('Please select a Target Ingestion Month before uploading a dataset.', 'error');
+                monthSelectRef.current?.focus();
+              }
+            }}
             style={{
-              border: isSuperAdmin ? '2px dashed var(--primary)' : '2px dashed #cbd5e1',
+              border: isSuperAdmin ? (selectedMonth !== '' ? '2px dashed var(--primary)' : '2px dashed #f59e0b') : '2px dashed #cbd5e1',
               borderRadius: 'var(--radius-md)',
               padding: '40px 20px',
               textAlign: 'center',
-              background: isSuperAdmin ? 'var(--bg-primary)' : '#f8fafc',
+              background: isSuperAdmin ? (selectedMonth !== '' ? 'var(--bg-primary)' : '#fffbeb') : '#f8fafc',
               cursor: isSuperAdmin ? 'pointer' : 'not-allowed',
               position: 'relative',
               marginTop: '16px',
@@ -565,7 +584,7 @@ export default function DataImport() {
               opacity: isSuperAdmin ? 1 : 0.75
             }}
           >
-            {isSuperAdmin && (
+            {isSuperAdmin && selectedMonth !== '' && (
               <input
                 type="file"
                 accept=".xlsx, .xls, .csv"
@@ -587,26 +606,30 @@ export default function DataImport() {
                   width: '56px',
                   height: '56px',
                   borderRadius: '50%',
-                  background: isSuperAdmin ? 'var(--primary-light)' : '#f1f5f9',
+                  background: isSuperAdmin ? (selectedMonth !== '' ? 'var(--primary-light)' : '#fef3c7') : '#f1f5f9',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  color: isSuperAdmin ? 'var(--primary)' : '#94a3b8',
-                  boxShadow: isSuperAdmin ? '0 4px 12px rgba(2, 132, 199, 0.2)' : 'none'
+                  color: isSuperAdmin ? (selectedMonth !== '' ? 'var(--primary)' : '#d97706') : '#94a3b8',
+                  boxShadow: isSuperAdmin ? (selectedMonth !== '' ? '0 4px 12px rgba(2, 132, 199, 0.2)' : '0 4px 12px rgba(217, 119, 6, 0.15)') : 'none'
                 }}
               >
-                {!isSuperAdmin ? <Lock size={24} /> : isProcessing ? <RefreshCw className="animate-spin" size={26} /> : <UploadCloud size={26} />}
+                {!isSuperAdmin ? <Lock size={24} /> : selectedMonth === '' ? <Calendar size={26} /> : isProcessing ? <RefreshCw className="animate-spin" size={26} /> : <UploadCloud size={26} />}
               </div>
               <div>
-                <strong style={{ fontSize: '16px', color: isSuperAdmin ? 'var(--text-main)' : 'var(--text-muted)' }}>
+                <strong style={{ fontSize: '16px', color: isSuperAdmin ? (selectedMonth !== '' ? 'var(--text-main)' : '#92400e') : 'var(--text-muted)' }}>
                   {!isSuperAdmin
                     ? 'Upload Disabled — Super Admin Permission Required'
-                    : fileName ? fileName : 'Drag and drop your Fixably/GSX CSV or Excel file here or click to browse'}
+                    : selectedMonth === ''
+                      ? 'Please Select a Target Ingestion Month Above to Unlock Upload'
+                      : fileName ? fileName : 'Drag and drop your Fixably/GSX CSV or Excel file here or click to browse'}
                 </strong>
-                <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                <p style={{ fontSize: '12.5px', color: isSuperAdmin && selectedMonth === '' ? '#b45309' : 'var(--text-muted)', marginTop: '4px' }}>
                   {!isSuperAdmin
                     ? 'Please log in with a Superadmin account to upload new forecast and allocation masterlists.'
-                    : <>Accepts <strong>.CSV</strong> and <strong>.XLSX</strong> • Target: <strong>iPhone 13, 14, 15, 16, 17 Battery & Display</strong></>}
+                    : selectedMonth === ''
+                      ? 'Choose the desired reporting month from the "Target Ingestion Month" dropdown before uploading your dataset.'
+                      : <>Target Month: <strong>{MONTH_FULL_NAMES[parseInt(selectedMonth, 10)]} {activePeriod?.year || new Date().getFullYear()}</strong> • Accepts <strong>.CSV</strong> and <strong>.XLSX</strong></>}
                 </p>
               </div>
             </div>
@@ -722,7 +745,7 @@ export default function DataImport() {
                     <th>Part Number</th>
                     <th>Description</th>
                     <th style={{ textAlign: 'center' }}>Monthly Trend</th>
-                    <th style={{ textAlign: 'center' }}>{parsedData.detectedPeriod?.label ? `${parsedData.detectedPeriod.label.split(' ')[0]} Forecast` : (selectedMonth !== 'auto' ? `${MONTH_FULL_NAMES[parseInt(selectedMonth)]} Forecast` : 'Forecast Demand')}</th>
+                    <th style={{ textAlign: 'center' }}>{selectedMonth !== '' && !isNaN(parseInt(selectedMonth, 10)) ? `${MONTH_FULL_NAMES[parseInt(selectedMonth, 10)]} Forecast` : (parsedData.detectedPeriod?.label ? `${parsedData.detectedPeriod.label.split(' ')[0]} Forecast` : 'Forecast Demand')}</th>
                     <th style={{ textAlign: 'center' }}>Safety Stock (5%)</th>
                     <th style={{ textAlign: 'center', background: '#ecfdf5', color: '#065f46' }}>Recommended Order</th>
                   </tr>

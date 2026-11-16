@@ -502,13 +502,14 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
 
         const sheetNames = wb.SheetNames || [];
         const ALL_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-        let detectedMonthIdx = 8; // Default to September (Month index 8, 9th month)
+        const nowDt = new Date();
+        let detectedMonthIdx = nowDt.getMonth();
 
         const nameToSearch = `${file.name} ${sheetNames.join(' ')}`.toLowerCase();
 
         if (selectedMonth !== 'auto' && selectedMonth !== undefined && selectedMonth !== '') {
           const parsedM = parseInt(selectedMonth, 10);
-          detectedMonthIdx = Math.max(0, Math.min(11, isNaN(parsedM) ? 8 : parsedM));
+          detectedMonthIdx = Math.max(0, Math.min(11, isNaN(parsedM) ? nowDt.getMonth() : parsedM));
         } else {
           const fIdx = ALL_MONTH_NAMES.findIndex(m => nameToSearch.includes(m.toLowerCase()));
           if (fIdx >= 0) {
@@ -533,7 +534,7 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
         }
 
         const yearMatch = nameToSearch.match(/\b(202[0-9]|203[0-9])\b/);
-        const detectedYear = yearMatch ? parseInt(yearMatch[1], 10) : 2026;
+        const detectedYear = yearMatch ? parseInt(yearMatch[1], 10) : nowDt.getFullYear();
 
         const detectedPeriod = {
           month: detectedMonthIdx + 1,
@@ -1958,7 +1959,7 @@ export function processRawUsageSheet(
   });
 
   const yearMatch = fileName ? String(fileName).match(/\b(202[0-9]|203[0-9])\b/) : null;
-  const detectedYear = yearMatch ? parseInt(yearMatch[1], 10) : 2026;
+  const detectedYear = yearMatch ? parseInt(yearMatch[1], 10) : new Date().getFullYear();
 
   const detectedPeriod = {
     month: targetMonthIdx + 1,

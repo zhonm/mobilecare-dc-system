@@ -240,7 +240,7 @@ export function useForecastingAndAllocation({
             record_type: 'both',
             period_label: activePeriod?.label && !activePeriod.label.toLowerCase().includes('master')
               ? activePeriod.label
-              : `${['January','February','March','April','May','June','July','August','September','October','November','December'][(activePeriod?.month || 9) - 1]} ${activePeriod?.year || 2026}`,
+              : `${['January','February','March','April','May','June','July','August','September','October','November','December'][(activePeriod?.month || (new Date().getMonth() + 1)) - 1]} ${activePeriod?.year || new Date().getFullYear()}`,
             period_year: new Date().getFullYear(),
             period_month: new Date().getMonth() + 1,
             notes: `Live state recalculated via ${newModel} model`,
@@ -514,7 +514,7 @@ export function useForecastingAndAllocation({
             record_type: 'both',
             period_label: activePeriod?.label && !activePeriod.label.toLowerCase().includes('master')
               ? activePeriod.label
-              : `${['January','February','March','April','May','June','July','August','September','October','November','December'][(activePeriod?.month || 9) - 1]} ${activePeriod?.year || 2026}`,
+              : `${['January','February','March','April','May','June','July','August','September','October','November','December'][(activePeriod?.month || (new Date().getMonth() + 1)) - 1]} ${activePeriod?.year || new Date().getFullYear()}`,
             period_year: new Date().getFullYear(),
             period_month: new Date().getMonth() + 1,
             notes: 'Active live warehouse operational state',
@@ -704,7 +704,7 @@ export function useForecastingAndAllocation({
             record_type: 'both',
             period_label: activePeriod?.label && !activePeriod.label.toLowerCase().includes('master')
               ? activePeriod.label
-              : `${['January','February','March','April','May','June','July','August','September','October','November','December'][(activePeriod?.month || 9) - 1]} ${activePeriod?.year || 2026}`,
+              : `${['January','February','March','April','May','June','July','August','September','October','November','December'][(activePeriod?.month || (new Date().getMonth() + 1)) - 1]} ${activePeriod?.year || new Date().getFullYear()}`,
             period_year: new Date().getFullYear(),
             period_month: new Date().getMonth() + 1,
             notes: 'Active live warehouse operational state (site allocation updated)',
@@ -956,7 +956,7 @@ export function useForecastingAndAllocation({
             record_type: 'both',
             period_label: activePeriod?.label && !activePeriod.label.toLowerCase().includes('master')
               ? activePeriod.label
-              : `${['January','February','March','April','May','June','July','August','September','October','November','December'][(activePeriod?.month || 9) - 1]} ${activePeriod?.year || 2026}`,
+              : `${['January','February','March','April','May','June','July','August','September','October','November','December'][(activePeriod?.month || (new Date().getMonth() + 1)) - 1]} ${activePeriod?.year || new Date().getFullYear()}`,
             period_year: new Date().getFullYear(),
             period_month: new Date().getMonth() + 1,
             notes: 'Active live warehouse operational state (part allocation reset)',
@@ -1021,7 +1021,7 @@ export function useForecastingAndAllocation({
             record_type: 'both',
             period_label: activePeriod?.label && !activePeriod.label.toLowerCase().includes('master')
               ? activePeriod.label
-              : `${['January','February','March','April','May','June','July','August','September','October','November','December'][(activePeriod?.month || 9) - 1]} ${activePeriod?.year || 2026}`,
+              : `${['January','February','March','April','May','June','July','August','September','October','November','December'][(activePeriod?.month || (new Date().getMonth() + 1)) - 1]} ${activePeriod?.year || new Date().getFullYear()}`,
             period_year: new Date().getFullYear(),
             period_month: new Date().getMonth() + 1,
             notes: 'Active live warehouse operational state (all allocations reset)',

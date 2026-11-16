@@ -446,7 +446,7 @@ export default function AllocationMatrix() {
       showToast('No allocations available to export', 'warning');
       return;
     }
-    const currentPeriodLabel = activePeriod?.label || 'September 2026';
+    const currentPeriodLabel = activePeriod?.label || `${new Date().toLocaleString('en-US', { month: 'long' })} ${new Date().getFullYear()}`;
     exportAllocationToExcel(dataToExport, orderedServiceSites, currentPeriodLabel);
     const filterNote = isMatrixFiltered && scope !== 'all' ? ` (${dataToExport.length} filtered parts)` : ` (${dataToExport.length} parts)`;
     showToast(`Exported Comprehensive Allocation Workbook${filterNote} (${currentPeriodLabel}) to Excel`, 'success');
@@ -460,7 +460,7 @@ export default function AllocationMatrix() {
       showToast('No allocations available to export', 'warning');
       return;
     }
-    const currentPeriodLabel = activePeriod?.label || 'September 2026';
+    const currentPeriodLabel = activePeriod?.label || `${new Date().toLocaleString('en-US', { month: 'long' })} ${new Date().getFullYear()}`;
     exportAllocationToPDF(dataToExport, orderedServiceSites, currentPeriodLabel);
     const filterNote = isMatrixFiltered && scope !== 'all' ? ` (${dataToExport.length} filtered parts)` : ` (${dataToExport.length} parts)`;
     showToast(`Exported Allocation Matrix${filterNote} (${currentPeriodLabel}) to PDF`, 'success');
@@ -736,7 +736,7 @@ export default function AllocationMatrix() {
                     borderRadius: '999px'
                   }}
                 >
-                  {activePeriod?.label || 'September 2026'}
+                  {activePeriod?.label || `${new Date().toLocaleString('en-US', { month: 'long' })} ${new Date().getFullYear()}`}
                 </span>
               </div>
               <p className="matrix-header-subtitle">
@@ -1151,7 +1151,7 @@ export default function AllocationMatrix() {
                     Week {selectedWeekNum}
                   </div>
                   <div className="matrix-kpi-sub">
-                    {activePeriod?.label || 'September 2026'} Release
+                    {activePeriod?.label || `${new Date().toLocaleString('en-US', { month: 'long' })} ${new Date().getFullYear()}`} Release
                   </div>
                 </div>
               </div>

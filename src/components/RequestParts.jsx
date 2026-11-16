@@ -15,6 +15,8 @@ import MovementHistoryModal from './MovementHistoryModal';
 import FixablyInventoryDashboard from './FixablyInventoryDashboard';
 import { searchSerialsWithFullDetails } from '../utils/serialTracker';
 import { formatSiteOwner, normalizeSiteCode, resolvePartOwnershipDetails } from '../services/transferHistoryService';
+import dbStorage from '../utils/dbStorage';
+import { executeKgbConsumptionSync } from '../utils/kgbConsumptionEngine';
 import {
   Inbox,
   Send,
@@ -227,18 +229,19 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
   const isPmgUser = currentUser?.role === 'parts_management';
   const isAdmin = isSuperadmin || currentUser?.role === 'admin' || currentUser?.isSuperAdmin;
   const currentUserSiteRef = currentUser?.siteId || currentUser?.site_id || currentUser?.siteCode || currentUser?.site_code;
+  const isDcUser = isSuperadmin || isAdmin || currentUser?.siteId === 'site-dc' || currentUserSiteRef === 'site-dc' || currentUserSiteRef === 'DC-MDC' || currentUserSiteRef === 'DC';
 
-  // User site resolution (Superadmin is explicitly Central DC, not retail branches)
+  // User site resolution (Superadmin / DC users are explicitly Central DC, not retail branches)
   const userSiteObj = useMemo(() => {
-    if (isSuperadmin || currentUser?.siteId === 'site-dc') {
+    if (isDcUser) {
       return sites.find(s => s.id === 'site-dc' || s.code === 'DC-MDC' || s.code === 'DC') || { id: 'site-dc', code: 'DC-MDC', name: 'Distribution Center (DC)' };
     }
     return sites.find(s => s.id === currentUserSiteRef || s.code === currentUserSiteRef) || sites[0] || {};
-  }, [sites, currentUserSiteRef, isSuperadmin, currentUser?.siteId]);
+  }, [sites, currentUserSiteRef, isDcUser]);
 
   // Selected site filter
   const [selectedSiteId, setSelectedSiteId] = useState(() => {
-    if (!isSuperadmin && currentUserSiteRef) {
+    if (!isDcUser && currentUserSiteRef) {
       return currentUserSiteRef;
     }
     return 'ALL';
@@ -411,18 +414,89 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
   const [usedHistorySubTab, setUsedHistorySubTab] = useState('live_log'); // 'live_log' | 'aggregated_data'
   const [usedLogSearchQuery, setUsedLogSearchQuery] = useState('');
   const deferredUsedLogSearchQuery = useDeferredValue(usedLogSearchQuery);
+  const [usedLogCategoryFilter, setUsedLogCategoryFilter] = useState('ALL'); // 'ALL' | 'DISPLAY' | 'BATTERY' | 'OTHER'
+  const [usedLogStrategyFilter, setUsedLogStrategyFilter] = useState('ALL'); // 'ALL' | 'CIN' | 'CRBR'
+  const [usedLogMonthFilter, setUsedLogMonthFilter] = useState('ALL');
+  const [usedLogSortBy, setUsedLogSortBy] = useState('date_desc'); // 'date_desc' | 'date_asc' | 'site_asc' | 'part_asc' | 'order_desc'
   const [usedLogPage, setUsedLogPage] = useState(1);
   const [usedLogPageSize, setUsedLogPageSize] = useState(50);
   const [histUsagePage, setHistUsagePage] = useState(1);
-  const [histUsagePageSize] = useState(25);
+  const [histUsagePageSize, setHistUsagePageSize] = useState(50);
+  const [histSearchQuery, setHistSearchQuery] = useState('');
+  const [histCategoryFilter, setHistCategoryFilter] = useState('ALL');
+  const [histSortBy, setHistSortBy] = useState('total_desc');
+  const [isSyncingKgbHistory, setIsSyncingKgbHistory] = useState(false);
 
   useEffect(() => {
     setUsedLogPage(1);
-  }, [deferredUsedLogSearchQuery, selectedSiteId]);
+  }, [deferredUsedLogSearchQuery, selectedSiteId, usedLogCategoryFilter, usedLogStrategyFilter, usedLogMonthFilter, usedLogSortBy]);
 
   useEffect(() => {
     setHistUsagePage(1);
-  }, [selectedSiteId]);
+  }, [selectedSiteId, histSearchQuery, histCategoryFilter, histSortBy]);
+
+  // Auto-synchronize GSX KGB Used Report when opening Used Parts History if full dataset is not yet in state
+  const syncKgbReportToUsedHistory = useCallback(async ({ silent = true } = {}) => {
+    try {
+      const isCleared = typeof window !== 'undefined' && localStorage.getItem('mdc_is_cleared') === 'true';
+      if (isCleared) return;
+
+      const slotKgb = await dbStorage.getItem('mdc_uploaded_slot_kgb_used').catch(() => null);
+      let kgbContent = slotKgb?.content || null;
+      let kgbName = slotKgb?.name || 'GSX_KGB_Used_Report.csv';
+
+      if (!kgbContent && typeof fetch === 'function') {
+        try {
+          const resp = await fetch('/kgb_used.csv');
+          if (resp.ok) {
+            const text = await resp.text();
+            if (text && (text.includes('Product KGB') || text.includes('Order id'))) {
+              kgbContent = text;
+              kgbName = 'GSX_KGB_Used_Report.csv';
+            }
+          }
+        } catch (e) {}
+      }
+
+      if (!kgbContent) return;
+
+      if (!silent) setIsSyncingKgbHistory(true);
+      await executeKgbConsumptionSync({
+        fileOrContent: kgbContent,
+        fileName: kgbName,
+        inventoryUnits: inventoryUnits || [],
+        setInventoryUnits,
+        fixablySnapshot,
+        setFixablySnapshot,
+        repairUsageRecords: repairUsageRecords || [],
+        setRepairUsageRecords,
+        sites: sites || [],
+        parts: parts || [],
+        currentUser,
+        supabase: null,
+        broadcastCloudEvent,
+        showToast: silent ? null : showToast
+      });
+      if (!silent && showToast) {
+        showToast('Synchronized all used parts records from GSX KGB Used Report!', 'success');
+      }
+    } catch (err) {
+      console.warn('[UsedPartsHistory] Auto KGB sync note:', err);
+    } finally {
+      if (!silent) setIsSyncingKgbHistory(false);
+    }
+  }, [inventoryUnits, setInventoryUnits, fixablySnapshot, setFixablySnapshot, repairUsageRecords, setRepairUsageRecords, sites, parts, currentUser, broadcastCloudEvent, showToast]);
+
+  const hasAutoSyncedKgbRef = useRef(false);
+  useEffect(() => {
+    if (activeTab === 'usage_history' && !hasAutoSyncedKgbRef.current) {
+      const currentUsedCount = (repairUsageRecords || []).length;
+      if (currentUsedCount < 100) {
+        hasAutoSyncedKgbRef.current = true;
+        syncKgbReportToUsedHistory({ silent: true });
+      }
+    }
+  }, [activeTab, repairUsageRecords, syncKgbReportToUsedHistory]);
 
   // Table Search & Filter State
   const [priorityFilter, setPriorityFilter] = useState('ALL');
@@ -1523,26 +1597,110 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
     }
   };
 
-  // Live Used Units Log (status === 'used')
-  const liveUsedUnitsLog = useMemo(() => {
-    const siteFilter = selectedSiteId === 'ALL' && isSuperadmin ? 'ALL' : (selectedSiteId || userSiteObj.id || currentUser?.siteId);
-    const units = typeof getUsedUnitsLog === 'function' ? getUsedUnitsLog(siteFilter) : [];
-    if (!deferredUsedLogSearchQuery.trim()) return units;
-    const q = deferredUsedLogSearchQuery.toLowerCase().trim();
-    const tokens = q.split(/\s+/).filter(Boolean);
-    return units.filter(u => {
-      const pn = String(u.part_number || '').toLowerCase();
-      const desc = String(u.description || '').toLowerCase();
-      const sn = String(u.serial_number || '').toLowerCase();
-      const wo = String(u.work_order_number || u.repair_number || '').toLowerCase();
-      const tech = String(u.used_by_name || u.used_by || '').toLowerCase();
-      const notes = String(u.usage_notes || u.notes || '').toLowerCase();
-      const site = String(u.site_code || u.site_name || '').toLowerCase();
-      const kbb = String(u.product_kbb || '').toLowerCase();
-      const haystack = `${pn} ${desc} ${sn} ${wo} ${tech} ${notes} ${site} ${kbb}`;
-      return tokens.every(tok => haystack.includes(tok));
+  // Base Site-Filtered Used Units Log (before category, month, strategy, and text filters)
+  const baseSiteUsedUnitsLog = useMemo(() => {
+    const effectiveSite = (selectedSiteId === 'ALL' || (isDcUser && (!selectedSiteId || selectedSiteId === 'site-dc' || selectedSiteId === 'DC-MDC' || selectedSiteId === 'DC')))
+      ? 'ALL'
+      : (selectedSiteId || userSiteObj.id || currentUser?.siteId);
+    return typeof getUsedUnitsLog === 'function' ? getUsedUnitsLog(effectiveSite) : [];
+  }, [getUsedUnitsLog, selectedSiteId, isDcUser, userSiteObj, currentUser]);
+
+  // Distinct months available in baseSiteUsedUnitsLog for the month filter dropdown
+  const availableUsedMonths = useMemo(() => {
+    const monthSet = new Map();
+    baseSiteUsedUnitsLog.forEach(u => {
+      const dtStr = u.used_at || u.dateUsed || u.date_used;
+      if (!dtStr) return;
+      const ym = String(dtStr).substring(0, 7);
+      if (/^\d{4}-\d{2}$/.test(ym) && !monthSet.has(ym)) {
+        const [y, m] = ym.split('-');
+        const mNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+        const label = `${mNames[parseInt(m, 10) - 1] || m} ${y}`;
+        monthSet.set(ym, label);
+      }
     });
-  }, [getUsedUnitsLog, selectedSiteId, isSuperadmin, userSiteObj, currentUser, deferredUsedLogSearchQuery]);
+    return Array.from(monthSet.entries())
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([value, label]) => ({ value, label }));
+  }, [baseSiteUsedUnitsLog]);
+
+  // Live Used Units Log (filtered & sorted)
+  const liveUsedUnitsLog = useMemo(() => {
+    let list = baseSiteUsedUnitsLog;
+
+    // 1. Category Filter
+    if (usedLogCategoryFilter !== 'ALL') {
+      list = list.filter(u => {
+        const desc = String(u.description || u.part_number || '').toLowerCase();
+        const cat = String(u.part_category || '').toLowerCase();
+        const isDisp = desc.includes('disp') || cat.includes('disp');
+        const isBatt = desc.includes('batt') || cat.includes('batt');
+        if (usedLogCategoryFilter === 'DISPLAY') return isDisp;
+        if (usedLogCategoryFilter === 'BATTERY') return isBatt;
+        if (usedLogCategoryFilter === 'OTHER') return !isDisp && !isBatt;
+        return true;
+      });
+    }
+
+    // 2. Repair Strategy Filter
+    if (usedLogStrategyFilter !== 'ALL') {
+      list = list.filter(u => {
+        const notes = String(u.usage_notes || u.notes || '').toUpperCase();
+        if (usedLogStrategyFilter === 'CIN') return notes.includes('CIN');
+        if (usedLogStrategyFilter === 'CRBR') return notes.includes('CRBR');
+        return !notes.includes('CIN') && !notes.includes('CRBR');
+      });
+    }
+
+    // 3. Month Filter
+    if (usedLogMonthFilter !== 'ALL') {
+      list = list.filter(u => {
+        const dtStr = String(u.used_at || u.dateUsed || u.date_used || '');
+        return dtStr.startsWith(usedLogMonthFilter);
+      });
+    }
+
+    // 4. Multi-token Search Query
+    if (deferredUsedLogSearchQuery.trim()) {
+      const q = deferredUsedLogSearchQuery.toLowerCase().trim();
+      const tokens = q.split(/\s+/).filter(Boolean);
+      list = list.filter(u => {
+        const pn = String(u.part_number || '').toLowerCase();
+        const desc = String(u.description || '').toLowerCase();
+        const sn = String(u.serial_number || '').toLowerCase();
+        const wo = String(u.work_order_number || u.repair_number || '').toLowerCase();
+        const tech = String(u.used_by_name || u.used_by || '').toLowerCase();
+        const notes = String(u.usage_notes || u.notes || '').toLowerCase();
+        const site = String(u.site_code || u.site_name || u.raw_site_name || '').toLowerCase();
+        const kbb = String(u.product_kbb || '').toLowerCase();
+        const haystack = `${pn} ${desc} ${sn} ${wo} ${tech} ${notes} ${site} ${kbb}`;
+        return tokens.every(tok => haystack.includes(tok));
+      });
+    }
+
+    // 5. Sorting
+    if (usedLogSortBy !== 'date_desc') {
+      const sorted = [...list];
+      sorted.sort((a, b) => {
+        if (usedLogSortBy === 'date_asc') {
+          return (a._ts || 0) - (b._ts || 0);
+        }
+        if (usedLogSortBy === 'site_asc') {
+          return String(a.site_code || a.site_name || '').localeCompare(String(b.site_code || b.site_name || ''));
+        }
+        if (usedLogSortBy === 'part_asc') {
+          return String(a.part_number || '').localeCompare(String(b.part_number || ''));
+        }
+        if (usedLogSortBy === 'order_desc') {
+          return String(b.work_order_number || '').localeCompare(String(a.work_order_number || ''), undefined, { numeric: true });
+        }
+        return 0;
+      });
+      return sorted;
+    }
+
+    return list;
+  }, [baseSiteUsedUnitsLog, usedLogCategoryFilter, usedLogStrategyFilter, usedLogMonthFilter, deferredUsedLogSearchQuery, usedLogSortBy]);
 
   // Paginated live used units
   const totalUsedLogPages = Math.max(1, Math.ceil(liveUsedUnitsLog.length / usedLogPageSize));
@@ -1557,9 +1715,9 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
     let displayCount = 0;
     let batteryCount = 0;
     const skuSet = new Set();
-    const len = liveUsedUnitsLog.length;
+    const len = baseSiteUsedUnitsLog.length;
     for (let i = 0; i < len; i++) {
-      const u = liveUsedUnitsLog[i];
+      const u = baseSiteUsedUnitsLog[i];
       const desc = (u.description || u.part_number || '').toLowerCase();
       const cat = (u.part_category || '').toLowerCase();
       if (desc.includes('disp') || cat.includes('disp')) displayCount++;
@@ -1572,16 +1730,47 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
       batteryCount,
       uniqueSkus: skuSet.size
     };
-  }, [liveUsedUnitsLog]);
+  }, [baseSiteUsedUnitsLog]);
+
+  // Filtered & sorted historical usage summary
+  const filteredHistSummaryList = useMemo(() => {
+    let list = siteUsageData?.summaryList || [];
+    if (histCategoryFilter !== 'ALL') {
+      list = list.filter(it => {
+        const desc = String(it.description || it.partNumber || '').toLowerCase();
+        const isDisp = desc.includes('disp');
+        const isBatt = desc.includes('batt');
+        if (histCategoryFilter === 'DISPLAY') return isDisp;
+        if (histCategoryFilter === 'BATTERY') return isBatt;
+        if (histCategoryFilter === 'OTHER') return !isDisp && !isBatt;
+        return true;
+      });
+    }
+    if (histSearchQuery.trim()) {
+      const q = histSearchQuery.toLowerCase().trim();
+      list = list.filter(it =>
+        String(it.partNumber || '').toLowerCase().includes(q) ||
+        String(it.description || '').toLowerCase().includes(q)
+      );
+    }
+    if (histSortBy !== 'total_desc') {
+      list = [...list].sort((a, b) => {
+        if (histSortBy === 'total_asc') return a.totalUsed - b.totalUsed;
+        if (histSortBy === 'part_asc') return String(a.partNumber || '').localeCompare(String(b.partNumber || ''));
+        if (histSortBy === 'desc_asc') return String(a.description || '').localeCompare(String(b.description || ''));
+        return b.totalUsed - a.totalUsed;
+      });
+    }
+    return list;
+  }, [siteUsageData?.summaryList, histCategoryFilter, histSearchQuery, histSortBy]);
 
   // Paginated historical usage summary
-  const totalHistPages = Math.max(1, Math.ceil((siteUsageData?.summaryList?.length || 0) / histUsagePageSize));
+  const totalHistPages = Math.max(1, Math.ceil(filteredHistSummaryList.length / histUsagePageSize));
   const safeHistPage = Math.min(Math.max(1, histUsagePage), totalHistPages);
   const paginatedHistList = useMemo(() => {
-    const list = siteUsageData?.summaryList || [];
     const start = (safeHistPage - 1) * histUsagePageSize;
-    return list.slice(start, start + histUsagePageSize);
-  }, [siteUsageData?.summaryList, safeHistPage, histUsagePageSize]);
+    return filteredHistSummaryList.slice(start, start + histUsagePageSize);
+  }, [filteredHistSummaryList, safeHistPage, histUsagePageSize]);
 
   // Export Live Used Log to Excel
   const handleExportLiveUsedLogToXlsx = () => {
@@ -2281,7 +2470,11 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
             icon: Wrench,
             accent: '#10b981',
             iconBg: '#dcfce7',
-            iconColor: '#059669'
+            iconColor: '#059669',
+            onClick: () => {
+              setUsedHistorySubTab('live_log');
+              setUsedLogCategoryFilter('ALL');
+            }
           },
           {
             id: 'usage-displays',
@@ -2292,7 +2485,11 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
             icon: Smartphone,
             accent: '#0284c7',
             iconBg: '#e0f2fe',
-            iconColor: '#0284c7'
+            iconColor: '#0284c7',
+            onClick: () => {
+              setUsedHistorySubTab('live_log');
+              setUsedLogCategoryFilter(usedLogCategoryFilter === 'DISPLAY' ? 'ALL' : 'DISPLAY');
+            }
           },
           {
             id: 'usage-batteries',
@@ -2303,7 +2500,11 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
             icon: Zap,
             accent: '#f59e0b',
             iconBg: '#fef3c7',
-            iconColor: '#d97706'
+            iconColor: '#d97706',
+            onClick: () => {
+              setUsedHistorySubTab('live_log');
+              setUsedLogCategoryFilter(usedLogCategoryFilter === 'BATTERY' ? 'ALL' : 'BATTERY');
+            }
           },
           {
             id: 'usage-skus',
@@ -2314,7 +2515,8 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
             icon: Boxes,
             accent: '#8b5cf6',
             iconBg: '#ede9fe',
-            iconColor: '#7c3aed'
+            iconColor: '#7c3aed',
+            onClick: () => setUsedHistorySubTab('aggregated_data')
           }
         ];
       }
@@ -2394,7 +2596,8 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
     isSuperadmin,
     branchStockAgingMetrics,
     activeSiteObj.name,
-    handleTabChange
+    handleTabChange,
+    usedLogCategoryFilter
   ]);
 
   const HeaderIcon = viewHeaderMeta.icon;
@@ -2475,8 +2678,8 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-            {/* Site Picker (Superadmin Only) */}
-            {isSuperadmin && (
+            {/* Site Picker (Superadmin, DC Users, or Used Parts History) */}
+            {(isSuperadmin || isDcUser || activeTab === 'usage_history') && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Building2 size={14} color="#64748b" />
                 <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>Branch:</span>
@@ -2496,7 +2699,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                   }}
                 >
                   <option value="ALL">All Branch Sites (Master DC)</option>
-                  {sites.map(s => (
+                  {sites.filter(s => activeTab === 'usage_history' ? !s.is_dc : true).map(s => (
                     <option key={s.id} value={s.id}>
                       {s.code} - {s.name}
                     </option>
@@ -2519,11 +2722,14 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                 fontWeight: 600,
                 borderRadius: '6px'
               }}
-              onClick={() => {
+              onClick={async () => {
+                if (activeTab === 'usage_history') {
+                  await syncKgbReportToUsedHistory({ silent: false });
+                }
                 if (autoRefreshData) {
                   autoRefreshData({
                     force: true,
-                    silent: false,
+                    silent: activeTab === 'usage_history',
                     isManual: true,
                     reason: 'All stocks multi-site live refresh',
                     tables: ['parts_requests', 'parts', 'inventory_units', 'saved_records']
@@ -2532,11 +2738,11 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                   fetchPartsRequests({ force: true });
                 }
               }}
-              disabled={isLoadingPartsRequests || isAutoRefreshing}
-              title="Refresh live data from cloud database"
+              disabled={isLoadingPartsRequests || isAutoRefreshing || isSyncingKgbHistory}
+              title="Refresh live data and synchronize GSX KGB Used Report"
             >
-              <RefreshCw size={14} className={isLoadingPartsRequests || isAutoRefreshing ? 'spin' : ''} />
-              <span>{isLoadingPartsRequests ? 'Syncing…' : 'Sync'}</span>
+              <RefreshCw size={14} className={isLoadingPartsRequests || isAutoRefreshing || isSyncingKgbHistory ? 'spin' : ''} />
+              <span>{isLoadingPartsRequests || isSyncingKgbHistory ? 'Syncing…' : 'Sync'}</span>
             </button>
 
             {/* View-Specific Primary Actions */}
@@ -7439,16 +7645,16 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
           {/* Sub-View 1: Live Used Units Log */}
           {usedHistorySubTab === 'live_log' && (
             <div>
-              {/* Top Filter & Quick-Pagination Bar */}
-              <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', background: '#ffffff' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: '1 1 320px', maxWidth: '420px' }}>
-                  <div style={{ position: 'relative', width: '100%' }}>
+              {/* Top Filter, Sort & Quick-Pagination Bar */}
+              <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', background: '#ffffff' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 600px', flexWrap: 'wrap' }}>
+                  <div style={{ position: 'relative', flex: '1 1 260px', maxWidth: '340px' }}>
                     <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                     <input
                       type="text"
                       className="form-input"
                       style={{ paddingLeft: '32px', paddingRight: usedLogSearchQuery ? '28px' : '10px', fontSize: '12.5px', height: '34px' }}
-                      placeholder="Search serial, part #, repair #, technician..."
+                      placeholder="Search serial, part #, repair #, site, technician..."
                       value={usedLogSearchQuery}
                       onChange={(e) => setUsedLogSearchQuery(e.target.value)}
                     />
@@ -7463,6 +7669,80 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                       </button>
                     )}
                   </div>
+
+                  {/* Category Filter */}
+                  <select
+                    className="form-select"
+                    style={{ height: '34px', padding: '2px 24px 2px 10px', fontSize: '12px', width: 'auto', background: usedLogCategoryFilter !== 'ALL' ? '#f0f9ff' : '#ffffff', borderColor: usedLogCategoryFilter !== 'ALL' ? '#38bdf8' : '#cbd5e1', fontWeight: usedLogCategoryFilter !== 'ALL' ? 700 : 500 }}
+                    value={usedLogCategoryFilter}
+                    onChange={(e) => setUsedLogCategoryFilter(e.target.value)}
+                    title="Filter by Part Category"
+                  >
+                    <option value="ALL">All Categories</option>
+                    <option value="DISPLAY">Displays Only</option>
+                    <option value="BATTERY">Batteries Only</option>
+                    <option value="OTHER">Other Parts</option>
+                  </select>
+
+                  {/* Repair Strategy Filter */}
+                  <select
+                    className="form-select"
+                    style={{ height: '34px', padding: '2px 24px 2px 10px', fontSize: '12px', width: 'auto', background: usedLogStrategyFilter !== 'ALL' ? '#f0f9ff' : '#ffffff', borderColor: usedLogStrategyFilter !== 'ALL' ? '#38bdf8' : '#cbd5e1', fontWeight: usedLogStrategyFilter !== 'ALL' ? 700 : 500 }}
+                    value={usedLogStrategyFilter}
+                    onChange={(e) => setUsedLogStrategyFilter(e.target.value)}
+                    title="Filter by GSX Repair Strategy"
+                  >
+                    <option value="ALL">All Repair Types</option>
+                    <option value="CIN">CIN Repairs</option>
+                    <option value="CRBR">CRBR Repairs</option>
+                  </select>
+
+                  {/* Month Filter */}
+                  {availableUsedMonths.length > 0 && (
+                    <select
+                      className="form-select"
+                      style={{ height: '34px', padding: '2px 24px 2px 10px', fontSize: '12px', width: 'auto', background: usedLogMonthFilter !== 'ALL' ? '#f0f9ff' : '#ffffff', borderColor: usedLogMonthFilter !== 'ALL' ? '#38bdf8' : '#cbd5e1', fontWeight: usedLogMonthFilter !== 'ALL' ? 700 : 500 }}
+                      value={usedLogMonthFilter}
+                      onChange={(e) => setUsedLogMonthFilter(e.target.value)}
+                      title="Filter by Consumption Month"
+                    >
+                      <option value="ALL">All Months</option>
+                      {availableUsedMonths.map(m => (
+                        <option key={m.key} value={m.key}>{m.label}</option>
+                      ))}
+                    </select>
+                  )}
+
+                  {/* Sort Order */}
+                  <select
+                    className="form-select"
+                    style={{ height: '34px', padding: '2px 24px 2px 10px', fontSize: '12px', width: 'auto', background: '#ffffff' }}
+                    value={usedLogSortBy}
+                    onChange={(e) => setUsedLogSortBy(e.target.value)}
+                    title="Sort Consumed Parts"
+                  >
+                    <option value="date_desc">Sort: Newest First</option>
+                    <option value="date_asc">Sort: Oldest First</option>
+                    <option value="site_asc">Sort: Site (A–Z)</option>
+                    <option value="part_asc">Sort: Part Number (A–Z)</option>
+                    <option value="wo_desc">Sort: Work Order #</option>
+                  </select>
+
+                  {(usedLogSearchQuery || usedLogCategoryFilter !== 'ALL' || usedLogStrategyFilter !== 'ALL' || usedLogMonthFilter !== 'ALL') && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      style={{ height: '34px', fontSize: '11.5px', padding: '0 10px', color: '#dc2626', borderColor: '#fecaca', background: '#fef2f2' }}
+                      onClick={() => {
+                        setUsedLogSearchQuery('');
+                        setUsedLogCategoryFilter('ALL');
+                        setUsedLogStrategyFilter('ALL');
+                        setUsedLogMonthFilter('ALL');
+                      }}
+                    >
+                      Reset Filters
+                    </button>
+                  )}
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
@@ -7513,6 +7793,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                       <option value={50}>50</option>
                       <option value={100}>100</option>
                       <option value={250}>250</option>
+                      <option value={500}>500</option>
                     </select>
                   </div>
                 </div>
@@ -7697,6 +7978,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                         <option value={50}>50</option>
                         <option value={100}>100</option>
                         <option value={250}>250</option>
+                        <option value={500}>500</option>
                       </select>
                     </div>
                   </div>
@@ -7825,13 +8107,81 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
           {/* Sub-View 2: Aggregated Historical Datasets */}
           {usedHistorySubTab === 'aggregated_data' && (
             <div>
+              {/* Historical Summary Filter & Sort Bar */}
+              <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', background: '#ffffff' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 480px', flexWrap: 'wrap' }}>
+                  <div style={{ position: 'relative', flex: '1 1 240px', maxWidth: '320px' }}>
+                    <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                    <input
+                      type="text"
+                      className="form-input"
+                      style={{ paddingLeft: '32px', paddingRight: histSearchQuery ? '28px' : '10px', fontSize: '12.5px', height: '34px' }}
+                      placeholder="Search SKU part number or description..."
+                      value={histSearchQuery}
+                      onChange={(e) => {
+                        setHistSearchQuery(e.target.value);
+                        setHistUsagePage(1);
+                      }}
+                    />
+                    {histSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHistSearchQuery('');
+                          setHistUsagePage(1);
+                        }}
+                        style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: '#94a3b8' }}
+                        title="Clear search"
+                      >
+                        <X size={13} />
+                      </button>
+                    )}
+                  </div>
+
+                  <select
+                    className="form-select"
+                    style={{ height: '34px', padding: '2px 24px 2px 10px', fontSize: '12px', width: 'auto', background: histCategoryFilter !== 'ALL' ? '#f0f9ff' : '#ffffff', borderColor: histCategoryFilter !== 'ALL' ? '#38bdf8' : '#cbd5e1', fontWeight: histCategoryFilter !== 'ALL' ? 700 : 500 }}
+                    value={histCategoryFilter}
+                    onChange={(e) => {
+                      setHistCategoryFilter(e.target.value);
+                      setHistUsagePage(1);
+                    }}
+                  >
+                    <option value="ALL">All Categories</option>
+                    <option value="DISPLAY">Displays Only</option>
+                    <option value="BATTERY">Batteries Only</option>
+                    <option value="OTHER">Other Parts</option>
+                  </select>
+
+                  <select
+                    className="form-select"
+                    style={{ height: '34px', padding: '2px 24px 2px 10px', fontSize: '12px', width: 'auto', background: '#ffffff' }}
+                    value={histSortBy}
+                    onChange={(e) => {
+                      setHistSortBy(e.target.value);
+                      setHistUsagePage(1);
+                    }}
+                  >
+                    <option value="total_desc">Sort: Most Consumed</option>
+                    <option value="total_asc">Sort: Least Consumed</option>
+                    <option value="part_asc">Sort: Part Number (A–Z)</option>
+                  </select>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '12px', color: '#64748b' }}>
+                  <span>
+                    Showing <strong>{filteredHistSummaryList.length > 0 ? ((safeHistPage - 1) * histUsagePageSize + 1).toLocaleString() : 0}</strong> – <strong>{Math.min(safeHistPage * histUsagePageSize, filteredHistSummaryList.length).toLocaleString()}</strong> of <strong>{filteredHistSummaryList.length.toLocaleString()}</strong> SKUs
+                  </span>
+                </div>
+              </div>
+
               <div className="table-scroll-wrapper" style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-                {siteUsageData.summaryList.length === 0 ? (
+                {filteredHistSummaryList.length === 0 ? (
                   <div style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b' }}>
                     <TrendingDown size={36} color="#cbd5e1" style={{ marginBottom: '10px' }} />
                     <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '15px' }}>No Historical Usage Records</h4>
                     <p style={{ margin: 0, fontSize: '12.5px' }}>
-                      No repair usage records are associated with {activeSiteObj.name}.
+                      No matching repair usage records found for {activeSiteObj.name}.
                     </p>
                   </div>
                 ) : (
@@ -7858,7 +8208,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                           </td>
                           <td style={{ textAlign: 'center' }}>
                             <span className="badge badge-primary" style={{ fontSize: '12px', fontWeight: 800 }}>
-                              {item.totalUsed} used
+                              {item.totalUsed.toLocaleString()} used
                             </span>
                           </td>
                           <td>
@@ -7874,7 +8224,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                                     color: '#334155'
                                   }}
                                 >
-                                  {mo}: <strong>{cnt}</strong>
+                                  {mo}: <strong>{cnt.toLocaleString()}</strong>
                                 </span>
                               ))}
                             </div>
@@ -7897,7 +8247,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
               </div>
 
               {/* Historical Summary Pagination Footer */}
-              {siteUsageData.summaryList.length > histUsagePageSize && (
+              {filteredHistSummaryList.length > 0 && (
                 <div
                   style={{
                     padding: '12px 18px',
@@ -7910,13 +8260,42 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                     gap: '12px'
                   }}
                 >
-                  <div style={{ fontSize: '12px', color: '#475569' }}>
-                    Showing <strong>{((safeHistPage - 1) * histUsagePageSize + 1).toLocaleString()}</strong> to{' '}
-                    <strong>{Math.min(safeHistPage * histUsagePageSize, siteUsageData.summaryList.length).toLocaleString()}</strong> of{' '}
-                    <strong>{siteUsageData.summaryList.length.toLocaleString()}</strong> SKUs
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: '12px', color: '#475569' }}>
+                      Showing <strong>{((safeHistPage - 1) * histUsagePageSize + 1).toLocaleString()}</strong> to{' '}
+                      <strong>{Math.min(safeHistPage * histUsagePageSize, filteredHistSummaryList.length).toLocaleString()}</strong> of{' '}
+                      <strong>{filteredHistSummaryList.length.toLocaleString()}</strong> SKUs
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b' }}>
+                      <span>Rows per page:</span>
+                      <select
+                        className="form-select"
+                        style={{ height: '30px', padding: '2px 22px 2px 8px', fontSize: '12px', width: 'auto', background: '#ffffff' }}
+                        value={histUsagePageSize}
+                        onChange={(e) => {
+                          setHistUsagePageSize(Number(e.target.value));
+                          setHistUsagePage(1);
+                        }}
+                      >
+                        <option value={25}>25</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                        <option value={250}>250</option>
+                      </select>
+                    </div>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={safeHistPage === 1}
+                      onClick={() => setHistUsagePage(1)}
+                      style={{ height: '30px', padding: '0 8px', fontSize: '11px', display: 'inline-flex', alignItems: 'center' }}
+                      title="First Page"
+                    >
+                      <ChevronsLeft size={14} />
+                    </button>
                     <button
                       type="button"
                       className="btn btn-secondary btn-sm"
@@ -7927,9 +8306,37 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                       <ChevronLeft size={13} />
                       <span>Prev</span>
                     </button>
-                    <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155', padding: '0 8px' }}>
-                      {safeHistPage} / {totalHistPages}
-                    </span>
+                    {getPageNumbers(safeHistPage, totalHistPages).map((pNum, pIdx) => {
+                      if (pNum === '...') {
+                        return (
+                          <span key={`hist-dots-${pIdx}`} style={{ padding: '0 6px', fontSize: '12px', color: '#94a3b8' }}>
+                            …
+                          </span>
+                        );
+                      }
+                      const isActive = pNum === safeHistPage;
+                      return (
+                        <button
+                          key={pNum}
+                          type="button"
+                          onClick={() => setHistUsagePage(pNum)}
+                          style={{
+                            height: '30px',
+                            minWidth: '32px',
+                            padding: '0 8px',
+                            borderRadius: '6px',
+                            border: isActive ? '1px solid #0284c7' : '1px solid #cbd5e1',
+                            background: isActive ? '#0284c7' : '#ffffff',
+                            color: isActive ? '#ffffff' : '#334155',
+                            fontWeight: isActive ? 700 : 500,
+                            fontSize: '12px',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          {pNum}
+                        </button>
+                      );
+                    })}
                     <button
                       type="button"
                       className="btn btn-secondary btn-sm"
@@ -7939,6 +8346,16 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                     >
                       <span>Next</span>
                       <ChevronRight size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={safeHistPage === totalHistPages}
+                      onClick={() => setHistUsagePage(totalHistPages)}
+                      style={{ height: '30px', padding: '0 8px', fontSize: '11px', display: 'inline-flex', alignItems: 'center' }}
+                      title="Last Page"
+                    >
+                      <ChevronsRight size={14} />
                     </button>
                   </div>
                 </div>

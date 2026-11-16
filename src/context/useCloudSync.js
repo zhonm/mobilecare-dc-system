@@ -212,6 +212,7 @@ export function useCloudSync({
       'FIFO_AUDIT_CLEARED',
       'SITE_PARTS_CLEARED',
       'PART_MARKED_AS_USED',
+      'KGB_USED_REPORT_SYNCED',
       'PART_RESTORED_TO_STOCK',
       'PART_MARKED_OUTTAKE',
       'PART_OUTTAKE_RECORDED',
@@ -1846,11 +1847,29 @@ export function useCloudSync({
                 }
               } catch (e) {}
             } else {
-              const cloudPeriod = snap.activePeriod || (liveSnapshot.period_month && liveSnapshot.period_year ? {
+              const nowDt = new Date();
+              const defaultPeriodLabel = `${nowDt.toLocaleString('en-US', { month: 'long' })} ${nowDt.getFullYear()}`;
+              const rawCloudPeriod = snap.activePeriod || (liveSnapshot.period_month && liveSnapshot.period_year ? {
                 month: liveSnapshot.period_month,
                 year: liveSnapshot.period_year,
-                label: (liveSnapshot.period_label || 'September 2026').replace(' Live Master State', '').trim()
+                label: (liveSnapshot.period_label || defaultPeriodLabel).replace(' Live Master State', '').trim()
               } : null);
+
+              const cloudPeriod = (() => {
+                if (!rawCloudPeriod || typeof rawCloudPeriod !== 'object') return rawCloudPeriod;
+                if (typeof rawCloudPeriod.label === 'string') {
+                  const monthNames = [
+                    'january', 'february', 'march', 'april', 'may', 'june',
+                    'july', 'august', 'september', 'october', 'november', 'december'
+                  ];
+                  const lowerLbl = rawCloudPeriod.label.toLowerCase();
+                  const matchedIdx = monthNames.findIndex(m => lowerLbl.includes(m));
+                  if (matchedIdx !== -1 && rawCloudPeriod.month !== matchedIdx + 1) {
+                    return { ...rawCloudPeriod, month: matchedIdx + 1 };
+                  }
+                }
+                return rawCloudPeriod;
+              })();
 
               if (cloudPeriod && setActivePeriod) {
                 setActivePeriod(cloudPeriod);
@@ -2777,7 +2796,23 @@ export function useCloudSync({
         let idbCachedUnits = null;
         let idbBranchCachedUnits = null;
         try {
-          idbUsedReg = await dbStorage.getItem('mdc_master_used_parts_registry');
+          const [reg1, reg2, reg3] = await Promise.all([
+            dbStorage.getItem('mdc_master_used_parts_registry').catch(() => null),
+            dbStorage.getItem('master_used_parts_registry').catch(() => null),
+            dbStorage.getItem('mdc_repair_usage').catch(() => null)
+          ]);
+          const combinedRegMap = new Map();
+          [reg1, reg2, reg3].forEach(list => {
+            if (Array.isArray(list)) {
+              list.forEach(r => {
+                const s = String(r?.serial_number || '').trim().toUpperCase();
+                if (s) combinedRegMap.set(s, r);
+              });
+            }
+          });
+          if (combinedRegMap.size > 0) {
+            idbUsedReg = Array.from(combinedRegMap.values());
+          }
           idbCachedUnits = await dbStorage.getItem('mdc_inventory');
           idbBranchCachedUnits = await dbStorage.getItem('mdc_branch_inventory_units');
         } catch (e) {}
@@ -3229,7 +3264,7 @@ export function useCloudSync({
             : [];
 
           try {
-            const localUsedReg = JSON.parse(localStorage.getItem('mdc_master_used_parts_registry') || '[]');
+            const localUsedReg = JSON.parse(localStorage.getItem('mdc_master_used_parts_registry') || localStorage.getItem('master_used_parts_registry') || '[]');
             const combinedMap = new Map();
             usedRegistryRecords.forEach(r => { if (r?.serial_number) combinedMap.set(String(r.serial_number).toUpperCase(), r); });
             if (Array.isArray(localUsedReg)) localUsedReg.forEach(r => { if (r?.serial_number) combinedMap.set(String(r.serial_number).toUpperCase(), r); });
@@ -3237,6 +3272,14 @@ export function useCloudSync({
             usedRegistryRecords = Array.from(combinedMap.values());
             if (usedRegistryRecords.length > 0) {
               dbStorage.setItem('mdc_master_used_parts_registry', usedRegistryRecords);
+              dbStorage.setItem('master_used_parts_registry', usedRegistryRecords);
+              dbStorage.setItem('mdc_repair_usage', usedRegistryRecords);
+              if (setRepairUsageRecords) {
+                setRepairUsageRecords(prev => {
+                  if (Array.isArray(prev) && prev.length >= usedRegistryRecords.length) return prev;
+                  return usedRegistryRecords;
+                });
+              }
             }
           } catch (e) {}
 
@@ -3245,9 +3288,10 @@ export function useCloudSync({
             usedRegistryRecords.forEach(rec => {
               const s = String(rec.serial_number || '').trim().toUpperCase();
               if (s && !deletedSerialsSet.has(s)) {
-                // If serial was marked used before the latest Fixably upload, but is on-hand in the new upload, Fixably takes precedence
+                const isFromKgbReport = rec.source === 'GSX_KGB_USED_REPORT' || Boolean(rec.product_kgb) || String(rec.used_by || '').includes('GSX KGB');
+                // If manually marked used before the latest Fixably upload, and not from authoritative GSX KGB report, Fixably on-hand takes precedence
                 const recUsedMs = rec.used_at ? new Date(rec.used_at).getTime() : 0;
-                if (fixablyDocUpdatedMs && recUsedMs && recUsedMs <= fixablyDocUpdatedMs && map.has(s)) {
+                if (!isFromKgbReport && fixablyDocUpdatedMs && recUsedMs && recUsedMs <= fixablyDocUpdatedMs && map.has(s)) {
                   return;
                 }
                 if (map.has(s)) {
@@ -3258,6 +3302,9 @@ export function useCloudSync({
                       ...target,
                       status: 'used',
                       work_order_number: rec.work_order_number || target.work_order_number || null,
+                      repair_number: rec.repair_number || target.repair_number || null,
+                      product_kgb: rec.product_kgb || s,
+                      product_kbb: rec.product_kbb || target.product_kbb || null,
                       usage_notes: rec.usage_notes || target.usage_notes || null,
                       used_at: rec.used_at || target.used_at || null,
                       used_by_name: rec.used_by || rec.used_by_name || target.used_by_name || null,
@@ -3266,14 +3313,19 @@ export function useCloudSync({
                   }
                 } else {
                   map.set(s, {
+                    id: rec.id || `unit-kgb-${s}`,
                     serial_number: s,
                     part_number: rec.part_number,
                     description: rec.description,
                     current_site_id: rec.site_id,
                     site_code: rec.site_code,
                     site_name: rec.site_name,
+                    raw_site_name: rec.raw_site_name || rec.site_name,
                     status: 'used',
                     work_order_number: rec.work_order_number || null,
+                    repair_number: rec.repair_number || null,
+                    product_kgb: rec.product_kgb || s,
+                    product_kbb: rec.product_kbb || null,
                     usage_notes: rec.usage_notes || null,
                     used_at: rec.used_at || null,
                     used_by_name: rec.used_by || rec.used_by_name || null,
@@ -4013,17 +4065,36 @@ export function useCloudSync({
         dbStorage.setItem('mdc_inventory', updated);
         return updated;
       });
+    } else if (type === 'KGB_USED_REPORT_SYNCED' || (type === 'PART_MARKED_AS_USED' && !payload.unit && !payload.serialNumber && !payload.usage)) {
+      if (typeof autoRefreshData === 'function') {
+        autoRefreshData({
+          force: true,
+          silent: true,
+          reason: 'GSX KGB Used Report synchronized across network',
+          tables: ['inventory_units', 'saved_records']
+        });
+      }
     } else if (type === 'PART_MARKED_AS_USED' && (payload.unit || payload.serialNumber || payload.usage)) {
       const u = payload.unit;
       const cleanS = String(u?.serial_number || payload.serialNumber || payload.usage?.serial_number || '').trim().toUpperCase();
       if (cleanS) {
         if (payload.usage) {
-          try {
-            const localReg = JSON.parse(localStorage.getItem('mdc_master_used_parts_registry') || '[]');
-            const nextReg = [payload.usage, ...localReg.filter(r => String(r.serial_number || '').toUpperCase() !== cleanS)].slice(0, 500);
-            localStorage.setItem('mdc_master_used_parts_registry', JSON.stringify(nextReg));
-            dbStorage.setItem('mdc_master_used_parts_registry', nextReg);
-          } catch (e) {}
+          dbStorage.getItem('mdc_master_used_parts_registry')
+            .catch(() => null)
+            .then((idbReg) => {
+              try {
+                const existingReg = Array.isArray(idbReg)
+                  ? idbReg
+                  : JSON.parse(localStorage.getItem('mdc_master_used_parts_registry') || '[]');
+                const nextReg = [payload.usage, ...(Array.isArray(existingReg) ? existingReg : []).filter(r => String(r.serial_number || '').toUpperCase() !== cleanS)];
+                dbStorage.setItem('mdc_master_used_parts_registry', nextReg);
+                dbStorage.setItem('master_used_parts_registry', nextReg);
+                dbStorage.setItem('mdc_repair_usage', nextReg);
+                try {
+                  localStorage.setItem('mdc_master_used_parts_registry', JSON.stringify(nextReg.slice(0, 1000)));
+                } catch (e) {}
+              } catch (e) {}
+            });
         }
         setInventoryUnits(prev => {
           const exists = (prev || []).some(existing => String(existing.serial_number || '').trim().toUpperCase() === cleanS);
@@ -4465,7 +4536,7 @@ export function useCloudSync({
               'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED',
               'STOCK_TRANSFERS_UPDATED', 'STOCK_TRANSFERS_CLEARED', 'STOCK_UPDATED', 'UNITS_IMPORTED',
               'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'STOCK_UNITS_CLEARED', 'DRAFT_CLEARED',
-              'SITE_PARTS_CLEARED', 'PART_MARKED_AS_USED', 'PART_RESTORED_TO_STOCK', 'PART_MARKED_OUTTAKE',
+              'SITE_PARTS_CLEARED', 'PART_MARKED_AS_USED', 'KGB_USED_REPORT_SYNCED', 'PART_RESTORED_TO_STOCK', 'PART_MARKED_OUTTAKE',
               'PART_OUTTAKE_RECORDED', 'PART_TRANSFERRED', 'PART_TRANSFER_RECORDED'
             ].includes(ev.data.type);
 
@@ -4624,7 +4695,7 @@ export function useCloudSync({
               'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED',
               'STOCK_TRANSFERS_UPDATED', 'STOCK_TRANSFERS_CLEARED', 'STOCK_UPDATED', 'UNITS_IMPORTED',
               'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'STOCK_UNITS_CLEARED', 'DRAFT_CLEARED',
-              'SUPERVISOR_SETTINGS_UPDATED', 'SITE_PARTS_CLEARED', 'PART_MARKED_AS_USED', 'PART_RESTORED_TO_STOCK',
+              'SUPERVISOR_SETTINGS_UPDATED', 'SITE_PARTS_CLEARED', 'PART_MARKED_AS_USED', 'KGB_USED_REPORT_SYNCED', 'PART_RESTORED_TO_STOCK',
               'PART_MARKED_OUTTAKE', 'PART_OUTTAKE_RECORDED', 'PART_TRANSFERRED', 'PART_TRANSFER_RECORDED',
               'DC_MONITORING_UPDATED', 'DC_MONITORING_CLEARED'
             ].includes(bType);
@@ -4646,6 +4717,7 @@ export function useCloudSync({
             if (bType && bPayload && (
               bType === 'SITE_PARTS_CLEARED' || [
                 'PART_MARKED_AS_USED',
+                'KGB_USED_REPORT_SYNCED',
                 'PART_RESTORED_TO_STOCK',
                 'PART_MARKED_OUTTAKE',
                 'PART_OUTTAKE_RECORDED',
@@ -5032,7 +5104,13 @@ export function useCloudSync({
     const currentUploadLogs = overrideData?.uploadAuditLogs || uploadAuditLogs;
     const currentDeletionLogs = overrideData?.deletionAuditLogs || deletionAuditLogs;
     const currentMasterlistData = overrideData?.masterlistData || masterlistData;
-    const currentActivePeriod = overrideData?.activePeriod || activePeriod || { month: 9, year: 2026, label: 'September 2026' };
+    const nowDt = new Date();
+    const dynamicFallbackPeriod = {
+      month: nowDt.getMonth() + 1,
+      year: nowDt.getFullYear(),
+      label: `${nowDt.toLocaleString('en-US', { month: 'long' })} ${nowDt.getFullYear()}`
+    };
+    const currentActivePeriod = overrideData?.activePeriod || activePeriod || dynamicFallbackPeriod;
     const currentForecastingModel = overrideData?.forecastingModel || _forecastingModel || 'linear';
 
     // Safeguards for active cycles (only when NOT explicitly cleared)
@@ -5059,12 +5137,15 @@ export function useCloudSync({
 
       try {
         const resolvedActivePeriod = currentActivePeriod;
+        const fallbackYear = new Date().getFullYear();
+        const fallbackMonth = new Date().getMonth() + 1;
+        const fallbackLabel = `${new Date().toLocaleString('en-US', { month: 'long' })} ${fallbackYear}`;
         const liveSnapshotPayload = {
           id: LIVE_MASTER_RECORD_ID,
           record_type: 'both',
-          period_label: `${resolvedActivePeriod.label || 'September 2026'} Live Master State`,
-          period_year: resolvedActivePeriod.year || 2026,
-          period_month: resolvedActivePeriod.month || 9,
+          period_label: `${resolvedActivePeriod.label || fallbackLabel} Live Master State`,
+          period_year: resolvedActivePeriod.year || fallbackYear,
+          period_month: resolvedActivePeriod.month || fallbackMonth,
           saved_by_name: currentUser?.fullName || 'Superadmin User',
           saved_by_user_id: null,
           notes: 'Real-time multi-user synchronized Distribution Center state',
@@ -5101,9 +5182,9 @@ export function useCloudSync({
           const masterlistPayload = {
             id: 'master_masterlist_data_registry',
             record_type: 'masterlist_registry',
-            period_label: `${resolvedActivePeriod.label || 'September 2026'} Masterlist Data Registry`,
-            period_year: resolvedActivePeriod?.year || 2026,
-            period_month: resolvedActivePeriod?.month || 9,
+            period_label: `${resolvedActivePeriod.label || fallbackLabel} Masterlist Data Registry`,
+            period_year: resolvedActivePeriod?.year || fallbackYear,
+            period_month: resolvedActivePeriod?.month || fallbackMonth,
             notes: `Scanned masterlist intelligence (${currentMasterlistData.totalUnits} units, ${currentMasterlistData.totalDistinctParts} SKUs)`,
             saved_by_name: currentUser?.fullName || 'Superadmin User',
             snapshot_data: {
@@ -5124,8 +5205,8 @@ export function useCloudSync({
             id: 'master_upload_audit_logs_registry',
             record_type: 'upload_audit_registry',
             period_label: 'Master Upload Audit Registry',
-            period_year: activePeriod?.year || 2026,
-            period_month: activePeriod?.month || 9,
+            period_year: activePeriod?.year || fallbackYear,
+            period_month: activePeriod?.month || fallbackMonth,
             notes: `Master upload audit records (${currentUploadLogs.length} entries)`,
             saved_by_name: currentUser?.fullName || 'Superadmin User',
             snapshot_data: {
@@ -5141,8 +5222,8 @@ export function useCloudSync({
             id: 'master_deletion_audit_logs_registry',
             record_type: 'deletion_audit_registry',
             period_label: 'Master Deletion Audit Registry',
-            period_year: activePeriod?.year || 2026,
-            period_month: activePeriod?.month || 9,
+            period_year: activePeriod?.year || fallbackYear,
+            period_month: activePeriod?.month || fallbackMonth,
             notes: `Master deletion audit records (${currentDeletionLogs.length} entries)`,
             saved_by_name: currentUser?.fullName || 'Superadmin User',
             snapshot_data: {
@@ -5351,12 +5432,14 @@ export function useCloudSync({
       localStorage.removeItem('mdc_stock_transfer_metadata');
       localStorage.setItem('mdc_upload_audit_logs', '[]');
       localStorage.removeItem('mdc_masterlist_data');
+      localStorage.removeItem('mdc_selected_ingestion_month');
       localStorage.setItem('mdc_dc_intake_records', '[]');
     } catch (e) {
       console.warn('LocalStorage clear error:', e);
     }
 
     dbStorage.removeItem('mdc_masterlist_data');
+    dbStorage.removeItem('mdc_selected_ingestion_month');
     if (setMasterlistData) setMasterlistData(null);
     setActiveScannedMasterlist(null);
 
@@ -5478,9 +5561,10 @@ export function useCloudSync({
         localStorage.removeItem('mdc_is_cleared');
       } catch (e) {}
 
-      const resolvedTargetMonth = auditMeta?.target_month || dataset.detectedPeriod?.label || 'September 2026';
-      const resolvedPeriodMonth = auditMeta?.period_month || dataset.detectedPeriod?.month || 9;
-      const resolvedPeriodYear = auditMeta?.period_year || dataset.detectedPeriod?.year || 2026;
+      const nowDt = new Date();
+      const resolvedPeriodMonth = auditMeta?.period_month || dataset.detectedPeriod?.month || (nowDt.getMonth() + 1);
+      const resolvedPeriodYear = auditMeta?.period_year || dataset.detectedPeriod?.year || nowDt.getFullYear();
+      const resolvedTargetMonth = auditMeta?.target_month || dataset.detectedPeriod?.label || `${nowDt.toLocaleString('en-US', { month: 'long' })} ${resolvedPeriodYear}`;
 
       const newPeriod = {
         month: resolvedPeriodMonth,

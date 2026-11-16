@@ -22,6 +22,7 @@ import { queuedSavedRecordsUpsert, flushSavedRecordsQueue } from '../utils/saved
 import { cleanSerialNumberInput } from '../utils/serialTracker';
 import { resolveSiteFromSheetOrCode } from '../utils/excelParser';
 import { formatSiteOwner, normalizeSiteCode, recordPartTransfer } from '../services/transferHistoryService';
+import { parseKgbUsedFile, matchAndReconcileKgbConsumption, MASTER_USED_PARTS_REGISTRY_DOC_ID } from '../utils/kgbConsumptionEngine';
 
 export { getBasePoNumber, consolidatePurchaseOrdersList, consolidateDcIntakeRecordsList };
 
@@ -199,7 +200,7 @@ export function useInventory({
   const [repairUsageRecords, setRepairUsageRecords] = useState(() => {
     try {
       if (isExplicitlyCleared()) return [];
-      const saved = localStorage.getItem('mdc_repair_usage');
+      const saved = localStorage.getItem('mdc_repair_usage') || localStorage.getItem('mdc_master_used_parts_registry') || localStorage.getItem(MASTER_USED_PARTS_REGISTRY_DOC_ID);
       if (saved !== null) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) return parsed;
@@ -209,6 +210,104 @@ export function useInventory({
       return [];
     }
   });
+
+  // Automatically hydrate full repairUsageRecords and KGB consumed units from IndexedDB / GSX KGB Used Report slot
+  useEffect(() => {
+    let isMounted = true;
+    if (isExplicitlyCleared()) return () => { isMounted = false; };
+
+    (async () => {
+      try {
+        const [slotKgb, idbRepairUsage, idbMdcUsedReg, idbUsedReg] = await Promise.all([
+          dbStorage.getItem('mdc_uploaded_slot_kgb_used').catch(() => null),
+          dbStorage.getItem('mdc_repair_usage').catch(() => null),
+          dbStorage.getItem('mdc_master_used_parts_registry').catch(() => null),
+          dbStorage.getItem(MASTER_USED_PARTS_REGISTRY_DOC_ID).catch(() => null)
+        ]);
+
+        if (!isMounted || isExplicitlyCleared()) return;
+
+        // Combine any existing cached registry records from IndexedDB
+        const combinedMap = new Map();
+        [idbRepairUsage, idbMdcUsedReg, idbUsedReg].forEach(list => {
+          if (Array.isArray(list)) {
+            list.forEach(r => {
+              const s = String(r?.serial_number || '').trim().toUpperCase();
+              if (s) combinedMap.set(s, r);
+            });
+          }
+        });
+        let bestRegistry = Array.from(combinedMap.values());
+
+        // Check if uploaded Slot 2 (GSX KGB Used Report) has more rows than what is currently in bestRegistry
+        let kgbContentToParse = slotKgb?.content || null;
+        if (!kgbContentToParse && bestRegistry.length < 100 && typeof fetch === 'function') {
+          try {
+            const resp = await fetch('/kgb_used.csv');
+            if (resp.ok) {
+              const text = await resp.text();
+              if (text && (text.includes('Product KGB') || text.includes('Order id'))) {
+                kgbContentToParse = text;
+              }
+            }
+          } catch (e) {}
+        }
+
+        if (kgbContentToParse) {
+          const parsedKgb = await parseKgbUsedFile(kgbContentToParse);
+          if (parsedKgb.success && Array.isArray(parsedKgb.records) && parsedKgb.records.length > bestRegistry.length) {
+            const reconciled = matchAndReconcileKgbConsumption({
+              kgbRecords: parsedKgb.records,
+              inventoryUnits: [],
+              repairUsageRecords: [],
+              sites,
+              parts,
+              currentUser
+            });
+            if (Array.isArray(reconciled.newUsageEntries) && reconciled.newUsageEntries.length > 0) {
+              const mergedMap = new Map();
+              bestRegistry.forEach(r => {
+                const s = String(r?.serial_number || '').trim().toUpperCase();
+                if (s) mergedMap.set(s, r);
+              });
+              reconciled.newUsageEntries.forEach(r => {
+                const s = String(r?.serial_number || '').trim().toUpperCase();
+                if (s) mergedMap.set(s, r);
+              });
+              bestRegistry = Array.from(mergedMap.values());
+              await Promise.all([
+                dbStorage.setItem('mdc_master_used_parts_registry', bestRegistry).catch(() => {}),
+                dbStorage.setItem(MASTER_USED_PARTS_REGISTRY_DOC_ID, bestRegistry).catch(() => {}),
+                dbStorage.setItem('mdc_repair_usage', bestRegistry).catch(() => {})
+              ]);
+            }
+          }
+        }
+
+        if (!isMounted || isExplicitlyCleared()) return;
+
+        if (bestRegistry.length > 0) {
+          setRepairUsageRecords(prev => {
+            if (Array.isArray(prev) && prev.length >= bestRegistry.length) return prev;
+            const map = new Map();
+            bestRegistry.forEach(r => {
+              const s = String(r?.serial_number || '').trim().toUpperCase();
+              if (s) map.set(s, r);
+            });
+            (Array.isArray(prev) ? prev : []).forEach(r => {
+              const s = String(r?.serial_number || '').trim().toUpperCase();
+              if (s) map.set(s, r);
+            });
+            return Array.from(map.values());
+          });
+        }
+      } catch (err) {
+        console.debug('[useInventory] KGB / repair usage hydration note:', err);
+      }
+    })();
+
+    return () => { isMounted = false; };
+  }, [sites, parts, currentUser]);
 
   const [masterlistData, setMasterlistData] = useState(() => {
     try {

@@ -1258,21 +1258,66 @@ export function usePartsRequests({
     });
   }, [sites, currentUser, getStockOnHandForSite]);
 
-  // 6. Used Parts Aggregation Helper (Derives usage from repairUsageRecords)
-  const getUsedPartsForSite = useCallback((siteIdOrCode, targetPartPn = null) => {
-    const targetSite = sites.find(s => s.id === siteIdOrCode || s.code === siteIdOrCode);
-    const siteName = targetSite?.name?.toLowerCase() || '';
-    const siteCode = targetSite?.code?.toLowerCase() || '';
+  // Helper to normalize branch codes & aliases for accurate cross-module site matching
+  const normalizeCanonicalSiteCode = useCallback((rawCode) => {
+    const clean = String(rawCode || '').trim().toUpperCase().replace(/^(ASP|APP)\s+/, '');
+    if (clean === 'VER') return 'VN';
+    if (clean === 'MAG') return 'RM';
+    if (clean === 'DAV') return 'ABR';
+    if (clean === 'CBO') return 'COT';
+    return clean;
+  }, []);
 
-    const records = (repairUsageRecords || []).filter(r => {
-      if (siteIdOrCode && siteIdOrCode !== 'ALL') {
-        const rawSite = String(r.raw_site_name || r.site_name || '').toLowerCase();
-        const rSiteId = String(r.site_id || '').toLowerCase();
-        const matchesSite = (siteCode && rawSite.includes(siteCode)) ||
-                            (siteName && rawSite.includes(siteName)) ||
-                            (rSiteId && rSiteId === String(targetSite?.id || siteIdOrCode).toLowerCase());
-        if (!matchesSite) return false;
-      }
+  const doesUsedRecordMatchSite = useCallback((rec, siteIdOrCode) => {
+    if (!siteIdOrCode || siteIdOrCode === 'ALL' || siteIdOrCode === 'site-dc' || siteIdOrCode === 'DC-MDC' || siteIdOrCode === 'DC') {
+      return true;
+    }
+    const targetSite = sites.find(s => s.id === siteIdOrCode || s.code === siteIdOrCode || normalizeCanonicalSiteCode(s.code) === normalizeCanonicalSiteCode(siteIdOrCode));
+    const targetId = String(targetSite?.id || siteIdOrCode).toLowerCase();
+    const targetCanonicalCode = normalizeCanonicalSiteCode(targetSite?.code || siteIdOrCode);
+    const targetName = String(targetSite?.name || '').toLowerCase();
+
+    const recSiteId = String(rec.current_site_id || rec.site_id || rec.siteId || '').toLowerCase();
+    if (recSiteId && recSiteId === targetId) return true;
+
+    const recCode = normalizeCanonicalSiteCode(rec.site_code || rec.siteCode || '');
+    if (recCode && targetCanonicalCode && recCode === targetCanonicalCode) return true;
+
+    const rawSiteName = String(rec.raw_site_name || rec.site_name || '').toLowerCase();
+    if (targetName && rawSiteName && (rawSiteName.includes(targetName) || targetName.includes(rawSiteName))) return true;
+    if (targetCanonicalCode && rawSiteName.includes(targetCanonicalCode.toLowerCase())) return true;
+
+    return false;
+  }, [sites, normalizeCanonicalSiteCode]);
+
+  // 6. Used Parts Aggregation Helper (Derives usage from repairUsageRecords & used inventoryUnits)
+  const getUsedPartsForSite = useCallback((siteIdOrCode, targetPartPn = null) => {
+    const mergedBySerial = new Map();
+
+    (inventoryUnits || []).forEach(u => {
+      if (String(u.status || '').toLowerCase() !== 'used') return;
+      const s = String(u.serial_number || '').trim().toUpperCase();
+      const key = s || u.id || `inv-${Math.random()}`;
+      mergedBySerial.set(key, {
+        ...u,
+        part_number: u.part_number || u.raw_part_number,
+        description: u.description || u.raw_part_description,
+        site_id: u.current_site_id || u.site_id,
+        quantity: 1
+      });
+    });
+
+    (repairUsageRecords || []).forEach(r => {
+      const s = String(r.serial_number || '').trim().toUpperCase();
+      const key = s || r.id || `rep-${Math.random()}`;
+      const existing = mergedBySerial.get(key);
+      mergedBySerial.set(key, existing ? { ...existing, ...r } : r);
+    });
+
+    const allRecords = Array.from(mergedBySerial.values());
+
+    const records = allRecords.filter(r => {
+      if (!doesUsedRecordMatchSite(r, siteIdOrCode)) return false;
 
       if (targetPartPn) {
         const rawPn = String(r.raw_part_number || r.part_number || '').toUpperCase();
@@ -1286,7 +1331,18 @@ export function usePartsRequests({
     const usageByPartAndMonth = {};
     records.forEach(r => {
       const pn = String(r.raw_part_number || r.part_number || 'UNKNOWN').trim().toUpperCase();
-      const month = String(r.month_name || 'Unknown').trim();
+      let month = String(r.month_name || '').trim();
+      if (!month || month === 'Unknown' || month === 'Invalid Date') {
+        const dtStr = r.used_at || r.date_used || r.received_at;
+        if (dtStr) {
+          const parsedDt = new Date(dtStr);
+          if (!Number.isNaN(parsedDt.getTime())) {
+            month = parsedDt.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+          }
+        }
+      }
+      if (!month || month === 'Invalid Date') month = 'Unknown';
+
       const qty = parseInt(r.quantity, 10) || 1;
 
       if (!usageByPartAndMonth[pn]) {
@@ -1307,14 +1363,10 @@ export function usePartsRequests({
       usageByPartAndMonth,
       summaryList: Object.values(usageByPartAndMonth).sort((a, b) => b.totalUsed - a.totalUsed)
     };
-  }, [repairUsageRecords, sites]);
+  }, [inventoryUnits, repairUsageRecords, doesUsedRecordMatchSite]);
 
   // 7. Live Used Units Log (Returns units with status === 'used')
   const getUsedUnitsLog = useCallback((siteIdOrCode = 'ALL') => {
-    const targetSite = sites.find(s => s.id === siteIdOrCode || s.code === siteIdOrCode);
-    const siteId = targetSite?.id || siteIdOrCode;
-    const siteCode = targetSite?.code || siteIdOrCode;
-
     const unitsMap = new Map();
 
     // 1. In-memory inventory units marked as 'used'
@@ -1326,42 +1378,55 @@ export function usePartsRequests({
       else if (u.id) unitsMap.set(u.id, u);
     });
 
-    // 2. Also harvest consumed entries from repairUsageRecords (e.g. from uploaded GSX KGB reports)
+    // 2. Also harvest & enrich consumed entries from repairUsageRecords (e.g. from uploaded GSX KGB reports)
     (repairUsageRecords || []).forEach(r => {
       const s = String(r.serial_number || '').trim().toUpperCase();
       if (!s) return;
-      if (!unitsMap.has(s)) {
+      const existing = unitsMap.get(s);
+      if (!existing) {
         unitsMap.set(s, {
           id: r.id || `usage-${s}`,
           serial_number: s,
-          part_number: r.part_number,
-          description: r.description,
+          part_number: r.part_number || r.raw_part_number,
+          description: r.description || r.raw_part_description,
           current_site_id: r.site_id,
           site_code: r.site_code,
           site_name: r.site_name,
+          raw_site_name: r.raw_site_name || r.site_name,
           status: 'used',
           work_order_number: r.work_order_number,
           repair_number: r.repair_number,
           product_kbb: r.product_kbb,
           product_kgb: r.product_kgb || s,
-          used_at: r.used_at,
+          used_at: r.used_at || r.date_used,
+          date_used: r.date_used,
+          month_name: r.month_name,
           used_by_name: r.used_by || 'GSX KGB Ingestion',
           usage_notes: r.usage_notes || 'Consumed in repair'
+        });
+      } else {
+        unitsMap.set(s, {
+          ...existing,
+          part_number: existing.part_number || r.part_number || r.raw_part_number,
+          description: existing.description || r.description || r.raw_part_description,
+          current_site_id: existing.current_site_id || r.site_id,
+          site_code: existing.site_code || r.site_code,
+          site_name: existing.site_name || r.site_name,
+          raw_site_name: existing.raw_site_name || r.raw_site_name || r.site_name,
+          work_order_number: existing.work_order_number || r.work_order_number,
+          repair_number: existing.repair_number || r.repair_number,
+          product_kbb: existing.product_kbb || r.product_kbb,
+          product_kgb: existing.product_kgb || r.product_kgb || s,
+          used_at: existing.used_at || r.used_at || r.date_used,
+          used_by_name: existing.used_by_name || r.used_by || 'GSX KGB Ingestion',
+          usage_notes: existing.usage_notes || r.usage_notes || 'Consumed in repair'
         });
       }
     });
 
     const allUsed = Array.from(unitsMap.values());
 
-    let targetUnits = allUsed;
-    if (siteIdOrCode && siteIdOrCode !== 'ALL') {
-      targetUnits = allUsed.filter(u => {
-        const uSiteId = u.current_site_id || u.siteId;
-        const uSiteCode = u.site_code || u.siteCode;
-        return (uSiteId && (uSiteId === siteId || uSiteId === siteCode)) ||
-               (uSiteCode && (uSiteCode === siteCode || uSiteCode === siteId));
-      });
-    }
+    const targetUnits = allUsed.filter(u => doesUsedRecordMatchSite(u, siteIdOrCode));
 
     // High-performance timestamp parsing cached per record (avoids hundreds of thousands of Date allocations)
     const fastParseTime = (val) => {
@@ -1376,7 +1441,7 @@ export function usePartsRequests({
       const ta = a._ts !== undefined ? a._ts : (a._ts = fastParseTime(a.used_at || a.received_at));
       return tb - ta;
     });
-  }, [inventoryUnits, repairUsageRecords, sites]);
+  }, [inventoryUnits, repairUsageRecords, doesUsedRecordMatchSite]);
 
   // 8. Mark Unit as Used / Consumed in Repair
   const markUnitAsUsed = useCallback(async ({

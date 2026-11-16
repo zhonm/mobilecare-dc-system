@@ -195,6 +195,22 @@ export default function FixablyInventoryDashboard({
   useEffect(() => {
     partsRef.current = effectiveParts;
   }, [effectiveParts]);
+  const kgbSyncCtxRef = useRef({
+    inventoryUnits: effectiveInventoryUnits,
+    repairUsageRecords,
+    setInventoryUnits,
+    setRepairUsageRecords,
+    currentUser
+  });
+  useEffect(() => {
+    kgbSyncCtxRef.current = {
+      inventoryUnits: effectiveInventoryUnits,
+      repairUsageRecords,
+      setInventoryUnits,
+      setRepairUsageRecords,
+      currentUser
+    };
+  }, [effectiveInventoryUnits, repairUsageRecords, setInventoryUnits, setRepairUsageRecords, currentUser]);
 
   // Keep snapshotTimestampRef & snapshotHasTransfersRef synchronized whenever localSnapshot updates
   useEffect(() => {
@@ -572,6 +588,26 @@ export default function FixablyInventoryDashboard({
               stock_transfer: savedTransfer ? { ...savedTransfer, file: null, valid: true } : { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, updatedAt: null }
             });
           }
+
+          // Ensure uploaded Slot 2 (GSX KGB Used Report) is fully synchronized into Used Parts History
+          const kgbCtx = kgbSyncCtxRef.current;
+          if (savedKgb?.content && (!kgbCtx.repairUsageRecords || kgbCtx.repairUsageRecords.length < 100)) {
+            executeKgbConsumptionSync({
+              fileOrContent: savedKgb.content,
+              fileName: savedKgb.name || 'GSX_KGB_Used_Report.csv',
+              inventoryUnits: kgbCtx.inventoryUnits?.length ? kgbCtx.inventoryUnits : (await dbStorage.getItem('mdc_inventory').catch(() => []) || []),
+              setInventoryUnits: kgbCtx.setInventoryUnits,
+              fixablySnapshot: null,
+              setFixablySnapshot: null,
+              repairUsageRecords: kgbCtx.repairUsageRecords || [],
+              setRepairUsageRecords: kgbCtx.setRepairUsageRecords,
+              sites: sitesRef.current,
+              parts: partsRef.current,
+              currentUser: kgbCtx.currentUser,
+              supabase: null,
+              broadcastCloudEvent: null
+            }).catch(() => {});
+          }
         }
 
         // 2. Concurrently fetch local cached snapshot and Supabase Cloud record
@@ -681,7 +717,7 @@ export default function FixablyInventoryDashboard({
 
           // Sync transfers to transfer history ledger
           if (Array.isArray(hydrated.transfers) && hydrated.transfers.length > 0) {
-            syncFixablyTransfersToHistory(hydrated.transfers, currentUser?.email || 'Auto-Sync').catch(() => {});
+            syncFixablyTransfersToHistory(hydrated.transfers, kgbSyncCtxRef.current.currentUser?.email || 'Auto-Sync').catch(() => {});
           }
 
           if (shouldSyncWinningToCloud && supabase) {
@@ -712,7 +748,7 @@ export default function FixablyInventoryDashboard({
     return () => {
       isMounted = false;
     };
-  }, [computeSlotsSignature, persistFixablySnapshotLocally, syncSnapshotToCloud, setSnapshot, serializeSnapshotItemsToCsv, currentUser?.email]);
+  }, [computeSlotsSignature, persistFixablySnapshotLocally, syncSnapshotToCloud, setSnapshot, serializeSnapshotItemsToCsv]);
 
   // Real-time multi-user & cross-device snapshot synchronization listener
   useEffect(() => {
@@ -1010,6 +1046,7 @@ export default function FixablyInventoryDashboard({
       await syncSnapshotToCloud(reconciled);
 
       // Synchronize with application active stock (inventoryUnits) only when stock or transfer files are part of this intake
+      let latestBatchUnits = null;
       if (syncWithAppInventory && typeof batchAddScanInUnits === 'function' && (siteStockText || transferText)) {
         setParseProgress({ stage: 'Synchronizing transferred & active stock with application database...', percent: 90 });
         try {
@@ -1027,9 +1064,12 @@ export default function FixablyInventoryDashboard({
             status: 'VALID',
             lifecycle_status: 'in_stock'
           }));
-          await batchAddScanInUnits(validUnits, null, 'Branch Stock', 'ALL', 'ALL', 'All Retail Branches', {
+          const batchRes = await batchAddScanInUnits(validUnits, null, 'Branch Stock', 'ALL', 'ALL', 'All Retail Branches', {
             replaceExistingBranchStock: false
           });
+          if (Array.isArray(batchRes?.units) && batchRes.units.length > 0) {
+            latestBatchUnits = batchRes.units;
+          }
         } catch (syncErr) {
           console.warn('Batch add sync warning:', syncErr);
         }
@@ -1039,10 +1079,14 @@ export default function FixablyInventoryDashboard({
       if (kgbText) {
         setParseProgress({ stage: 'Synchronizing GSX KGB consumed parts with Parts Consumption Log...', percent: 92 });
         try {
+          const idbInv = await dbStorage.getItem('mdc_inventory').catch(() => []);
+          const baseInvUnits = latestBatchUnits
+            ? [...(Array.isArray(effectiveInventoryUnits) ? effectiveInventoryUnits : []), ...latestBatchUnits]
+            : (Array.isArray(idbInv) && idbInv.length > 0 ? idbInv : (effectiveInventoryUnits || []));
           await executeKgbConsumptionSync({
             fileOrContent: kgbText,
             fileName: slots.kgb_used?.name || 'GSX_KGB_Used_Report.csv',
-            inventoryUnits: effectiveInventoryUnits?.length ? effectiveInventoryUnits : (await dbStorage.getItem('mdc_inventory') || []),
+            inventoryUnits: baseInvUnits,
             setInventoryUnits,
             fixablySnapshot: reconciled,
             setFixablySnapshot: setSnapshot,

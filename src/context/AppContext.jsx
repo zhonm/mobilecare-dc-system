@@ -159,11 +159,32 @@ export function AppProvider({ children }) {
   const [toast, setToast] = useState(null);
 
   const [activePeriod, setActivePeriod] = useState(() => {
+    const monthNames = [
+      'january', 'february', 'march', 'april', 'may', 'june',
+      'july', 'august', 'september', 'october', 'november', 'december'
+    ];
+    const normalizePeriod = (p) => {
+      if (!p || typeof p !== 'object') return p;
+      if (typeof p.label === 'string') {
+        const lower = p.label.toLowerCase();
+        const idx = monthNames.findIndex(m => lower.includes(m));
+        if (idx !== -1 && p.month !== idx + 1) {
+          return { ...p, month: idx + 1 };
+        }
+      }
+      return p;
+    };
+    const now = new Date();
+    const defaultPeriod = {
+      month: now.getMonth() + 1,
+      year: now.getFullYear(),
+      label: `${now.toLocaleString('en-US', { month: 'long' })} ${now.getFullYear()}`
+    };
     try {
       const saved = localStorage.getItem('mdc_active_period');
-      return saved ? JSON.parse(saved) : { month: 9, year: 2026, label: 'September 2026' };
+      return saved ? normalizePeriod(JSON.parse(saved)) : defaultPeriod;
     } catch {
-      return { month: 9, year: 2026, label: 'September 2026' };
+      return defaultPeriod;
     }
   });
 

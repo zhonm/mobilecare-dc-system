@@ -467,7 +467,11 @@ export function compactInventoryUnit(u) {
     t: u.status || u.t || 'in_stock'
   };
   if (u.current_site_id && u.current_site_id !== u.i) c.i = u.current_site_id;
+  if (u.site_name) c.sn = u.site_name;
   if (u.work_order_number) c.w = u.work_order_number;
+  if (u.repair_number) c.rn = u.repair_number;
+  if (u.product_kbb) c.kb = u.product_kbb;
+  if (u.used_by_name || u.used_by) c.ub = u.used_by_name || u.used_by;
   if (u.used_at) c.u = u.used_at;
   if (u.usage_notes) c.n = u.usage_notes;
   if (u.notes && u.notes !== `${siteCode} Stock`) c.nt = u.notes;
@@ -502,9 +506,14 @@ export function expandInventoryUnit(c) {
     part_number: c.p || '',
     description: c.d || 'Service Replacement Part',
     site_code: siteCode,
+    site_name: c.sn || `${siteCode} Branch`,
     current_site_id: c.i || `site-${siteCode.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
     status: c.t || 'in_stock',
     work_order_number: c.w || null,
+    repair_number: c.rn || null,
+    product_kgb: s,
+    product_kbb: c.kb || null,
+    used_by_name: c.ub || null,
     used_at: c.u || null,
     usage_notes: c.n || null,
     notes: c.nt || `${siteCode} Stock`,
@@ -546,7 +555,15 @@ export function saveInventoryToLocalStorage(units) {
       const compacted = units.map(compactInventoryUnit).filter(Boolean);
       localStorage.setItem('mdc_inventory', JSON.stringify(compacted));
     } catch (e2) {
-      console.warn('[LocalStorage] Could not save inventory even in compact mode:', e2?.message);
+      try {
+        const activeAndRecent = units.filter(u => u && String(u.status || '').toLowerCase() !== 'used').concat(
+          units.filter(u => u && String(u.status || '').toLowerCase() === 'used').slice(0, 1500)
+        );
+        const compactedSubset = activeAndRecent.map(compactInventoryUnit).filter(Boolean);
+        localStorage.setItem('mdc_inventory', JSON.stringify(compactedSubset));
+      } catch (e3) {
+        console.warn('[LocalStorage] Could not save inventory even in compact mode:', e3?.message);
+      }
     }
   }
 }

@@ -122,8 +122,12 @@ export async function parseKgbUsedFile(fileOrContent) {
           productCode,
           issue: 'Missing Product KGB (Serial Number)'
         });
-        continue;
+        if (!orderId && !gsxRepairNumber && !productKbb) {
+          continue;
+        }
       }
+
+      const effectiveSerial = rawSerial || (productKbb ? `KBB-${productKbb}-${orderId || i}` : `WO-${orderId || gsxRepairNumber}-${productCode || i}`);
 
       // Parse normalized date
       const normalizedClosedDate = normalizeDate(rawClosedDate);
@@ -133,8 +137,8 @@ export async function parseKgbUsedFile(fileOrContent) {
 
       const record = {
         rowIndex: i + 1,
-        serialNumber: rawSerial,
-        productKgb: rawSerial,
+        serialNumber: effectiveSerial,
+        productKgb: rawSerial || effectiveSerial,
         productKbb,
         orderId,
         gsxRepairNumber,
@@ -153,7 +157,7 @@ export async function parseKgbUsedFile(fileOrContent) {
       };
 
       records.push(record);
-      seenSerials.add(rawSerial);
+      seenSerials.add(effectiveSerial);
     }
 
     return {
@@ -217,9 +221,16 @@ export function matchAndReconcileKgbConsumption({
     }
   });
 
+  const existingRepairRecordsBySerial = new Map();
   (repairUsageRecords || []).forEach(r => {
     const s = String(r.serial_number || '').trim().toUpperCase();
-    if (s) existingUsedSerialsSet.add(s);
+    if (s) {
+      existingRepairRecordsBySerial.set(s, r);
+      const unitInInv = inventoryUnitsMap.get(s);
+      if (!unitInInv || String(unitInInv.status || '').toLowerCase() === 'used') {
+        existingUsedSerialsSet.add(s);
+      }
+    }
   });
 
   // Map of parts catalog by part number
@@ -229,18 +240,38 @@ export function matchAndReconcileKgbConsumption({
     if (pn) partsMap.set(pn, p);
   });
 
-  // Map of sites by code and ID
+  // Map of sites by code, alias, name, and ID
   const sitesCodeMap = new Map();
   const sitesIdMap = new Map();
+  const sitesNameMap = new Map();
   (sites || []).forEach(s => {
-    if (s.code) sitesCodeMap.set(String(s.code).toUpperCase().replace(/^(ASP|APP)\s+/, ''), s);
+    if (s.code) {
+      const upperCode = String(s.code).toUpperCase().trim();
+      const cleanCode = upperCode.replace(/^(ASP|APP)\s+/, '');
+      sitesCodeMap.set(upperCode, s);
+      sitesCodeMap.set(cleanCode, s);
+      if (cleanCode === 'VN') sitesCodeMap.set('VER', s);
+      if (cleanCode === 'VER') sitesCodeMap.set('VN', s);
+      if (cleanCode === 'RM') sitesCodeMap.set('MAG', s);
+      if (cleanCode === 'MAG') sitesCodeMap.set('RM', s);
+      if (cleanCode === 'ABR') sitesCodeMap.set('DAV', s);
+      if (cleanCode === 'DAV') sitesCodeMap.set('ABR', s);
+      if (cleanCode === 'COT') sitesCodeMap.set('CBO', s);
+      if (cleanCode === 'CBO') sitesCodeMap.set('COT', s);
+    }
     if (s.id) sitesIdMap.set(s.id, s);
+    if (s.name) sitesNameMap.set(String(s.name).toUpperCase().trim(), s);
   });
 
   const resolveSiteInfo = (rawLocation, fallbackSiteCode = 'BRANCH') => {
     const norm = normalizeSite(rawLocation);
     const cleanCode = norm.code ? norm.code.toUpperCase().replace(/^(ASP|APP)\s+/, '') : '';
-    const matchedSite = sitesCodeMap.get(cleanCode) || sitesCodeMap.get(fallbackSiteCode);
+    const cleanFallback = fallbackSiteCode ? String(fallbackSiteCode).toUpperCase().replace(/^(ASP|APP)\s+/, '') : '';
+    const matchedSite =
+      sitesCodeMap.get(cleanCode) ||
+      sitesCodeMap.get(cleanFallback) ||
+      (norm.name ? sitesNameMap.get(String(norm.name).toUpperCase().trim()) : null) ||
+      (rawLocation ? sitesNameMap.get(String(rawLocation).toUpperCase().trim()) : null);
     return {
       siteId: matchedSite?.id || null,
       siteCode: matchedSite?.code || norm.code || fallbackSiteCode,
@@ -272,16 +303,6 @@ export function matchAndReconcileKgbConsumption({
     }
     processedKgbSerials.add(serial);
 
-    // Pre-existing check: already consumed in system
-    if (existingUsedSerialsSet.has(serial)) {
-      duplicatesSkipped.push({
-        serialNumber: serial,
-        reason: 'Already recorded as used in Parts Consumption Log',
-        orderId: kgbItem.orderId
-      });
-      continue;
-    }
-
     const siteInfo = resolveSiteInfo(kgbItem.rawLocation, kgbItem.siteCode);
     const catalogPart = partsMap.get(kgbItem.partNumber) || partsMap.get(kgbItem.productCode);
     const effectivePartDesc = kgbItem.productDescription || catalogPart?.description || 'Apple Replacement Part';
@@ -291,9 +312,46 @@ export function matchAndReconcileKgbConsumption({
       ? (kgbItem.repairClosedDate.includes('T') ? kgbItem.repairClosedDate : `${kgbItem.repairClosedDate}T12:00:00.000Z`)
       : nowIso;
     const dateUsedString = effectiveUsedDate.substring(0, 10);
-
     const cleanWorkOrder = kgbItem.orderId || kgbItem.gsxRepairNumber || 'N/A';
     const cleanNotes = `Consumed in GSX ${kgbItem.repairStrategy || 'CIN'} repair | Closed: ${dateUsedString} | Order #${kgbItem.orderId || 'N/A'}${kgbItem.productKbb ? ` | KBB: ${kgbItem.productKbb}` : ''}`;
+
+    // Pre-existing check: already consumed in system
+    if (existingUsedSerialsSet.has(serial)) {
+      duplicatesSkipped.push({
+        serialNumber: serial,
+        reason: 'Already recorded as used in Parts Consumption Log',
+        orderId: kgbItem.orderId
+      });
+      // Ensure updatedUnitsMap still retains the consumed unit if it came from repairUsageRecords
+      if (!updatedUnitsMap.has(serial)) {
+        const prevRec = existingRepairRecordsBySerial.get(serial);
+        updatedUnitsMap.set(serial, {
+          id: prevRec?.id || `unit-kgb-${serial}`,
+          serial_number: serial,
+          raw_serial: serial,
+          part_number: prevRec?.part_number || effectivePartPn,
+          description: prevRec?.description || effectivePartDesc,
+          current_site_id: prevRec?.site_id || siteInfo.siteId,
+          site_code: prevRec?.site_code || siteInfo.siteCode,
+          site_name: prevRec?.site_name || siteInfo.siteName,
+          status: 'used',
+          lifecycle_status: 'used',
+          used_at: prevRec?.used_at || effectiveUsedDate,
+          dateUsed: prevRec?.date_used || dateUsedString,
+          work_order_number: prevRec?.work_order_number || cleanWorkOrder,
+          repair_number: prevRec?.repair_number || kgbItem.gsxRepairNumber || null,
+          product_kgb: serial,
+          product_kbb: prevRec?.product_kbb || kgbItem.productKbb || null,
+          used_by_id: prevRec?.used_by_id || uploaderId,
+          used_by_name: prevRec?.used_by || `GSX KGB Import (${uploaderName})`,
+          usage_notes: prevRec?.usage_notes || cleanNotes,
+          notes: prevRec?.usage_notes || cleanNotes,
+          created_at: nowIso,
+          updated_at: nowIso
+        });
+      }
+      continue;
+    }
 
     const metaPayload = {
       lifecycle_status: 'used',
@@ -586,28 +644,47 @@ export async function executeKgbConsumptionSync({
   } catch (e) {}
   await dbStorage.setItem('mdc_inventory', updatedInventoryUnits);
 
-  // B. Master Used Parts Registry
+  // B. Master Used Parts Registry (persist under both canonical keys for full cross-module parity)
   let existingUsedReg = [];
   try {
-    const raw = localStorage.getItem(MASTER_USED_PARTS_REGISTRY_DOC_ID);
+    const raw = localStorage.getItem('mdc_master_used_parts_registry') || localStorage.getItem(MASTER_USED_PARTS_REGISTRY_DOC_ID);
     if (raw) existingUsedReg = JSON.parse(raw);
   } catch (e) {}
   if (!Array.isArray(existingUsedReg) || existingUsedReg.length === 0) {
     try {
-      const idbReg = await dbStorage.getItem(MASTER_USED_PARTS_REGISTRY_DOC_ID);
+      const idbReg =
+        (await dbStorage.getItem('mdc_master_used_parts_registry')) ||
+        (await dbStorage.getItem(MASTER_USED_PARTS_REGISTRY_DOC_ID)) ||
+        (await dbStorage.getItem('mdc_repair_usage'));
       if (Array.isArray(idbReg)) existingUsedReg = idbReg;
     } catch (e) {}
   }
 
-  const mergedUsedRegistry = [
-    ...newUsageEntries,
-    ...existingUsedReg.filter(er => !newUsageEntries.some(ne => ne.serial_number === er.serial_number))
-  ];
+  const mergedUsedMap = new Map();
+  (Array.isArray(repairUsageRecords) ? repairUsageRecords : []).forEach(r => {
+    const s = String(r?.serial_number || '').trim().toUpperCase();
+    if (s) mergedUsedMap.set(s, r);
+  });
+  (Array.isArray(existingUsedReg) ? existingUsedReg : []).forEach(r => {
+    const s = String(r?.serial_number || '').trim().toUpperCase();
+    if (s) mergedUsedMap.set(s, r);
+  });
+  (Array.isArray(newUsageEntries) ? newUsageEntries : []).forEach(r => {
+    const s = String(r?.serial_number || '').trim().toUpperCase();
+    if (s) mergedUsedMap.set(s, r);
+  });
+  const mergedUsedRegistry = Array.from(mergedUsedMap.values());
 
   try {
+    localStorage.setItem('mdc_master_used_parts_registry', JSON.stringify(mergedUsedRegistry.slice(0, 500)));
+  } catch (e) {}
+  try {
     localStorage.setItem(MASTER_USED_PARTS_REGISTRY_DOC_ID, JSON.stringify(mergedUsedRegistry.slice(0, 500)));
+  } catch (e) {}
+  try {
     localStorage.setItem('mdc_repair_usage', JSON.stringify(mergedUsedRegistry.slice(0, 500)));
   } catch (e) {}
+  await dbStorage.setItem('mdc_master_used_parts_registry', mergedUsedRegistry);
   await dbStorage.setItem(MASTER_USED_PARTS_REGISTRY_DOC_ID, mergedUsedRegistry);
   await dbStorage.setItem('mdc_repair_usage', mergedUsedRegistry);
 
@@ -695,8 +772,30 @@ export async function executeKgbConsumptionSync({
   // 5. Cloud Database Synchronization (Supabase)
   if (supabase) {
     try {
-      // Upsert master_used_parts_registry snapshot doc
-      await supabase.from('saved_records').upsert({
+      // Upsert master_used_parts_registry snapshot doc (compact representation to stay within cloud payload limits)
+      const compactRegistryForCloud = mergedUsedRegistry.map(r => {
+        const entry = {
+          id: r.id,
+          site_id: r.site_id,
+          site_code: r.site_code,
+          part_number: r.part_number,
+          description: r.description,
+          serial_number: r.serial_number,
+          work_order_number: r.work_order_number,
+          usage_notes: r.usage_notes,
+          used_by: r.used_by,
+          used_at: r.used_at,
+          date_used: r.date_used,
+          month_name: r.month_name
+        };
+        if (r.site_name) entry.site_name = r.site_name;
+        if (r.repair_number && r.repair_number !== r.work_order_number) entry.repair_number = r.repair_number;
+        if (r.product_kgb && r.product_kgb !== r.serial_number) entry.product_kgb = r.product_kgb;
+        if (r.product_kbb) entry.product_kbb = r.product_kbb;
+        if (r.source && r.source !== 'GSX_KGB_USED_REPORT') entry.source = r.source;
+        return entry;
+      });
+      const { error: regUpsertErr } = await supabase.from('saved_records').upsert({
         id: MASTER_USED_PARTS_REGISTRY_DOC_ID,
         record_type: 'used_parts_registry',
         period_label: 'Master Used Parts Registry',
@@ -704,9 +803,12 @@ export async function executeKgbConsumptionSync({
         period_month: new Date().getMonth() + 1,
         notes: 'Log of serialized parts consumed in repairs',
         saved_by_name: uploaderName,
-        snapshot_data: { records: mergedUsedRegistry },
+        snapshot_data: { records: compactRegistryForCloud },
         updated_at: nowIso
       }, { onConflict: 'id' });
+      if (regUpsertErr) {
+        console.warn('executeKgbConsumptionSync master_used_parts_registry upsert warning:', regUpsertErr.message);
+      }
 
       // Upsert master_kgb_upload_history_registry snapshot doc
       await supabase.from('saved_records').upsert({

@@ -442,7 +442,7 @@ export default function Dashboard() {
 
       const currentPeriodLabel = typeof activePeriod === 'string'
         ? activePeriod
-        : (activePeriod?.label || 'September 2026');
+        : (activePeriod?.label || `${new Date().toLocaleString('en-US', { month: 'long' })} ${new Date().getFullYear()}`);
 
       const partsReportToExport = mode === 'all'
         ? getMasterlistParts({ category: 'ALL', categories: null, search: '', limit: 'ALL', sortBy: 'units' }, activeMasterlist, activePeriod)
@@ -491,7 +491,7 @@ export default function Dashboard() {
 
       const currentPeriodLabel = typeof activePeriod === 'string'
         ? activePeriod
-        : (activePeriod?.label || 'September 2026');
+        : (activePeriod?.label || `${new Date().toLocaleString('en-US', { month: 'long' })} ${new Date().getFullYear()}`);
 
       const partsReportToExport = mode === 'all'
         ? getMasterlistParts({ category: 'ALL', categories: null, search: '', limit: 'ALL', sortBy: 'units' }, activeMasterlist, activePeriod)
@@ -598,10 +598,29 @@ export default function Dashboard() {
       }
 
       // Dynamically resolve target period from uploaded file (October, November, etc.)
+      const monthNamesList = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'
+      ];
+      const nowDate = new Date();
+      const rawPeriodLabel = typeof activePeriod === 'string'
+        ? activePeriod
+        : (activePeriod?.label || `${monthNamesList[nowDate.getMonth()]} ${nowDate.getFullYear()}`);
+      const matchedMonthIdx = monthNamesList.findIndex(m => rawPeriodLabel.toLowerCase().includes(m.toLowerCase()));
+      const yearMatch = rawPeriodLabel.match(/\b(202[0-9]|203[0-9])\b/);
+
       const detectedPeriod = parsed.detectedPeriod || (
         typeof activePeriod === 'object' && activePeriod?.label
-          ? activePeriod
-          : { month: 10, year: 2026, label: typeof activePeriod === 'string' ? activePeriod : 'Current Period' }
+          ? {
+              ...activePeriod,
+              month: matchedMonthIdx !== -1 ? matchedMonthIdx + 1 : (activePeriod.month || nowDate.getMonth() + 1),
+              year: yearMatch ? parseInt(yearMatch[1], 10) : (activePeriod.year || nowDate.getFullYear())
+            }
+          : {
+              month: matchedMonthIdx !== -1 ? matchedMonthIdx + 1 : nowDate.getMonth() + 1,
+              year: yearMatch ? parseInt(yearMatch[1], 10) : nowDate.getFullYear(),
+              label: rawPeriodLabel
+            }
       );
       const periodLabel = detectedPeriod.label || (typeof activePeriod === 'string' ? activePeriod : activePeriod?.label) || 'Current Period';
 
@@ -778,7 +797,7 @@ export default function Dashboard() {
               }}
             >
               <Calendar size={14} color="#38bdf8" />
-              <span>{typeof activePeriod === 'string' ? activePeriod : (activePeriod?.label || 'September 2026')}</span>
+              <span>{typeof activePeriod === 'string' ? activePeriod : (activePeriod?.label || `${new Date().toLocaleString('en-US', { month: 'long' })} ${new Date().getFullYear()}`)}</span>
             </div>
           </div>
         </div>
