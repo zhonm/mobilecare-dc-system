@@ -594,22 +594,6 @@ export default function SiteTransfersFifoReport() {
             scheduleFifoReload(true);
           }
         })
-        .on('postgres_changes', {
-          event: '*',
-          schema: 'public',
-          table: 'saved_records',
-          filter: `id=eq.${FIFO_TRANSFERS_DOC_ID}`
-        }, () => {
-          scheduleFifoReload(true);
-        })
-        .on('postgres_changes', {
-          event: '*',
-          schema: 'public',
-          table: 'saved_records',
-          filter: `id=eq.${FIFO_GSX_DOC_ID}`
-        }, () => {
-          scheduleFifoReload(true);
-        })
         .subscribe();
     }
 

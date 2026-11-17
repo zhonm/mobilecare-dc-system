@@ -35,7 +35,11 @@ import { resolveSite, readInventoryFromLocalStorage } from '../utils/appContextH
 import { isProvincialSite } from '../utils/partResolver.js';
 import { resolveSerialFullDetails } from '../utils/serialTracker.js';
 import { syncFixablyTransfersToHistory, loadLocalTransferHistory } from '../services/transferHistoryService.js';
-import { executeKgbConsumptionSync } from '../utils/kgbConsumptionEngine.js';
+import {
+  executeKgbConsumptionSync,
+  computeKgbContentHash,
+  KGB_UPLOAD_HISTORY_DOC_ID
+} from '../utils/kgbConsumptionEngine.js';
 import SerialDossierModal from './SerialDossierModal.jsx';
 import MovementHistoryModal from './MovementHistoryModal.jsx';
 import {
@@ -494,6 +498,14 @@ export default function FixablyInventoryDashboard({
           totalUnits: snapToSync.items.length
         });
       }
+      try {
+        const roomChan = supabase.channel('mdc_fixably_snapshot_room');
+        await roomChan.send({
+          type: 'broadcast',
+          event: 'FIXABLY_SNAPSHOT_UPDATED',
+          payload: { timestamp: effectiveTimestamp, totalUnits: snapToSync.items.length }
+        });
+      } catch (_) {}
       if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
         const bus = new BroadcastChannel('mdc_sync_bus');
         bus.postMessage({
@@ -809,43 +821,37 @@ export default function FixablyInventoryDashboard({
       window.addEventListener('storage', handleStorageEvent);
     }
 
-    // 3. Supabase Realtime Channel: Instantly receives snapshot when another user uploads
+    // 3. Supabase Realtime Broadcast Channel: Receives snapshot updates without postgres_changes WAL overhead
     if (supabase) {
       const channelId = 'mdc_fixably_snapshot_room';
       realtimeChannel = supabase
         .channel(channelId)
         .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'saved_records',
-            filter: 'id=eq.master_fixably_inventory_snapshot'
-          },
-          async (payload) => {
-            if (payload.eventType === 'DELETE') {
-              setSnapshot(null);
-              setIsDropzoneOpen(true);
+          'broadcast',
+          { event: 'FIXABLY_SNAPSHOT_UPDATED' },
+          async (msg) => {
+            const payload = msg?.payload || {};
+            let snapData = null;
+            let remoteTimestamp = payload.timestamp || '';
+
+            const remoteHintMs = remoteTimestamp ? new Date(remoteTimestamp).getTime() : 0;
+            const currentHintMs = snapshotTimestampRef.current ? new Date(snapshotTimestampRef.current).getTime() : 0;
+            if (currentHintMs > 0 && remoteHintMs > 0 && remoteHintMs <= currentHintMs) {
               return;
             }
-            let snapData = payload.new?.snapshot_data;
-            let remoteTimestamp = payload.new?.updated_at || snapData?.timestamp || '';
 
-            // If snapshot_data is missing or omitted by Supabase Realtime (due to TOAST / message size limits)
-            if (!snapData || !Array.isArray(snapData.items) || snapData.items.length === 0) {
-              try {
-                const { data: fullCloudRec, error: cloudErr } = await supabase
-                  .from('saved_records')
-                  .select('*')
-                  .eq('id', 'master_fixably_inventory_snapshot')
-                  .maybeSingle();
-                if (!cloudErr && fullCloudRec?.snapshot_data && Array.isArray(fullCloudRec.snapshot_data.items)) {
-                  snapData = fullCloudRec.snapshot_data;
-                  remoteTimestamp = fullCloudRec.updated_at || snapData.timestamp || remoteTimestamp;
-                }
-              } catch (fetchErr) {
-                console.warn('Realtime fetch full snapshot error:', fetchErr);
+            try {
+              const { data: fullCloudRec, error: cloudErr } = await supabase
+                .from('saved_records')
+                .select('*')
+                .eq('id', 'master_fixably_inventory_snapshot')
+                .maybeSingle();
+              if (!cloudErr && fullCloudRec?.snapshot_data && Array.isArray(fullCloudRec.snapshot_data.items)) {
+                snapData = fullCloudRec.snapshot_data;
+                remoteTimestamp = fullCloudRec.updated_at || snapData.timestamp || remoteTimestamp;
               }
+            } catch (fetchErr) {
+              console.warn('Realtime fetch full snapshot error:', fetchErr);
             }
 
             if (snapData && Array.isArray(snapData.items) && snapData.items.length > 0) {
@@ -1288,14 +1294,42 @@ export default function FixablyInventoryDashboard({
       }
 
       const nowIso = new Date().toISOString();
+      const contentHash = slotKey === 'kgb_used' ? computeKgbContentHash(textContent) : '';
+      let duplicateUploadInfo = null;
+
+      if (slotKey === 'kgb_used' && contentHash) {
+        const currentSlot = slots.kgb_used;
+        if (currentSlot?.valid && !currentSlot?.pendingUpload && currentSlot?.contentHash === contentHash) {
+          duplicateUploadInfo = { fileName: currentSlot.name, uploadDate: currentSlot.updatedAt };
+        } else {
+          try {
+            const hist = await dbStorage.getItem(KGB_UPLOAD_HISTORY_DOC_ID);
+            if (Array.isArray(hist)) {
+              const match = hist.find(h => h?.contentHash && h.contentHash === contentHash);
+              if (match) {
+                duplicateUploadInfo = { fileName: match.fileName, uploadDate: match.uploadDate };
+              }
+            }
+          } catch (_) {}
+        }
+      }
+
+      const nextValidationDetails = validation.validationDetails
+        ? {
+            ...validation.validationDetails,
+            ...(duplicateUploadInfo ? { isDuplicateUpload: true, previousUpload: duplicateUploadInfo } : {})
+          }
+        : (duplicateUploadInfo ? { isDuplicateUpload: true, previousUpload: duplicateUploadInfo } : null);
+
       const slotData = {
         name: file.name,
         size: file.size,
         rowCount: validation.rowCount,
         valid: true,
         error: null,
-        validationDetails: validation.validationDetails || null,
+        validationDetails: nextValidationDetails,
         content: textContent,
+        contentHash,
         updatedAt: nowIso,
         pendingUpload: true
       };
@@ -1316,9 +1350,32 @@ export default function FixablyInventoryDashboard({
         localStorage.setItem('mdc_uploaded_slot_' + slotKey + '_ts', nowIso);
       } catch (_) {}
 
-      const vDetails = validation.validationDetails;
+      if (slotKey === 'kgb_used') {
+        try {
+          await dbStorage.removeItem('mdc_kgb_masterlist_cache');
+        } catch (_) {}
+        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+          try {
+            const bc = new BroadcastChannel('mdc_kgb_sync');
+            bc.postMessage({ type: 'KGB_USED_UPDATED', updatedAt: nowIso, fileName: file.name, pendingUpload: true });
+            bc.close();
+          } catch (_) {}
+        }
+      }
+
+      const vDetails = nextValidationDetails;
       const warnSuffix = vDetails?.warnings?.length ? ` (${vDetails.warnings.join(' ')})` : '';
-      showToast?.(`Selected & verified ${file.name} (${validation.rowCount.toLocaleString()} rows)${warnSuffix}. Click "Upload" to process.`, 'success');
+      if (duplicateUploadInfo) {
+        const prevDateStr = duplicateUploadInfo.uploadDate
+          ? new Date(duplicateUploadInfo.uploadDate).toLocaleString()
+          : 'a previous upload';
+        showToast?.(
+          `Duplicate KGB Report Detected: "${file.name}" matches "${duplicateUploadInfo.fileName || 'previous report'}" (${prevDateStr}). Duplicate records will be skipped automatically.`,
+          'warning'
+        );
+      } else {
+        showToast?.(`Selected & verified ${file.name} (${validation.rowCount.toLocaleString()} rows)${warnSuffix}. Click "Upload" to process.`, 'success');
+      }
     } catch (err) {
       setSlots(prev => ({
         ...prev,
@@ -1366,6 +1423,9 @@ export default function FixablyInventoryDashboard({
     }));
     try {
       await dbStorage.removeItem('mdc_uploaded_slot_' + slotKey);
+      if (slotKey === 'kgb_used') {
+        await dbStorage.removeItem('mdc_kgb_masterlist_cache');
+      }
       try {
         localStorage.removeItem('mdc_uploaded_slot_' + slotKey + '_ts');
       } catch (_) {}
@@ -1374,6 +1434,11 @@ export default function FixablyInventoryDashboard({
           const bc = new BroadcastChannel('mdc_fifo_audit_sync');
           bc.postMessage({ type: 'FIFO_AUDIT_UPDATED', slotKey, cleared: true });
           bc.close();
+          if (slotKey === 'kgb_used') {
+            const kbc = new BroadcastChannel('mdc_kgb_sync');
+            kbc.postMessage({ type: 'KGB_USED_UPDATED', cleared: true });
+            kbc.close();
+          }
         } catch (_) {}
       }
     } catch (e) {}
@@ -1390,7 +1455,8 @@ export default function FixablyInventoryDashboard({
       await Promise.all([
         dbStorage.removeItem('mdc_uploaded_slot_site_stock'),
         dbStorage.removeItem('mdc_uploaded_slot_kgb_used'),
-        dbStorage.removeItem('mdc_uploaded_slot_stock_transfer')
+        dbStorage.removeItem('mdc_uploaded_slot_stock_transfer'),
+        dbStorage.removeItem('mdc_kgb_masterlist_cache')
       ]);
       try {
         localStorage.removeItem('mdc_uploaded_slot_site_stock_ts');
@@ -1402,6 +1468,9 @@ export default function FixablyInventoryDashboard({
           const bc = new BroadcastChannel('mdc_fifo_audit_sync');
           bc.postMessage({ type: 'FIFO_AUDIT_UPDATED', clearedAll: true });
           bc.close();
+          const kbc = new BroadcastChannel('mdc_kgb_sync');
+          kbc.postMessage({ type: 'KGB_USED_UPDATED', cleared: true });
+          kbc.close();
         } catch (_) {}
       }
     } catch (e) {}
@@ -1459,6 +1528,30 @@ export default function FixablyInventoryDashboard({
         showToast
       });
       if (res?.success) {
+        const syncedNow = new Date().toISOString();
+        try {
+          const existingSlot = await dbStorage.getItem('mdc_uploaded_slot_kgb_used');
+          if (existingSlot) {
+            await dbStorage.setItem('mdc_uploaded_slot_kgb_used', {
+              ...existingSlot,
+              pendingUpload: false,
+              updatedAt: syncedNow
+            });
+          }
+          localStorage.setItem('mdc_uploaded_slot_kgb_used_ts', syncedNow);
+          await dbStorage.removeItem('mdc_kgb_masterlist_cache');
+        } catch (_) {}
+        setSlots(prev => ({
+          ...prev,
+          kgb_used: { ...prev.kgb_used, pendingUpload: false, updatedAt: syncedNow }
+        }));
+        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+          try {
+            const kbc = new BroadcastChannel('mdc_kgb_sync');
+            kbc.postMessage({ type: 'KGB_USED_UPDATED', updatedAt: syncedNow, fileName: slots.kgb_used.name });
+            kbc.close();
+          } catch (_) {}
+        }
         await appendActivityLog({
           actionType: 'KGB_CONSUMPTION_SYNC',
           status: 'SUCCESS',
@@ -1508,12 +1601,27 @@ export default function FixablyInventoryDashboard({
           error: null,
           validationDetails: s.validationDetails || null,
           content: s.content,
+          contentHash: s.contentHash || (key === 'kgb_used' ? computeKgbContentHash(s.content) : ''),
+          pendingUpload: false,
           updatedAt: nowIso
         };
         await dbStorage.setItem('mdc_uploaded_slot_' + key, slotData);
         try {
           localStorage.setItem('mdc_uploaded_slot_' + key + '_ts', nowIso);
         } catch (_) {}
+
+        if (key === 'kgb_used') {
+          try {
+            await dbStorage.removeItem('mdc_kgb_masterlist_cache');
+          } catch (_) {}
+          if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+            try {
+              const kbc = new BroadcastChannel('mdc_kgb_sync');
+              kbc.postMessage({ type: 'KGB_USED_UPDATED', updatedAt: nowIso, fileName: s.name });
+              kbc.close();
+            } catch (_) {}
+          }
+        }
 
         // Broadcast cross-module update for stock transfers if present
         if (key === 'stock_transfer') {

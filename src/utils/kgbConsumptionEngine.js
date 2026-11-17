@@ -15,10 +15,30 @@
 import { normalizeSite, normalizeDate } from './siteTransfersReconciler.js';
 import { extractTextContent, parseDelimitedLine } from './fixablyInventoryEngine.js';
 import { saveInventoryToLocalStorage } from './appContextHelpers.js';
+import { scanKgbMasterlistData } from './rawMasterlistScanner.js';
 import dbStorage from './dbStorage.js';
 
 export const KGB_UPLOAD_HISTORY_DOC_ID = 'master_kgb_upload_history_registry';
 export const MASTER_USED_PARTS_REGISTRY_DOC_ID = 'master_used_parts_registry';
+export const DASHBOARD_KGB_INTELLIGENCE_DOC_ID = 'master_dashboard_kgb_intelligence';
+
+/**
+ * Computes a fast deterministic content fingerprint (FNV-1a 32-bit + length)
+ * for a KGB Used Report text payload to detect duplicate report uploads.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+export function computeKgbContentHash(text) {
+  if (!text || typeof text !== 'string') return '';
+  const normalized = text.trim();
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < normalized.length; i++) {
+    hash ^= normalized.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `kgb-${(hash >>> 0).toString(16)}-${normalized.length}`;
+}
 
 /**
  * Validates and parses a GSX KGB Used Report (.CSV or .XLSX)
@@ -90,6 +110,8 @@ export async function parseKgbUsedFile(fileOrContent) {
     const records = [];
     const validationErrors = [];
     const seenSerials = new Set();
+    const seenDedupeKeys = new Set();
+    let duplicatesInFileCount = 0;
 
     for (let i = headerIdx + 1; i < lines.length; i++) {
       const line = lines[i].trim();
@@ -127,7 +149,22 @@ export async function parseKgbUsedFile(fileOrContent) {
         }
       }
 
-      const effectiveSerial = rawSerial || (productKbb ? `KBB-${productKbb}-${orderId || i}` : `WO-${orderId || gsxRepairNumber}-${productCode || i}`);
+      // Deterministic synthetic serial when Product KGB is blank (independent of row line index)
+      const effectiveSerial = rawSerial || (
+        productKbb
+          ? `KBB-${productKbb}-${orderId || productCode || 'NA'}`
+          : `WO-${orderId || gsxRepairNumber}-${productCode || 'NA'}-${rawClosedDate || 'NA'}`
+      );
+
+      // Deduplicate identical rows within the same report
+      const dedupeKey = rawSerial
+        ? `S:${rawSerial}`
+        : `NS:${orderId}|${gsxRepairNumber}|${productCode}|${rawClosedDate}|${rawLocation.toUpperCase()}`;
+      if (seenDedupeKeys.has(dedupeKey)) {
+        duplicatesInFileCount++;
+        continue;
+      }
+      seenDedupeKeys.add(dedupeKey);
 
       // Parse normalized date
       const normalizedClosedDate = normalizeDate(rawClosedDate);
@@ -166,6 +203,8 @@ export async function parseKgbUsedFile(fileOrContent) {
       validRowCount: records.length,
       records,
       uniqueSerials: seenSerials.size,
+      duplicatesInFileCount,
+      contentHash: computeKgbContentHash(text),
       validationErrors
     };
   } catch (err) {
@@ -697,16 +736,32 @@ export async function executeKgbConsumptionSync({
     await dbStorage.setItem('mdc_fixably_snapshot', updatedFixablySnapshot);
   }
 
+  // C2. Canonical Dashboard KGB Intelligence Snapshot (ensures 100% parity across all admin users)
+  const kgbIntelligence = scanKgbMasterlistData(parseResult.records, {
+    sourceFileName: fileName,
+    sourceUpdatedAt: nowIso,
+    contentHash: parseResult.contentHash || ''
+  });
+  if (kgbIntelligence) {
+    kgbIntelligence.duplicatesRemoved = (kgbIntelligence.duplicatesRemoved || 0) + (parseResult.duplicatesInFileCount || 0);
+    await Promise.all([
+      dbStorage.setItem('mdc_kgb_masterlist_cache', kgbIntelligence, { skipLocalStorage: true }).catch(() => {}),
+      dbStorage.setItem('mdc_cloud_kgb_masterlist', kgbIntelligence, { skipLocalStorage: true }).catch(() => {})
+    ]);
+  }
+
   // D. Create & Save KGB Upload History Entry
   const uploadHistoryEntry = {
     id: `kgb-upload-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     fileName,
+    contentHash: parseResult.contentHash || '',
     uploadDate: nowIso,
     uploadedBy: uploaderName,
     uploadedByEmail: uploaderEmail,
     userRole: currentUser?.role || 'superadmin',
     totalRows: parseResult.totalRows,
     validKgbRows: parseResult.validRowCount,
+    duplicatesInFileCount: parseResult.duplicatesInFileCount || 0,
     matchedOnHandCount: matchedOnHandUnits.length,
     newConsumedCount: newConsumedUnits.length,
     duplicatesSkippedCount: duplicatesSkipped.length,
@@ -771,8 +826,50 @@ export async function executeKgbConsumptionSync({
 
   // 5. Cloud Database Synchronization (Supabase)
   if (supabase) {
+    // 5A. Upsert canonical Dashboard KGB Intelligence & Upload History FIRST (fast <1MB docs)
+    // so other users & Private Mode logins immediately see the latest report even if the large
+    // historical registry takes longer.
     try {
-      // Upsert master_used_parts_registry snapshot doc (compact representation to stay within cloud payload limits)
+      const fastUpserts = [
+        supabase.from('saved_records').upsert({
+          id: KGB_UPLOAD_HISTORY_DOC_ID,
+          record_type: 'kgb_upload_history',
+          period_label: 'GSX KGB Upload History Registry',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          notes: 'Audit history of uploaded GSX KGB Used Reports',
+          saved_by_name: uploaderName,
+          snapshot_data: { history: updatedKgbUploadHistory },
+          updated_at: nowIso
+        }, { onConflict: 'id' })
+      ];
+      if (kgbIntelligence) {
+        fastUpserts.push(
+          supabase.from('saved_records').upsert({
+            id: DASHBOARD_KGB_INTELLIGENCE_DOC_ID,
+            record_type: 'dashboard_kgb_intelligence',
+            period_label: 'Dashboard KGB Intelligence',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: `Canonical KGB Used Report snapshot (${fileName})`,
+            saved_by_name: uploaderName,
+            snapshot_data: kgbIntelligence,
+            updated_at: nowIso
+          }, { onConflict: 'id' })
+        );
+      }
+      const fastResults = await Promise.all(fastUpserts);
+      fastResults.forEach((res) => {
+        if (res?.error) {
+          console.warn('executeKgbConsumptionSync fast upsert warning:', res.error.message);
+        }
+      });
+    } catch (fastErr) {
+      console.warn('executeKgbConsumptionSync fast cloud sync notice:', fastErr?.message || fastErr);
+    }
+
+    try {
+      // 5B. Upsert master_used_parts_registry snapshot doc (compact representation to stay within cloud payload limits)
       const compactRegistryForCloud = mergedUsedRegistry.map(r => {
         const entry = {
           id: r.id,
@@ -809,19 +906,6 @@ export async function executeKgbConsumptionSync({
       if (regUpsertErr) {
         console.warn('executeKgbConsumptionSync master_used_parts_registry upsert warning:', regUpsertErr.message);
       }
-
-      // Upsert master_kgb_upload_history_registry snapshot doc
-      await supabase.from('saved_records').upsert({
-        id: KGB_UPLOAD_HISTORY_DOC_ID,
-        record_type: 'kgb_upload_history',
-        period_label: 'GSX KGB Upload History Registry',
-        period_year: new Date().getFullYear(),
-        period_month: new Date().getMonth() + 1,
-        notes: 'Audit history of uploaded GSX KGB Used Reports',
-        saved_by_name: uploaderName,
-        snapshot_data: { history: updatedKgbUploadHistory },
-        updated_at: nowIso
-      }, { onConflict: 'id' });
 
       // Batch update inventory_units in chunks of 50
       const serialsToUpdate = matchedOnHandUnits.map(u => u.serialNumber);

@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   Boxes,
@@ -37,6 +37,8 @@ import {
   Cell,
   BarChart,
   Bar,
+  AreaChart,
+  Area,
   XAxis,
   YAxis,
   Tooltip,
@@ -57,11 +59,18 @@ import {
   getMasterlistSites,
   getMasterlistPartsForSite,
   scanMasterlistData,
-  getActiveMasterlist,
+  scanKgbMasterlistData,
   setActiveScannedMasterlist,
   IPHONE_CATEGORIES,
   getCategoryBadge
 } from '../utils/rawMasterlistScanner';
+import {
+  parseKgbUsedFile,
+  KGB_UPLOAD_HISTORY_DOC_ID,
+  DASHBOARD_KGB_INTELLIGENCE_DOC_ID
+} from '../utils/kgbConsumptionEngine';
+import { supabase } from '../supabase/client.js';
+import dbStorage from '../utils/dbStorage';
 import { parseUniversalExcel } from '../utils/excelParser';
 import { isPartMatchingCategoryFilter, getCategoryForPart } from '../utils/categoryFilter';
 import {
@@ -99,6 +108,7 @@ export default function Dashboard() {
     setShipmentsFilterStatus,
     isAutoRefreshing,
     autoRefreshData,
+    isInventoryLoaded,
     activePackDraft,
     supervisorSettings,
     showToast,
@@ -239,28 +249,349 @@ export default function Dashboard() {
   }, [availableInStockUnits]);
 
   // ─────────────────────────────────────────────────────────────────────────
-  // DYNAMIC IPHONE MASTERLIST SCANNED QUERIES (BASED ON USER UPLOADED MASTERLIST)
+  // DISTRIBUTION INTELLIGENCE: UNIFIED FIXABLY MULTI-FILE INGESTION CENTER
+  // (Sourced from Slot 2: GSX KGB Used Report — Daily Operational Data)
   // ─────────────────────────────────────────────────────────────────────────
-  const activeMasterlist = useMemo(() => {
-    // Priority 1: User-uploaded masterlistData — always use it if it has valid data.
-    // We do NOT gate on period matching here because the user explicitly uploaded this file
-    // for the current session. Period mismatch can happen when the file covers multiple months
-    // or when the period label format differs slightly.
-    if (masterlistData && masterlistData.totalUnits !== undefined && masterlistData.totalUnits > 0) {
-      return masterlistData;
-    }
-    // Priority 2: Derived from in-memory repairUsageRecords (scanned on-the-fly)
-    if (repairUsageRecords && repairUsageRecords.length > 0) {
-      const scanned = scanMasterlistData(repairUsageRecords, {
-        periodLabel: typeof activePeriod === 'string' ? activePeriod : (activePeriod?.label || 'Current Period')
-      });
-      if (scanned && scanned.totalUnits > 0) {
-        return scanned;
+  const [kgbMasterlistData, setKgbMasterlistData] = useState(null);
+  const [kgbIngestionStatus, setKgbIngestionStatus] = useState({
+    status: 'loading', // 'loading' | 'verified' | 'pending' | 'registry_synced' | 'missing' | 'error'
+    fileName: '',
+    updatedAt: null,
+    rowCount: 0,
+    duplicatesRemoved: 0,
+    errorMessage: null
+  });
+  const [dailyTrendRange, setDailyTrendRange] = useState('14D');
+
+  const loadKgbMasterlist = useCallback(async (forceRefresh = false) => {
+    try {
+      const periodLabel = typeof activePeriod === 'string'
+        ? activePeriod
+        : (activePeriod?.label || 'Daily KGB Used Report');
+
+      const [slotKgb, cloudKgb, cachedKgb, uploadHistory, altUploadHistory, gsxRecords, gsxMeta] = await Promise.all([
+        dbStorage.getItem('mdc_uploaded_slot_kgb_used').catch(() => null),
+        dbStorage.getItem('mdc_cloud_kgb_masterlist').catch(() => null),
+        dbStorage.getItem('mdc_kgb_masterlist_cache').catch(() => null),
+        dbStorage.getItem(KGB_UPLOAD_HISTORY_DOC_ID).catch(() => null),
+        dbStorage.getItem('mdc_kgb_upload_history').catch(() => null),
+        dbStorage.getItem('mdc_gsx_used_records').catch(() => null),
+        dbStorage.getItem('mdc_gsx_used_meta').catch(() => null)
+      ]);
+
+      const resolvedHistory = (Array.isArray(uploadHistory) && uploadHistory.length > 0)
+        ? uploadHistory
+        : (Array.isArray(altUploadHistory) && altUploadHistory.length > 0 ? altUploadHistory : []);
+      const latestHist = resolvedHistory[0] || null;
+
+      // Validation Check: If Slot 2 has a validation error
+      if (slotKgb && slotKgb.error) {
+        setKgbMasterlistData(null);
+        setKgbIngestionStatus({
+          status: 'error',
+          fileName: slotKgb.name || 'GSX KGB Used Report',
+          updatedAt: slotKgb.updatedAt || null,
+          rowCount: 0,
+          duplicatesRemoved: 0,
+          errorMessage: slotKgb.error
+        });
+        return;
       }
+
+      let resolvedCloudKgb = cloudKgb;
+      if (supabase) {
+        try {
+          // Lightweight 50-byte header check so stale local caches always detect newer cloud uploads
+          const { data: remoteHeader, error: hdrErr } = await supabase
+            .from('saved_records')
+            .select('id, updated_at')
+            .eq('id', DASHBOARD_KGB_INTELLIGENCE_DOC_ID)
+            .maybeSingle();
+
+          const localCloudTs = resolvedCloudKgb?.sourceUpdatedAt ? new Date(resolvedCloudKgb.sourceUpdatedAt).getTime() : 0;
+          const remoteTs = remoteHeader?.updated_at ? new Date(remoteHeader.updated_at).getTime() : 0;
+
+          if (!hdrErr && remoteHeader && (!resolvedCloudKgb || forceRefresh || remoteTs > localCloudTs || resolvedCloudKgb.sourceDocId !== DASHBOARD_KGB_INTELLIGENCE_DOC_ID)) {
+            const { data: remoteIntelDoc, error: remoteIntelErr } = await supabase
+              .from('saved_records')
+              .select('snapshot_data, updated_at')
+              .eq('id', DASHBOARD_KGB_INTELLIGENCE_DOC_ID)
+              .maybeSingle();
+            if (!remoteIntelErr && remoteIntelDoc?.snapshot_data && remoteIntelDoc.snapshot_data.totalUnits > 0) {
+              resolvedCloudKgb = {
+                ...remoteIntelDoc.snapshot_data,
+                sourceDocId: DASHBOARD_KGB_INTELLIGENCE_DOC_ID,
+                sourceUpdatedAt: remoteIntelDoc.snapshot_data.sourceUpdatedAt || remoteIntelDoc.updated_at || new Date().toISOString()
+              };
+              dbStorage.setItem('mdc_cloud_kgb_masterlist', resolvedCloudKgb, { skipLocalStorage: true }).catch(() => {});
+            }
+          } else if (!remoteHeader && !resolvedCloudKgb) {
+            // Secondary cloud fallback: check rec-fifo_gsx_used_registry if canonical doc is not yet published
+            const { data: fifoGsxDoc } = await supabase
+              .from('saved_records')
+              .select('snapshot_data, updated_at')
+              .eq('id', 'rec-fifo_gsx_used_registry')
+              .maybeSingle();
+            const fifoRecs = fifoGsxDoc?.snapshot_data?.records;
+            if (Array.isArray(fifoRecs) && fifoRecs.length > 0) {
+              const fifoMeta = fifoGsxDoc.snapshot_data.metadata || {};
+              const scannedFifo = scanKgbMasterlistData(fifoRecs, {
+                periodLabel,
+                sourceFileName: fifoMeta.fileName || latestHist?.fileName || 'GSX KGB Used Report',
+                sourceUpdatedAt: fifoMeta.uploadedAt || fifoGsxDoc.updated_at || latestHist?.uploadDate || new Date().toISOString()
+              });
+              if (scannedFifo && scannedFifo.totalUnits > 0) {
+                scannedFifo.sourceDocId = 'rec-fifo_gsx_used_registry';
+                resolvedCloudKgb = scannedFifo;
+                dbStorage.setItem('mdc_cloud_kgb_masterlist', resolvedCloudKgb, { skipLocalStorage: true }).catch(() => {});
+              }
+            }
+          }
+        } catch (remoteErr) {
+          console.debug('[Dashboard] Direct cloud KGB intelligence fetch note:', remoteErr?.message || remoteErr);
+        }
+      }
+
+      const slotHasContent = Boolean(slotKgb && slotKgb.valid && slotKgb.content);
+      const slotTs = slotHasContent && slotKgb.updatedAt ? new Date(slotKgb.updatedAt).getTime() : 0;
+      const cloudTs = resolvedCloudKgb?.sourceUpdatedAt ? new Date(resolvedCloudKgb.sourceUpdatedAt).getTime() : 0;
+
+      // Priority 1: Canonical Cloud KGB Intelligence Snapshot (when present & at least as fresh as local Slot 2)
+      // Ensures every admin user (including Private Mode / fresh browsers) sees identical metrics.
+      if (resolvedCloudKgb && resolvedCloudKgb.totalUnits > 0 && (!slotHasContent || cloudTs >= slotTs)) {
+        setKgbMasterlistData(resolvedCloudKgb);
+        setKgbIngestionStatus({
+          status: 'verified',
+          fileName: resolvedCloudKgb.sourceFileName || latestHist?.fileName || 'GSX KGB Used Report',
+          updatedAt: resolvedCloudKgb.sourceUpdatedAt || latestHist?.uploadDate || null,
+          rowCount: resolvedCloudKgb.totalRawRows || 0,
+          duplicatesRemoved: resolvedCloudKgb.duplicatesRemoved || 0,
+          errorMessage: null
+        });
+        return;
+      }
+
+      // Priority 2: Local Slot 2 (GSX KGB Used Report) in Unified Fixably Multi-File Ingestion Center
+      if (slotHasContent) {
+        const slotUpdatedAt = slotKgb.updatedAt || latestHist?.uploadDate || new Date().toISOString();
+        const isPending = Boolean(slotKgb.pendingUpload);
+
+        const publishKgbIntelligenceIfNewer = (intelObj) => {
+          if (!supabase || isPending || !intelObj || intelObj.totalUnits <= 0) return;
+          if (!resolvedCloudKgb || slotTs > cloudTs) {
+            dbStorage.setItem('mdc_cloud_kgb_masterlist', intelObj, { skipLocalStorage: true }).catch(() => {});
+            supabase.from('saved_records').upsert({
+              id: DASHBOARD_KGB_INTELLIGENCE_DOC_ID,
+              record_type: 'dashboard_kgb_intelligence',
+              period_label: 'Dashboard KGB Intelligence',
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              notes: `Canonical KGB Used Report snapshot (${intelObj.sourceFileName || 'GSX KGB Used Report'})`,
+              saved_by_name: currentUser?.fullName || currentUser?.name || currentUser?.email || 'Super Admin',
+              snapshot_data: intelObj,
+              updated_at: slotUpdatedAt
+            }, { onConflict: 'id' }).then(({ error }) => {
+              if (error) console.warn('[Dashboard] Background KGB intelligence publish warning:', error.message);
+            }).catch(() => {});
+          }
+        };
+
+        // Fast Cache Path: Avoid re-parsing 18k+ CSV rows if cache matches current slot timestamp & file
+        if (
+          !forceRefresh &&
+          cachedKgb &&
+          cachedKgb.source === 'UNIFIED_KGB_USED' &&
+          cachedKgb.sourceUpdatedAt === slotUpdatedAt &&
+          cachedKgb.sourceFileName === (slotKgb.name || 'GSX KGB Used Report') &&
+          cachedKgb.totalUnits > 0
+        ) {
+          publishKgbIntelligenceIfNewer(cachedKgb);
+          setKgbMasterlistData(cachedKgb);
+          setKgbIngestionStatus({
+            status: isPending ? 'pending' : 'verified',
+            fileName: cachedKgb.sourceFileName,
+            updatedAt: slotUpdatedAt,
+            rowCount: slotKgb.rowCount || cachedKgb.totalRawRows || 0,
+            duplicatesRemoved: cachedKgb.duplicatesRemoved || 0,
+            errorMessage: null
+          });
+          return;
+        }
+
+        const parsed = await parseKgbUsedFile(slotKgb.content);
+        if (parsed.success && Array.isArray(parsed.records) && parsed.records.length > 0) {
+          const scanned = scanKgbMasterlistData(parsed.records, {
+            periodLabel,
+            sourceFileName: slotKgb.name || 'GSX KGB Used Report',
+            sourceUpdatedAt: slotUpdatedAt,
+            contentHash: parsed.contentHash || slotKgb.contentHash || ''
+          });
+          if (scanned) {
+            scanned.duplicatesRemoved = (scanned.duplicatesRemoved || 0) + (parsed.duplicatesInFileCount || 0);
+            dbStorage.setItem('mdc_kgb_masterlist_cache', scanned, { skipLocalStorage: true }).catch(() => {});
+            publishKgbIntelligenceIfNewer(scanned);
+            setKgbMasterlistData(scanned);
+            setKgbIngestionStatus({
+              status: isPending ? 'pending' : 'verified',
+              fileName: scanned.sourceFileName,
+              updatedAt: slotUpdatedAt,
+              rowCount: parsed.validRowCount || slotKgb.rowCount || 0,
+              duplicatesRemoved: scanned.duplicatesRemoved || 0,
+              errorMessage: null
+            });
+            return;
+          }
+        }
+      }
+
+      // Priority 3: Synced GSX Used Records from Unified Ingestion Center (when available)
+      const fallbackRecords = (Array.isArray(gsxRecords) && gsxRecords.length > 0) ? gsxRecords : null;
+
+      if (fallbackRecords && fallbackRecords.length > 0) {
+        const regUpdatedAt = gsxMeta?.uploadedAt || latestHist?.uploadDate || null;
+        const regFileName = gsxMeta?.fileName || latestHist?.fileName || 'Synced GSX KGB Used Report';
+
+        if (
+          !forceRefresh &&
+          cachedKgb &&
+          cachedKgb.source === 'UNIFIED_KGB_USED' &&
+          cachedKgb.sourceUpdatedAt === regUpdatedAt &&
+          cachedKgb.totalRawRows === fallbackRecords.length &&
+          cachedKgb.totalUnits > 0
+        ) {
+          setKgbMasterlistData(cachedKgb);
+          setKgbIngestionStatus({
+            status: 'registry_synced',
+            fileName: regFileName,
+            updatedAt: regUpdatedAt,
+            rowCount: fallbackRecords.length,
+            duplicatesRemoved: cachedKgb.duplicatesRemoved || 0,
+            errorMessage: null
+          });
+          return;
+        }
+
+        const scanned = scanKgbMasterlistData(fallbackRecords, {
+          periodLabel,
+          sourceFileName: regFileName,
+          sourceUpdatedAt: regUpdatedAt
+        });
+        if (scanned && scanned.totalUnits > 0) {
+          dbStorage.setItem('mdc_kgb_masterlist_cache', scanned, { skipLocalStorage: true }).catch(() => {});
+          setKgbMasterlistData(scanned);
+          setKgbIngestionStatus({
+            status: 'registry_synced',
+            fileName: regFileName,
+            updatedAt: regUpdatedAt,
+            rowCount: fallbackRecords.length,
+            duplicatesRemoved: scanned.duplicatesRemoved || 0,
+            errorMessage: null
+          });
+          return;
+        }
+      }
+
+      // No KGB Used Report uploaded yet
+      setKgbMasterlistData(null);
+      setKgbIngestionStatus({
+        status: 'missing',
+        fileName: '',
+        updatedAt: null,
+        rowCount: 0,
+        duplicatesRemoved: 0,
+        errorMessage: null
+      });
+    } catch (err) {
+      console.error('[Dashboard] Failed to load Unified KGB Used Report:', err);
+      setKgbIngestionStatus(prev => ({
+        ...prev,
+        status: 'error',
+        errorMessage: err?.message || 'Unable to load KGB Used Report.'
+      }));
     }
-    // Priority 3: Fallback to localStorage / in-memory / seed resolution
-    return getActiveMasterlist(null, activePeriod);
-  }, [masterlistData, repairUsageRecords, activePeriod]);
+  }, [activePeriod, currentUser?.email, currentUser?.fullName, currentUser?.name]);
+
+  useEffect(() => {
+    loadKgbMasterlist(false);
+  }, [loadKgbMasterlist, isInventoryLoaded]);
+
+  useEffect(() => {
+    const handleStorage = (e) => {
+      if (
+        e.key === 'mdc_uploaded_slot_kgb_used_ts' ||
+        e.key === 'mdc_uploaded_slot_kgb_used'
+      ) {
+        loadKgbMasterlist(true);
+      }
+    };
+    const handleCloudKgbSynced = () => {
+      loadKgbMasterlist(true);
+    };
+    window.addEventListener('storage', handleStorage);
+    window.addEventListener('mdc_kgb_cloud_synced', handleCloudKgbSynced);
+
+    let kgbChannel = null;
+    let fifoChannel = null;
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        kgbChannel = new BroadcastChannel('mdc_kgb_sync');
+        kgbChannel.onmessage = (event) => {
+          if (event?.data?.type === 'KGB_USED_UPDATED') {
+            loadKgbMasterlist(true);
+          }
+        };
+        fifoChannel = new BroadcastChannel('mdc_fifo_audit_sync');
+        fifoChannel.onmessage = (event) => {
+          if (event?.data?.slotKey === 'kgb_used' || event?.data?.clearedAll) {
+            loadKgbMasterlist(true);
+          }
+        };
+      } catch (_) {}
+    }
+
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('mdc_kgb_cloud_synced', handleCloudKgbSynced);
+      try { kgbChannel?.close(); } catch (_) {}
+      try { fifoChannel?.close(); } catch (_) {}
+    };
+  }, [loadKgbMasterlist]);
+
+  const activeMasterlist = useMemo(() => {
+    if (kgbMasterlistData && kgbMasterlistData.totalUnits !== undefined) {
+      return kgbMasterlistData;
+    }
+    return {
+      source: 'UNIFIED_KGB_USED',
+      periodLabel: typeof activePeriod === 'string' ? activePeriod : (activePeriod?.label || 'Daily KGB Used Report'),
+      totalRecords: 0,
+      totalUnits: 0,
+      totalValUSD: 0,
+      totalValPHP: 0,
+      totalDistinctParts: 0,
+      totalSites: 0,
+      categoryStats: {
+        'Battery': 0,
+        'Display': 0,
+        'Rear System & Logic': 0,
+        'Camera': 0,
+        'Back Glass': 0,
+        'Component': 0
+      },
+      sites: [],
+      partsSummary: [],
+      topParts: [],
+      dailyTrends: [],
+      dailyTrendSummary: {}
+    };
+  }, [kgbMasterlistData, activePeriod]);
+
+  const visibleDailyTrends = useMemo(() => {
+    const all = activeMasterlist?.dailyTrends || [];
+    if (dailyTrendRange === '14D') return all.slice(-14);
+    if (dailyTrendRange === '30D') return all.slice(-30);
+    return all;
+  }, [activeMasterlist, dailyTrendRange]);
 
   const masterSummary = useMemo(() => getMasterlistSummary(activeMasterlist, activePeriod), [activeMasterlist, activePeriod]);
 
@@ -725,7 +1056,12 @@ export default function Dashboard() {
               </span>
             </div>
             <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>
-              Fixably / GSX Raw Masterlist: <strong style={{ color: '#38bdf8' }}>{masterSummary.totalUnits.toLocaleString()} iPhone Repairs</strong> • <strong style={{ color: '#f1f5f9' }}>{masterSummary.totalDistinctParts} Active iPhone SKUs</strong> across <strong style={{ color: '#f1f5f9' }}>{masterSummary.totalSites} Service Hubs</strong>
+              Unified Fixably KGB Used Report: <strong style={{ color: '#38bdf8' }}>{masterSummary.totalUnits.toLocaleString()} iPhone Repairs</strong> • <strong style={{ color: '#f1f5f9' }}>{masterSummary.totalDistinctParts} Active iPhone SKUs</strong> across <strong style={{ color: '#f1f5f9' }}>{masterSummary.totalSites} Service Hubs</strong>
+              {kgbIngestionStatus.updatedAt && (
+                <span style={{ color: '#cbd5e1', marginLeft: '8px', fontSize: '12px' }}>
+                  • Refreshed {new Date(kgbIngestionStatus.updatedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                </span>
+              )}
             </p>
           </div>
 
@@ -1201,12 +1537,96 @@ export default function Dashboard() {
                 <BarChart3 size={20} color="#0284c7" />
               </div>
               <div>
-                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>
-                  Distribution Intelligence • iPhone Masterlist Reports
-                </h3>
-                <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                  Calculated from Fixably/GSX raw records with live stocking prices and branch demand metrics
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>
+                    Distribution Intelligence • iPhone Masterlist Reports
+                  </h3>
+                  {kgbIngestionStatus.status === 'verified' || kgbIngestionStatus.status === 'registry_synced' ? (
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '2px 8px',
+                        borderRadius: '999px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        background: '#ecfdf5',
+                        color: '#047857',
+                        border: '1px solid #a7f3d0'
+                      }}
+                    >
+                      <CheckCircle2 size={12} />
+                      KGB Used Report Verified
+                    </span>
+                  ) : kgbIngestionStatus.status === 'pending' ? (
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '2px 8px',
+                        borderRadius: '999px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        background: '#fffbeb',
+                        color: '#b45309',
+                        border: '1px solid #fde68a'
+                      }}
+                    >
+                      <Clock size={12} />
+                      Pending Upload Processing
+                    </span>
+                  ) : kgbIngestionStatus.status === 'missing' || kgbIngestionStatus.status === 'error' ? (
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '2px 8px',
+                        borderRadius: '999px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        background: '#fef2f2',
+                        color: '#b91c1c',
+                        border: '1px solid #fecaca'
+                      }}
+                    >
+                      <AlertTriangle size={12} />
+                      {kgbIngestionStatus.status === 'error' ? 'KGB Report Error' : 'KGB Report Required'}
+                    </span>
+                  ) : null}
+                </div>
+                <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: '3px 0 0 0' }}>
+                  Sourced from Unified Fixably Multi-File Ingestion Center (Slot 2: GSX KGB Used Report) • Daily operational consumption &amp; branch demand
                 </p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginTop: '6px', fontSize: '11.5px', color: '#475569' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
+                    <Clock size={12} color="#0284c7" />
+                    Last Data Refresh:{' '}
+                    <strong style={{ color: '#0f172a' }}>
+                      {kgbIngestionStatus.updatedAt
+                        ? new Date(kgbIngestionStatus.updatedAt).toLocaleString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                            year: 'numeric',
+                            hour: 'numeric',
+                            minute: '2-digit'
+                          })
+                        : 'Not yet uploaded'}
+                    </strong>
+                  </span>
+                  {kgbIngestionStatus.fileName && (
+                    <span style={{ color: '#64748b' }}>
+                      • File: <strong style={{ color: '#334155' }}>{kgbIngestionStatus.fileName}</strong>
+                    </span>
+                  )}
+                  {kgbIngestionStatus.duplicatesRemoved > 0 && (
+                    <span style={{ color: '#047857', fontWeight: 600 }}>
+                      • {kgbIngestionStatus.duplicatesRemoved.toLocaleString()} duplicate row{kgbIngestionStatus.duplicatesRemoved === 1 ? '' : 's'} filtered
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -1300,6 +1720,69 @@ export default function Dashboard() {
             </button>
           </div>
         </div>
+
+        {/* Validation Check Banner for Unified Fixably KGB Used Report */}
+        {(kgbIngestionStatus.status === 'missing' || kgbIngestionStatus.status === 'error' || kgbIngestionStatus.status === 'pending') && (
+          <div
+            style={{
+              background: kgbIngestionStatus.status === 'pending' ? '#fffbeb' : '#fef2f2',
+              border: `1px solid ${kgbIngestionStatus.status === 'pending' ? '#fde68a' : '#fecaca'}`,
+              borderRadius: '10px',
+              padding: '12px 16px',
+              marginBottom: '16px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '12px'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <AlertTriangle size={18} color={kgbIngestionStatus.status === 'pending' ? '#d97706' : '#dc2626'} />
+              <div style={{ fontSize: '12.5px', color: kgbIngestionStatus.status === 'pending' ? '#92400e' : '#991b1b' }}>
+                {kgbIngestionStatus.status === 'pending' ? (
+                  <>
+                    <strong>KGB Used Report Pending Processing:</strong>{' '}
+                    <span>
+                      &ldquo;{kgbIngestionStatus.fileName}&rdquo; is staged in Slot 2 of the Unified Fixably Multi-File Ingestion Center. Click <strong>Upload &amp; Process</strong> or <strong>Sync Consumption</strong> to finalize daily sync.
+                    </span>
+                  </>
+                ) : kgbIngestionStatus.status === 'error' ? (
+                  <>
+                    <strong>KGB Used Report Validation Failed:</strong>{' '}
+                    <span>{kgbIngestionStatus.errorMessage || 'Please re-upload a valid GSX KGB Used Report in Slot 2.'}</span>
+                  </>
+                ) : (
+                  <>
+                    <strong>No Daily KGB Used Report Uploaded:</strong>{' '}
+                    <span>Upload the latest GSX KGB Used Report in <strong>All Stocks &amp; Inventory → Unified Fixably Multi-File Ingestion Center (Slot 2)</strong> to populate daily Distribution Intelligence reports.</span>
+                  </>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveTab('all-stocks')}
+              style={{
+                border: 'none',
+                background: kgbIngestionStatus.status === 'pending' ? '#d97706' : '#dc2626',
+                color: '#ffffff',
+                padding: '7px 14px',
+                borderRadius: '7px',
+                fontSize: '12px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              <Upload size={13} />
+              <span>Open Unified Ingestion Center</span>
+            </button>
+          </div>
+        )}
 
         {/* VIEW 3 TOP SELECTOR: Prominent, Enlarged Site Selector Banner placed at the top */}
         {reportTab === 'site-parts' && (
@@ -2141,10 +2624,10 @@ export default function Dashboard() {
             <div>
               <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>iPhone Demand by Category</h3>
               <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                Distribution of 8,295 iPhone repairs across component families
+                Distribution of {masterSummary.totalUnits.toLocaleString()} iPhone repairs across component families
               </p>
             </div>
-            <span className="badge badge-primary">8,295 Repairs</span>
+            <span className="badge badge-primary">{masterSummary.totalUnits.toLocaleString()} Repairs</span>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '230px' }}>
@@ -2227,6 +2710,147 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* ───────────────────────────────────────────────────────────────── */}
+      {/* 4B. DAILY TREND ANALYSIS (FROM DAILY KGB USED REPORT)             */}
+      {/* ───────────────────────────────────────────────────────────────── */}
+      {visibleDailyTrends.length > 0 && (
+        <div
+          className="card"
+          style={{
+            padding: '22px',
+            border: '1px solid #e2e8f0',
+            borderRadius: '12px',
+            background: '#ffffff'
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <TrendingUp size={18} color="#0284c7" />
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>
+                  Daily iPhone Parts Consumption Trend
+                </h3>
+                <span className="badge badge-primary" style={{ fontSize: '11px' }}>
+                  {activeMasterlist.dailyTrendSummary?.totalActiveDays || visibleDailyTrends.length} Active Days
+                </span>
+              </div>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '3px 0 0 0' }}>
+                Daily operational repair volume tracked from Repair Closed Date in the GSX KGB Used Report
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', background: '#f1f5f9', padding: '3px', borderRadius: '8px', border: '1px solid #e2e8f0', gap: '2px' }}>
+              {[
+                { key: '14D', label: '14 Days' },
+                { key: '30D', label: '30 Days' },
+                { key: 'ALL', label: 'All Days' }
+              ].map(opt => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => setDailyTrendRange(opt.key)}
+                  style={{
+                    border: 'none',
+                    background: dailyTrendRange === opt.key ? '#0f172a' : 'transparent',
+                    color: dailyTrendRange === opt.key ? '#ffffff' : '#475569',
+                    padding: '5px 12px',
+                    borderRadius: '6px',
+                    fontSize: '11.5px',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 4 Compact Daily Summary KPIs */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', marginBottom: '16px' }}>
+            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px 14px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                Latest Day ({activeMasterlist.dailyTrendSummary?.latestLabel || '—'})
+              </div>
+              <div style={{ fontSize: '20px', fontWeight: 800, color: '#0284c7', marginTop: '2px' }}>
+                {(activeMasterlist.dailyTrendSummary?.latestUnits || 0).toLocaleString()} <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>units</span>
+              </div>
+            </div>
+            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px 14px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                7-Day Daily Avg
+              </div>
+              <div style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>
+                {(activeMasterlist.dailyTrendSummary?.avgDailyUnits7d || 0).toLocaleString()} <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>units/day</span>
+              </div>
+            </div>
+            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px 14px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                Peak Day ({activeMasterlist.dailyTrendSummary?.peakDay?.label || '—'})
+              </div>
+              <div style={{ fontSize: '20px', fontWeight: 800, color: '#059669', marginTop: '2px' }}>
+                {(activeMasterlist.dailyTrendSummary?.peakDay?.units || 0).toLocaleString()} <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>units</span>
+              </div>
+            </div>
+            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px 14px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                Day-over-Day
+              </div>
+              <div
+                style={{
+                  fontSize: '20px',
+                  fontWeight: 800,
+                  marginTop: '2px',
+                  color: activeMasterlist.dailyTrendSummary?.dayOverDayPct == null
+                    ? '#64748b'
+                    : activeMasterlist.dailyTrendSummary.dayOverDayPct >= 0
+                      ? '#059669'
+                      : '#dc2626'
+                }}
+              >
+                {activeMasterlist.dailyTrendSummary?.dayOverDayPct == null
+                  ? '—'
+                  : `${activeMasterlist.dailyTrendSummary.dayOverDayPct >= 0 ? '+' : ''}${activeMasterlist.dailyTrendSummary.dayOverDayPct}%`}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ height: '240px', width: '100%', minWidth: 0 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={visibleDailyTrends} margin={{ top: 8, right: 16, left: -16, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="kgbDailyUnitsGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#0284c7" stopOpacity={0.28} />
+                    <stop offset="95%" stopColor="#0284c7" stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip
+                  formatter={(value, name) => [
+                    name === 'valuationUSD' ? `$${Number(value).toLocaleString()}` : `${Number(value).toLocaleString()} units`,
+                    name === 'valuationUSD' ? 'Valuation (USD)' : 'iPhone Parts Used'
+                  ]}
+                  labelFormatter={(label, payload) => {
+                    const row = payload?.[0]?.payload;
+                    return row ? `${row.date} (${row.activeSites} active hubs)` : label;
+                  }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="units"
+                  stroke="#0284c7"
+                  strokeWidth={2.5}
+                  fill="url(#kgbDailyUnitsGrad)"
+                  isAnimationActive={false}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
 
       {/* ───────────────────────────────────────────────────────────────── */}
       {/* 5. QUICK WORKSTATION LAUNCHPAD                                    */}

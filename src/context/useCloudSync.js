@@ -760,6 +760,7 @@ export function useCloudSync({
             'master_branch_inventory_registry',
             'master_used_parts_registry',
             'master_kgb_upload_history_registry',
+            'master_dashboard_kgb_intelligence',
             'cleared_sites_registry',
             'master_fixably_inventory_snapshot'
           ];
@@ -768,7 +769,8 @@ export function useCloudSync({
             'master_masterlist_data_registry',
             'live_master_dc_inventory',
             'master_branch_inventory_registry',
-            'master_fixably_inventory_snapshot'
+            'master_fixably_inventory_snapshot',
+            'master_used_parts_registry'
           ];
           const LIGHTWEIGHT_SYSTEM_DOC_IDS = SYSTEM_DOC_IDS.filter(id => !HEAVY_DOC_IDS.includes(id));
 
@@ -1081,6 +1083,45 @@ export function useCloudSync({
               systemRows.push({
                 ...remoteBranchInvHeader,
                 snapshot_data: { units: cachedBranchUnits || [] }
+              });
+            }
+          }
+            })(),
+            (async () => {
+          // 2.6. Conditional Egress & Timeout-Guarded Fetch for master_used_parts_registry:
+          // Can hold 15,000+ historical used part records (~6-10 MB). Never let it stall login hydration.
+          const remoteUsedHeader = heavyHeaders.find(h => h.id === 'master_used_parts_registry');
+          if (remoteUsedHeader && remoteUsedHeader.notes !== '__CLEARED__') {
+            let localUsedUpdatedAt = null;
+            try { localUsedUpdatedAt = localStorage.getItem('mdc_used_parts_registry_updated_at'); } catch (e) {}
+            if (!localUsedUpdatedAt) {
+              try { localUsedUpdatedAt = await dbStorage.getItem('mdc_used_parts_registry_updated_at'); } catch (e) {}
+            }
+            let cachedUsed = null;
+            try { cachedUsed = await dbStorage.getItem('mdc_master_used_parts_registry'); } catch (e) {}
+            const hasLocalUsed = Array.isArray(cachedUsed) && cachedUsed.length > 0;
+            const isTimestampMismatch = Boolean(remoteUsedHeader.updated_at && remoteUsedHeader.updated_at !== localUsedUpdatedAt);
+            if (isForce || !hasLocalUsed || isTimestampMismatch) {
+              try {
+                const { data: fullUsedDoc } = await withTimeout(
+                  supabase.from('saved_records').select('*').eq('id', 'master_used_parts_registry').maybeSingle(),
+                  10000,
+                  'master_used_parts_registry'
+                );
+                if (fullUsedDoc) {
+                  systemRows.push(fullUsedDoc);
+                  if (fullUsedDoc.updated_at) {
+                    try { localStorage.setItem('mdc_used_parts_registry_updated_at', fullUsedDoc.updated_at); } catch (e) {}
+                    dbStorage.setItem('mdc_used_parts_registry_updated_at', fullUsedDoc.updated_at).catch(() => {});
+                  }
+                }
+              } catch (usedErr) {
+                console.warn('master_used_parts_registry conditional fetch note:', usedErr?.message || usedErr);
+              }
+            } else {
+              systemRows.push({
+                ...remoteUsedHeader,
+                snapshot_data: { records: cachedUsed || [] }
               });
             }
           }
@@ -2049,6 +2090,23 @@ export function useCloudSync({
         if (mergedKgbHistory.length > 0) {
           try { localStorage.setItem('mdc_kgb_upload_history', JSON.stringify(mergedKgbHistory)); } catch (e) {}
           dbStorage.setItem('mdc_kgb_upload_history', mergedKgbHistory);
+          dbStorage.setItem('master_kgb_upload_history_registry', mergedKgbHistory);
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('mdc_kgb_cloud_synced', { detail: { source: 'kgb_history' } }));
+          }
+        }
+
+        // Hydrate Canonical Dashboard KGB Intelligence Snapshot (~80KB) for exact multi-user parity
+        const dashboardKgbDoc = dbSavedRecords.find(r => r.id === 'master_dashboard_kgb_intelligence');
+        if (dashboardKgbDoc?.snapshot_data && dashboardKgbDoc.snapshot_data.totalUnits > 0) {
+          const cloudIntel = {
+            ...dashboardKgbDoc.snapshot_data,
+            sourceUpdatedAt: dashboardKgbDoc.snapshot_data.sourceUpdatedAt || dashboardKgbDoc.updated_at || new Date().toISOString()
+          };
+          dbStorage.setItem('mdc_cloud_kgb_masterlist', cloudIntel, { skipLocalStorage: true }).catch(() => {});
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('mdc_kgb_cloud_synced', { detail: { source: 'dashboard_kgb_intelligence' } }));
+          }
         }
 
         // Hydrate & Merge Deletion Audit Logs
@@ -3280,6 +3338,9 @@ export function useCloudSync({
                   return usedRegistryRecords;
                 });
               }
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('mdc_kgb_cloud_synced', { detail: { source: 'used_parts_registry' } }));
+              }
             }
           } catch (e) {}
 
@@ -4067,11 +4128,15 @@ export function useCloudSync({
       });
     } else if (type === 'KGB_USED_REPORT_SYNCED' || (type === 'PART_MARKED_AS_USED' && !payload.unit && !payload.serialNumber && !payload.usage)) {
       if (typeof autoRefreshData === 'function') {
-        autoRefreshData({
+        Promise.resolve(autoRefreshData({
           force: true,
           silent: true,
           reason: 'GSX KGB Used Report synchronized across network',
           tables: ['inventory_units', 'saved_records']
+        })).finally(() => {
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('mdc_kgb_cloud_synced', { detail: { source: 'realtime_broadcast' } }));
+          }
         });
       }
     } else if (type === 'PART_MARKED_AS_USED' && (payload.unit || payload.serialNumber || payload.usage)) {

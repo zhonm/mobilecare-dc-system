@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import {
-  Cloud,
   Database,
   ShieldCheck,
   CheckCircle2,
@@ -185,18 +184,6 @@ export default function FirstLoginLoadingScreen() {
             />
           </div>
 
-          <div
-            className="auth-badge"
-            style={{
-              background: 'rgba(56, 189, 248, 0.12)',
-              borderColor: 'rgba(56, 189, 248, 0.28)',
-              color: '#38bdf8'
-            }}
-          >
-            <div className="pulse-dot" style={{ background: '#38bdf8' }} />
-            <span>Live Supabase Cloud Hydration</span>
-          </div>
-
           <h1 className="auth-title" style={{ fontSize: '20px', marginTop: '12px' }}>
             Preparing Your Live Workspace
           </h1>
@@ -349,23 +336,6 @@ export default function FirstLoginLoadingScreen() {
                 <ArrowRight size={15} />
               </button>
             </div>
-          </div>
-        )}
-
-        {/* Syncing Indicator Notice */}
-        {syncStatus === 'syncing' && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px',
-              color: '#94a3b8',
-              fontSize: '12px'
-            }}
-          >
-            <Cloud size={14} color="#38bdf8" />
-            <span>Fetching live database state from Supabase Cloud...</span>
           </div>
         )}
       </div>

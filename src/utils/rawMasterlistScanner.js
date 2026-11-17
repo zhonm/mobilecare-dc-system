@@ -340,6 +340,274 @@ export function scanMasterlistData(sourceData, options = {}) {
 }
 
 /**
+ * Normalize a KGB repair closed date string into YYYY-MM-DD for daily trend grouping.
+ */
+function normalizeKgbDateStr(raw) {
+  if (!raw) return '';
+  const str = String(raw).trim();
+  if (!str) return '';
+
+  const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+
+  const slashMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (slashMatch) {
+    const m = slashMatch[1].padStart(2, '0');
+    const d = slashMatch[2].padStart(2, '0');
+    let y = slashMatch[3];
+    if (y.length === 2) {
+      y = parseInt(y, 10) >= 70 ? `19${y}` : `20${y}`;
+    }
+    return `${y}-${m}-${d}`;
+  }
+
+  const dt = new Date(str);
+  if (!isNaN(dt.getTime())) {
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, '0');
+    const d = String(dt.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return '';
+}
+
+function formatShortDateLabel(isoDate) {
+  if (!isoDate || isoDate.length < 10) return isoDate || '';
+  const [y, m, d] = isoDate.split('-').map(Number);
+  const dt = new Date(y, (m || 1) - 1, d || 1);
+  if (isNaN(dt.getTime())) return isoDate;
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+/**
+ * Scan GSX KGB Used Report records (from Unified Fixably Multi-File Ingestion Center Slot 2)
+ * into full iPhone Masterlist Intelligence with deduplication and daily trend analysis.
+ *
+ * @param {Array<Object>} kgbRecords
+ * @param {Object} [options]
+ * @returns {Object|null}
+ */
+export function scanKgbMasterlistData(kgbRecords, options = {}) {
+  if (!Array.isArray(kgbRecords) || kgbRecords.length === 0) return null;
+
+  let totalUnits = 0;
+  let totalValUSD = 0;
+  let duplicatesRemoved = 0;
+  const seenKeys = new Set();
+  const partsMap = new Map();
+  const sitesMap = new Map();
+  const dailyMap = new Map();
+  const categoryStats = {
+    'Battery': 0,
+    'Display': 0,
+    'Rear System & Logic': 0,
+    'Camera': 0,
+    'Back Glass': 0,
+    'Component': 0
+  };
+
+  for (let i = 0; i < kgbRecords.length; i++) {
+    const r = kgbRecords[i];
+    if (!r) continue;
+
+    const desc = String(
+      r.productDescription || r.product_description || r.description || r.raw_part_description || r['Product Description'] || ''
+    ).trim();
+    const pn = String(
+      r.productCode || r.product_code || r.partNumber || r.part_number || r.raw_part_number || r['Product Code'] || ''
+    ).trim().toUpperCase();
+    const site = String(
+      r.rawLocation || r.siteName || r.location_name || r.raw_site_name || r.site_name || r['Location Name'] || 'Branch Site'
+    ).trim();
+    const qty = Math.max(1, parseInt(r.quantity, 10) || 1);
+
+    if (!desc.toLowerCase().includes('iphone') && !pn.toLowerCase().includes('iphone')) continue;
+
+    // Deduplicate across KGB records by serial or composite work-order key
+    const serial = String(r.productKgb || r.product_kgb || r.serialNumber || r.serial_number || '').trim().toUpperCase();
+    const orderId = String(r.orderId || r.order_id || r.workOrderNumber || r.work_order_number || '').trim();
+    const repairNum = String(r.gsxRepairNumber || r.gsx_repair_number || r.repair_number || '').trim();
+    const dateKey = normalizeKgbDateStr(r.repairClosedDate || r.repair_closed_date || r.rawClosedDate || r.used_at || r.created_at);
+
+    const isSyntheticSerial = !serial || serial.startsWith('WO-') || serial.startsWith('KBB-');
+    const dedupeKey = !isSyntheticSerial
+      ? `S:${serial}`
+      : `NS:${orderId}|${repairNum}|${pn}|${dateKey}|${site.toUpperCase()}`;
+
+    if (seenKeys.has(dedupeKey)) {
+      duplicatesRemoved++;
+      continue;
+    }
+    seenKeys.add(dedupeKey);
+
+    const cat = KNOWN_PART_CATEGORIES[pn] || r.category || detectCategory(desc);
+    const price = KNOWN_PART_PRICES[pn] || (r.priceUSD ? parseFloat(r.priceUSD) : null) || resolvePrice(pn, desc, cat);
+
+    totalUnits += qty;
+    const rowVal = price * qty;
+    totalValUSD += rowVal;
+    categoryStats[cat] = (categoryStats[cat] || 0) + qty;
+
+    if (!partsMap.has(pn)) {
+      partsMap.set(pn, {
+        part_number: pn,
+        description: desc,
+        category: cat,
+        priceUSD: price,
+        totalUnits: 0,
+        totalValUSD: 0,
+        siteDistribution: {}
+      });
+    }
+    const p = partsMap.get(pn);
+    p.totalUnits += qty;
+    p.totalValUSD += rowVal;
+    p.siteDistribution[site] = (p.siteDistribution[site] || 0) + qty;
+
+    if (!sitesMap.has(site)) {
+      sitesMap.set(site, {
+        siteName: site,
+        totalUnits: 0,
+        totalValUSD: 0,
+        partsMap: new Map()
+      });
+    }
+    const s = sitesMap.get(site);
+    s.totalUnits += qty;
+    s.totalValUSD += rowVal;
+    if (!s.partsMap.has(pn)) {
+      s.partsMap.set(pn, {
+        part_number: pn,
+        description: desc,
+        category: cat,
+        priceUSD: price,
+        units: 0,
+        totalValUSD: 0
+      });
+    }
+    const sp = s.partsMap.get(pn);
+    sp.units += qty;
+    sp.totalValUSD += rowVal;
+
+    if (dateKey) {
+      if (!dailyMap.has(dateKey)) {
+        dailyMap.set(dateKey, {
+          date: dateKey,
+          label: formatShortDateLabel(dateKey),
+          units: 0,
+          valuationUSD: 0,
+          byCategory: {},
+          sitesSet: new Set()
+        });
+      }
+      const dEntry = dailyMap.get(dateKey);
+      dEntry.units += qty;
+      dEntry.valuationUSD += rowVal;
+      dEntry.byCategory[cat] = (dEntry.byCategory[cat] || 0) + qty;
+      if (site) dEntry.sitesSet.add(site);
+    }
+  }
+
+  const partsSummary = Array.from(partsMap.values())
+    .map(p => ({
+      ...p,
+      totalValPHP: p.totalValUSD * USD_TO_PHP_RATE,
+      sitesCount: Object.keys(p.siteDistribution).length
+    }))
+    .sort((a, b) => b.totalUnits - a.totalUnits);
+
+  const sites = Array.from(sitesMap.values())
+    .map((s, idx) => {
+      const allParts = Array.from(s.partsMap.values()).sort((a, b) => b.units - a.units);
+      const isMM = !/cebu|davao|iloilo|naga|la union|zamboanga|cagayan|lanang|lima|newpoint/i.test(s.siteName);
+      const shortName = s.siteName
+        .replace('MOBILECARE - APP ', '')
+        .replace('MOBILECARE - ASP ', '')
+        .replace('MOBILECARE - ', '')
+        .replace('MOBILECARE SERVICES', 'General Services');
+
+      return {
+        id: `site-kgb-${idx}`,
+        siteName: s.siteName,
+        shortName,
+        region: isMM ? 'Metro Manila' : 'Provincial',
+        isMM,
+        totalUnits: s.totalUnits,
+        totalValUSD: s.totalValUSD,
+        totalValPHP: s.totalValUSD * USD_TO_PHP_RATE,
+        distinctPartsCount: allParts.length,
+        topParts: allParts.slice(0, 10),
+        topPart: allParts[0] || null,
+        allParts,
+        pctShare: totalUnits > 0 ? (s.totalUnits / totalUnits) * 100 : 0
+      };
+    })
+    .sort((a, b) => b.totalUnits - a.totalUnits);
+
+  const dailyTrends = Array.from(dailyMap.values())
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(d => ({
+      date: d.date,
+      label: d.label,
+      units: d.units,
+      valuationUSD: Math.round(d.valuationUSD),
+      valuationPHP: Math.round(d.valuationUSD * USD_TO_PHP_RATE),
+      byCategory: d.byCategory,
+      activeSites: d.sitesSet.size
+    }));
+
+  const latestDay = dailyTrends[dailyTrends.length - 1] || null;
+  const prevDay = dailyTrends.length >= 2 ? dailyTrends[dailyTrends.length - 2] : null;
+  const last7 = dailyTrends.slice(-7);
+  const last30 = dailyTrends.slice(-30);
+  const avgDailyUnits7d = last7.length > 0
+    ? Math.round(last7.reduce((sum, d) => sum + d.units, 0) / last7.length)
+    : 0;
+  const avgDailyUnits30d = last30.length > 0
+    ? Math.round(last30.reduce((sum, d) => sum + d.units, 0) / last30.length)
+    : 0;
+  const peakDay = dailyTrends.reduce((best, d) => (!best || d.units > best.units ? d : best), null);
+  const dayOverDayPct = prevDay && prevDay.units > 0 && latestDay
+    ? Number((((latestDay.units - prevDay.units) / prevDay.units) * 100).toFixed(1))
+    : null;
+
+  return {
+    generatedAt: new Date().toISOString(),
+    source: 'UNIFIED_KGB_USED',
+    sourceFileName: options.sourceFileName || 'GSX KGB Used Report',
+    sourceUpdatedAt: options.sourceUpdatedAt || new Date().toISOString(),
+    contentHash: options.contentHash || '',
+    totalRawRows: kgbRecords.length,
+    duplicatesRemoved,
+    filter: 'IPHONE_ONLY',
+    periodLabel: options.periodLabel || 'Daily KGB Used Report',
+    totalRecords: totalUnits,
+    totalUnits,
+    totalValUSD,
+    totalValPHP: totalValUSD * USD_TO_PHP_RATE,
+    totalDistinctParts: partsSummary.length,
+    totalSites: sites.length,
+    categoryStats,
+    sites,
+    partsSummary,
+    topParts: partsSummary.slice(0, 200),
+    dailyTrends,
+    dailyTrendSummary: {
+      latestDate: latestDay?.date || null,
+      latestLabel: latestDay?.label || null,
+      latestUnits: latestDay?.units || 0,
+      latestValuationUSD: latestDay?.valuationUSD || 0,
+      previousDayUnits: prevDay?.units || 0,
+      dayOverDayPct,
+      avgDailyUnits7d,
+      avgDailyUnits30d,
+      peakDay: peakDay ? { date: peakDay.date, label: peakDay.label, units: peakDay.units } : null,
+      totalActiveDays: dailyTrends.length
+    }
+  };
+}
+
+/**
  * Check if the user has explicitly placed the system into an empty / cleared state
  */
 export function isMasterlistCleared() {
@@ -422,6 +690,12 @@ export function getActiveMasterlist(customData = null, targetPeriod = null) {
         period = JSON.parse(savedPeriod);
       }
     } catch (e) {}
+  }
+
+  // Unified Fixably KGB Used Report (daily operational source) is never period-gated
+  // against monthly forecasting periods and never falls back to monthly baseline data.
+  if (customData && customData.source === 'UNIFIED_KGB_USED' && Array.isArray(customData.partsSummary)) {
+    return customData;
   }
 
   // If an explicit customData is provided (e.g. the user's uploaded masterlist passed by Dashboard),

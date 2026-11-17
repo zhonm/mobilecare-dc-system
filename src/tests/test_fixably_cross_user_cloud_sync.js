@@ -123,7 +123,7 @@ runTest('FixablyInventoryDashboard.jsx falls back to Supabase saved_records on i
 });
 
 // ── Test 6: FixablyInventoryDashboard subscribes to Realtime updates ─────────────────
-runTest('FixablyInventoryDashboard.jsx listens to Realtime postgres_changes and BroadcastChannel', () => {
+runTest('FixablyInventoryDashboard.jsx listens to Realtime broadcast and BroadcastChannel without saved_records postgres_changes', () => {
   const dashFile = fs.readFileSync(path.join(projectRoot, 'src/components/FixablyInventoryDashboard.jsx'), 'utf8');
 
   assert.ok(
@@ -131,8 +131,12 @@ runTest('FixablyInventoryDashboard.jsx listens to Realtime postgres_changes and 
     'Must listen on mdc_sync_bus for cross-tab updates'
   );
   assert.ok(
-    dashFile.includes("filter: 'id=eq.master_fixably_inventory_snapshot'"),
-    'Must subscribe to postgres_changes for master_fixably_inventory_snapshot'
+    dashFile.includes("'mdc_fixably_snapshot_room'") && dashFile.includes("event: 'FIXABLY_SNAPSHOT_UPDATED'"),
+    'Must subscribe to Realtime broadcast for FIXABLY_SNAPSHOT_UPDATED'
+  );
+  assert.ok(
+    !dashFile.includes("table: 'saved_records'"),
+    'Must NOT subscribe to postgres_changes on saved_records (prevents statement_timeout / replication slot errors)'
   );
 });
 
