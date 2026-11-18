@@ -94,6 +94,11 @@ function calculateDaysInDc(dateString) {
   return Math.max(0, diffDays);
 }
 
+// Module-level in-memory cache so navigating away from DC Overview and back
+// preserves KGB Distribution Intelligence immediately without resetting to 0.
+let cachedDashboardKgbData = null;
+let cachedDashboardKgbStatus = null;
+
 export default function Dashboard() {
   const {
     inventoryUnits = [],
@@ -252,15 +257,29 @@ export default function Dashboard() {
   // DISTRIBUTION INTELLIGENCE: UNIFIED FIXABLY MULTI-FILE INGESTION CENTER
   // (Sourced from Slot 2: GSX KGB Used Report — Daily Operational Data)
   // ─────────────────────────────────────────────────────────────────────────
-  const [kgbMasterlistData, setKgbMasterlistData] = useState(null);
-  const [kgbIngestionStatus, setKgbIngestionStatus] = useState({
-    status: 'loading', // 'loading' | 'verified' | 'pending' | 'registry_synced' | 'missing' | 'error'
-    fileName: '',
-    updatedAt: null,
-    rowCount: 0,
-    duplicatesRemoved: 0,
-    errorMessage: null
-  });
+  const [kgbMasterlistData, setKgbMasterlistDataState] = useState(() => cachedDashboardKgbData);
+  const [kgbIngestionStatus, setKgbIngestionStatusState] = useState(() => (
+    cachedDashboardKgbStatus || {
+      status: 'loading', // 'loading' | 'verified' | 'pending' | 'registry_synced' | 'missing' | 'error'
+      fileName: '',
+      updatedAt: null,
+      rowCount: 0,
+      duplicatesRemoved: 0,
+      errorMessage: null
+    }
+  ));
+  const setKgbMasterlistData = useCallback((val) => {
+    const next = typeof val === 'function' ? val(cachedDashboardKgbData) : val;
+    cachedDashboardKgbData = next;
+    setKgbMasterlistDataState(next);
+  }, []);
+  const setKgbIngestionStatus = useCallback((val) => {
+    setKgbIngestionStatusState((prev) => {
+      const next = typeof val === 'function' ? val(prev) : val;
+      cachedDashboardKgbStatus = next;
+      return next;
+    });
+  }, []);
   const [dailyTrendRange, setDailyTrendRange] = useState('14D');
 
   const loadKgbMasterlist = useCallback(async (forceRefresh = false) => {
@@ -298,6 +317,34 @@ export default function Dashboard() {
         return;
       }
 
+      const slotHasContent = Boolean(slotKgb && slotKgb.valid && slotKgb.content);
+      const slotTs = slotHasContent && slotKgb.updatedAt ? new Date(slotKgb.updatedAt).getTime() : 0;
+      const initialCloudTs = cloudKgb?.sourceUpdatedAt ? new Date(cloudKgb.sourceUpdatedAt).getTime() : 0;
+
+      // Fast non-blocking hydration from IndexedDB before querying Supabase,
+      // so slow/timed-out cloud queries never blank out the dashboard on page navigation.
+      if (cloudKgb && cloudKgb.totalUnits > 0 && (!slotHasContent || initialCloudTs >= slotTs)) {
+        setKgbMasterlistData(cloudKgb);
+        setKgbIngestionStatus({
+          status: 'verified',
+          fileName: cloudKgb.sourceFileName || latestHist?.fileName || 'GSX KGB Used Report',
+          updatedAt: cloudKgb.sourceUpdatedAt || latestHist?.uploadDate || null,
+          rowCount: cloudKgb.totalRawRows || 0,
+          duplicatesRemoved: cloudKgb.duplicatesRemoved || 0,
+          errorMessage: null
+        });
+      } else if (cachedKgb && cachedKgb.source === 'UNIFIED_KGB_USED' && cachedKgb.totalUnits > 0) {
+        setKgbMasterlistData(cachedKgb);
+        setKgbIngestionStatus({
+          status: slotKgb?.pendingUpload ? 'pending' : 'verified',
+          fileName: cachedKgb.sourceFileName || latestHist?.fileName || 'GSX KGB Used Report',
+          updatedAt: cachedKgb.sourceUpdatedAt || latestHist?.uploadDate || null,
+          rowCount: slotKgb?.rowCount || cachedKgb.totalRawRows || 0,
+          duplicatesRemoved: cachedKgb.duplicatesRemoved || 0,
+          errorMessage: null
+        });
+      }
+
       let resolvedCloudKgb = cloudKgb;
       if (supabase) {
         try {
@@ -311,7 +358,7 @@ export default function Dashboard() {
           const localCloudTs = resolvedCloudKgb?.sourceUpdatedAt ? new Date(resolvedCloudKgb.sourceUpdatedAt).getTime() : 0;
           const remoteTs = remoteHeader?.updated_at ? new Date(remoteHeader.updated_at).getTime() : 0;
 
-          if (!hdrErr && remoteHeader && (!resolvedCloudKgb || forceRefresh || remoteTs > localCloudTs || resolvedCloudKgb.sourceDocId !== DASHBOARD_KGB_INTELLIGENCE_DOC_ID)) {
+          if (!hdrErr && remoteHeader && (!resolvedCloudKgb || forceRefresh || remoteTs > localCloudTs || (resolvedCloudKgb.sourceDocId && resolvedCloudKgb.sourceDocId !== DASHBOARD_KGB_INTELLIGENCE_DOC_ID))) {
             const { data: remoteIntelDoc, error: remoteIntelErr } = await supabase
               .from('saved_records')
               .select('snapshot_data, updated_at')
@@ -325,7 +372,7 @@ export default function Dashboard() {
               };
               dbStorage.setItem('mdc_cloud_kgb_masterlist', resolvedCloudKgb, { skipLocalStorage: true }).catch(() => {});
             }
-          } else if (!remoteHeader && !resolvedCloudKgb) {
+          } else if (!hdrErr && !remoteHeader && !resolvedCloudKgb) {
             // Secondary cloud fallback: check rec-fifo_gsx_used_registry if canonical doc is not yet published
             const { data: fifoGsxDoc } = await supabase
               .from('saved_records')
@@ -352,8 +399,6 @@ export default function Dashboard() {
         }
       }
 
-      const slotHasContent = Boolean(slotKgb && slotKgb.valid && slotKgb.content);
-      const slotTs = slotHasContent && slotKgb.updatedAt ? new Date(slotKgb.updatedAt).getTime() : 0;
       const cloudTs = resolvedCloudKgb?.sourceUpdatedAt ? new Date(resolvedCloudKgb.sourceUpdatedAt).getTime() : 0;
 
       // Priority 1: Canonical Cloud KGB Intelligence Snapshot (when present & at least as fresh as local Slot 2)
@@ -509,7 +554,7 @@ export default function Dashboard() {
         errorMessage: err?.message || 'Unable to load KGB Used Report.'
       }));
     }
-  }, [activePeriod, currentUser?.email, currentUser?.fullName, currentUser?.name]);
+  }, [activePeriod, currentUser?.email, currentUser?.fullName, currentUser?.name, setKgbIngestionStatus, setKgbMasterlistData]);
 
   useEffect(() => {
     loadKgbMasterlist(false);

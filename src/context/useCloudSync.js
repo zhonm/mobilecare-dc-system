@@ -2101,6 +2101,7 @@ export function useCloudSync({
         if (dashboardKgbDoc?.snapshot_data && dashboardKgbDoc.snapshot_data.totalUnits > 0) {
           const cloudIntel = {
             ...dashboardKgbDoc.snapshot_data,
+            sourceDocId: 'master_dashboard_kgb_intelligence',
             sourceUpdatedAt: dashboardKgbDoc.snapshot_data.sourceUpdatedAt || dashboardKgbDoc.updated_at || new Date().toISOString()
           };
           dbStorage.setItem('mdc_cloud_kgb_masterlist', cloudIntel, { skipLocalStorage: true }).catch(() => {});
