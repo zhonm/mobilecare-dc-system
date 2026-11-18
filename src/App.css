@@ -5334,6 +5334,16 @@ input[type="password"]::-ms-clear {
     gap: 16px !important;
   }
 
+  .dashboard-category-body {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    height: auto !important;
+  }
+
+  .dashboard-category-body > div {
+    width: 100% !important;
+  }
+
   .kpi-card {
     padding: 12px 10px !important;
   }

@@ -44,7 +44,8 @@ export async function exportDashboardReportToExcel({
   reportCategory = 'ALL',
   reportSearch = '',
   periodLabel = 'September 2026',
-  exportMode = 'current' // 'current' | 'all'
+  exportMode = 'current', // 'current' | 'all'
+  chartImages = []
 } = {}) {
   const cleanPeriodLabel = typeof periodLabel === 'string'
     ? periodLabel
@@ -197,6 +198,103 @@ export async function exportDashboardReportToExcel({
       { width: 24 },
       { width: 20 }
     ];
+
+    if (Array.isArray(chartImages) && chartImages.length > 0) {
+      embedChartsIntoWorksheet(ws, (ws.lastRow?.number || 8) + 2);
+    }
+  };
+
+  // ── HELPER: Embed Captured Chart PNGs into an Excel Worksheet ─────────────
+  const embedChartsIntoWorksheet = (ws, startRow1Based = 1) => {
+    const validCharts = (chartImages || []).filter(
+      (c) => c && typeof c.dataUrl === 'string' && c.dataUrl.includes('base64,')
+    );
+    if (validCharts.length === 0) return;
+
+    let cursorRow = startRow1Based;
+    const secTitleCell = ws.getCell(`A${cursorRow}`);
+    secTitleCell.value = `VISUAL ANALYTICS & DASHBOARD CHARTS (${cleanPeriodLabel})`;
+    secTitleCell.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FF0F172A' } };
+    ws.getRow(cursorRow).height = 22;
+    cursorRow += 2;
+
+    validCharts.forEach((chart, idx) => {
+      const titleRow = ws.getRow(cursorRow);
+      const titleCell = titleRow.getCell(1);
+      titleCell.value = chart.title || `Chart ${idx + 1}`;
+      titleCell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF0F172A' } };
+      titleRow.height = 18;
+      cursorRow += 1;
+
+      if (chart.subtitle) {
+        const subRow = ws.getRow(cursorRow);
+        const subCell = subRow.getCell(1);
+        subCell.value = chart.subtitle;
+        subCell.font = { name: 'Arial', size: 8.5, italic: true, color: { argb: 'FF64748B' } };
+        subRow.height = 15;
+        cursorRow += 1;
+      }
+
+      const base64Data = chart.dataUrl.split('base64,')[1];
+      if (!base64Data) return;
+
+      const maxDrawW = 680;
+      const maxDrawH = 290;
+      const aspect = chart.width > 0 && chart.height > 0 ? chart.width / chart.height : 2.1;
+      let drawW = Math.min(maxDrawW, chart.width || maxDrawW);
+      let drawH = drawW / aspect;
+      if (drawH > maxDrawH) {
+        drawH = maxDrawH;
+        drawW = drawH * aspect;
+      }
+
+      try {
+        const imageId = workbook.addImage({
+          base64: base64Data,
+          extension: 'png'
+        });
+        ws.addImage(imageId, {
+          tl: { col: 0, row: cursorRow - 1 },
+          ext: { width: Math.round(drawW), height: Math.round(drawH) }
+        });
+      } catch {
+        // Ignore malformed image data in non-browser/mocked tests
+      }
+
+      const rowsOccupied = Math.max(10, Math.ceil(drawH / 20));
+      cursorRow += rowsOccupied + 1;
+
+      if (Array.isArray(chart.legendItems) && chart.legendItems.length > 0) {
+        const legendRow = ws.getRow(cursorRow);
+        const legendCell = legendRow.getCell(1);
+        legendCell.value = `Legend: ${chart.legendItems.map((it) => it.label).join('  •  ')}`;
+        legendCell.font = { name: 'Arial', size: 8.5, color: { argb: 'FF475569' } };
+        legendRow.height = 16;
+        cursorRow += 2;
+      } else {
+        cursorRow += 1;
+      }
+    });
+  };
+
+  const addChartsSheet = () => {
+    const validCharts = (chartImages || []).filter(
+      (c) => c && typeof c.dataUrl === 'string' && c.dataUrl.includes('base64,')
+    );
+    if (validCharts.length === 0) return;
+
+    const ws = workbook.addWorksheet('Visual Analytics', {
+      pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+    });
+    ws.mergeCells('A1:F1');
+    const tCell = ws.getCell('A1');
+    tCell.value = `MOBILE CARE SERVICES PHILS. INC. — Visual Analytics (${cleanPeriodLabel})`;
+    tCell.font = { name: 'Arial', size: 12.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    tCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    tCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.getRow(1).height = 28;
+    ws.columns = [{ width: 32 }, { width: 22 }, { width: 22 }, { width: 22 }, { width: 22 }, { width: 22 }];
+    embedChartsIntoWorksheet(ws, 3);
   };
 
   // ── SHEET: Top iPhone Parts ────────────────────────────────────────────────
@@ -339,9 +437,9 @@ export async function exportDashboardReportToExcel({
       pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
     });
 
-    ws.mergeCells('A1:I1');
+    ws.mergeCells('A1:K1');
     const tCell = ws.getCell('A1');
-    tCell.value = `MOBILE CARE SERVICES PHILS. INC. — Service Hubs iPhone Demand Network (${cleanPeriodLabel})`;
+    tCell.value = `MOBILE CARE SERVICES PHILS. INC. — Service Hubs All-Parts Demand, Revenue & Income (${cleanPeriodLabel})`;
     tCell.font = { name: 'Arial', size: 12.5, bold: true, color: { argb: 'FFFFFFFF' } };
     tCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
     tCell.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -351,22 +449,30 @@ export async function exportDashboardReportToExcel({
       'Rank',
       'Service Branch Name',
       'Region',
-      'iPhone Units Demand',
+      'All Parts Demand',
       'Distinct SKUs',
-      'Total Valuation (USD)',
-      'Total Valuation (PHP)',
-      'Top Consumed iPhone Part',
+      'Revenue (USD)',
+      'Revenue (PHP)',
+      'Income (USD)',
+      'Income (PHP)',
+      'Top Consumed Part',
       'Network Share (%)'
     ];
     const headerRow = ws.addRow(headers);
     applyHeaderStyles(headerRow);
 
     let sumUnits = 0;
-    let sumVal = 0;
+    let sumRev = 0;
+    let sumInc = 0;
 
     sites.forEach((site, idx) => {
-      sumUnits += site.totalUnits || 0;
-      sumVal += site.totalValUSD || 0;
+      const units = site.totalUnits || 0;
+      const valUSD = site.totalValUSD || 0;
+      const revUSD = site.totalRevenueUSD != null ? site.totalRevenueUSD : valUSD * 1.25;
+      const incUSD = site.totalIncomeUSD != null ? site.totalIncomeUSD : Math.max(0, revUSD - valUSD);
+      sumUnits += units;
+      sumRev += revUSD;
+      sumInc += incUSD;
       const topPartText = site.topPart
         ? `${site.topPart.description || site.topPart.part_number} (${site.topPart.units} units)`
         : '—';
@@ -375,10 +481,12 @@ export async function exportDashboardReportToExcel({
         idx + 1,
         sanitizeForSpreadsheet(site.siteName || site.shortName || ''),
         sanitizeForSpreadsheet(site.region || (site.isMM ? 'Metro Manila' : 'Provincial')),
-        site.totalUnits || 0,
+        units,
         site.distinctPartsCount || 0,
-        site.totalValUSD || 0,
-        (site.totalValUSD || 0) * USD_TO_PHP_RATE,
+        revUSD,
+        revUSD * USD_TO_PHP_RATE,
+        incUSD,
+        incUSD * USD_TO_PHP_RATE,
         sanitizeForSpreadsheet(topPartText),
         Number(((site.pctShare || 0) / 100).toFixed(4))
       ]);
@@ -398,9 +506,14 @@ export async function exportDashboardReportToExcel({
       r.getCell(6).font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF15803D' } };
       r.getCell(7).alignment = { horizontal: 'right', vertical: 'middle' };
       r.getCell(7).numFmt = '₱#,##0';
-      r.getCell(8).alignment = { horizontal: 'left', vertical: 'middle' };
-      r.getCell(9).alignment = { horizontal: 'center', vertical: 'middle' };
-      r.getCell(9).numFmt = '0.0%';
+      r.getCell(8).alignment = { horizontal: 'right', vertical: 'middle' };
+      r.getCell(8).numFmt = '$#,##0';
+      r.getCell(8).font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF4F46E5' } };
+      r.getCell(9).alignment = { horizontal: 'right', vertical: 'middle' };
+      r.getCell(9).numFmt = '₱#,##0';
+      r.getCell(10).alignment = { horizontal: 'left', vertical: 'middle' };
+      r.getCell(11).alignment = { horizontal: 'center', vertical: 'middle' };
+      r.getCell(11).numFmt = '0.0%';
     });
 
     const totRow = ws.addRow([
@@ -409,8 +522,10 @@ export async function exportDashboardReportToExcel({
       'National Network',
       sumUnits,
       '',
-      sumVal,
-      sumVal * USD_TO_PHP_RATE,
+      sumRev,
+      sumRev * USD_TO_PHP_RATE,
+      sumInc,
+      sumInc * USD_TO_PHP_RATE,
       '',
       '100.0%'
     ]);
@@ -426,17 +541,21 @@ export async function exportDashboardReportToExcel({
     totRow.getCell(4).numFmt = '#,##0';
     totRow.getCell(6).numFmt = '$#,##0';
     totRow.getCell(7).numFmt = '₱#,##0';
+    totRow.getCell(8).numFmt = '$#,##0';
+    totRow.getCell(9).numFmt = '₱#,##0';
 
     ws.columns = [
       { width: 8 },
       { width: 36 },
       { width: 18 },
-      { width: 22 },
-      { width: 16 },
-      { width: 22 },
-      { width: 22 },
+      { width: 20 },
+      { width: 14 },
+      { width: 18 },
+      { width: 18 },
+      { width: 18 },
+      { width: 18 },
       { width: 38 },
-      { width: 18 }
+      { width: 16 }
     ];
   };
 
@@ -578,6 +697,7 @@ export async function exportDashboardReportToExcel({
       filename = `MDC_Service_Hubs_Network_Report_${cleanPeriodLabel.replace(/\s+/g, '_')}.xlsx`;
     } else if (activeTab === 'site-parts') {
       addSitePartsSheet(selectedSiteName, sitePartsReport?.all || sitePartsReport?.displayList || []);
+      addChartsSheet();
       filename = `MDC_Branch_Report_${selectedSiteName.replace(/[^a-zA-Z0-9]/g, '_')}_${cleanPeriodLabel.replace(/\s+/g, '_')}.xlsx`;
     }
   }
@@ -772,21 +892,26 @@ export function exportDashboardReportToPDF({
     renderKpiCards(27);
 
     const sitesList = masterSitesReport?.all || masterSitesReport?.displayList || [];
-    const tableBody = sitesList.map((s, idx) => [
-      idx + 1,
-      s.shortName || s.siteName || '',
-      s.region || (s.isMM ? 'Metro Manila' : 'Provincial'),
-      (s.totalUnits || 0).toLocaleString(),
-      s.distinctPartsCount || 0,
-      `$${(s.totalValUSD || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
-      `₱${((s.totalValUSD || 0) * USD_TO_PHP_RATE).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
-      s.topPart ? `${s.topPart.description || s.topPart.part_number} (${s.topPart.units})` : '—',
-      `${(s.pctShare || 0).toFixed(1)}%`
-    ]);
+    const tableBody = sitesList.map((s, idx) => {
+      const valUSD = s.totalValUSD || 0;
+      const revUSD = s.totalRevenueUSD != null ? s.totalRevenueUSD : valUSD * 1.25;
+      const incUSD = s.totalIncomeUSD != null ? s.totalIncomeUSD : Math.max(0, revUSD - valUSD);
+      return [
+        idx + 1,
+        s.shortName || s.siteName || '',
+        s.region || (s.isMM ? 'Metro Manila' : 'Provincial'),
+        (s.totalUnits || 0).toLocaleString(),
+        s.distinctPartsCount || 0,
+        `$${Math.round(revUSD).toLocaleString()}`,
+        `$${Math.round(incUSD).toLocaleString()}`,
+        s.topPart ? `${s.topPart.description || s.topPart.part_number} (${s.topPart.units})` : '—',
+        `${(s.pctShare || 0).toFixed(1)}%`
+      ];
+    });
 
     autoTable(doc, {
       startY: 49,
-      head: [['#', 'SERVICE BRANCH', 'REGION', 'IPHONE UNITS', 'DISTINCT SKUS', 'VALUATION ($)', 'VALUATION (₱)', 'TOP CONSUMED PART', 'SHARE']],
+      head: [['#', 'SERVICE BRANCH', 'REGION', 'ALL PARTS', 'SKUS', 'REVENUE ($)', 'INCOME ($)', 'TOP CONSUMED PART', 'SHARE']],
       body: tableBody,
       theme: 'grid',
       headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7.5, halign: 'center' },
@@ -796,10 +921,10 @@ export function exportDashboardReportToPDF({
         0: { halign: 'center', cellWidth: 8 },
         1: { halign: 'left', fontStyle: 'bold', cellWidth: 'auto' },
         2: { halign: 'center', cellWidth: 24 },
-        3: { halign: 'center', fontStyle: 'bold', cellWidth: 22 },
-        4: { halign: 'center', cellWidth: 18 },
+        3: { halign: 'center', fontStyle: 'bold', cellWidth: 20 },
+        4: { halign: 'center', cellWidth: 15 },
         5: { halign: 'right', fontStyle: 'bold', cellWidth: 25 },
-        6: { halign: 'right', cellWidth: 26 },
+        6: { halign: 'right', fontStyle: 'bold', cellWidth: 25 },
         7: { halign: 'left', cellWidth: 55 },
         8: { halign: 'center', cellWidth: 16 }
       },

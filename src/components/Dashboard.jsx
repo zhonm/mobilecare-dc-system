@@ -43,7 +43,8 @@ import {
   YAxis,
   Tooltip,
   Legend,
-  CartesianGrid
+  CartesianGrid,
+  ReferenceLine
 } from 'recharts';
 import { generatePackingListPDF } from '../utils/pdfGenerator';
 import {
@@ -57,6 +58,7 @@ import {
   getMasterlistSummary,
   getMasterlistParts,
   getMasterlistSites,
+  getAllPartsServiceHubsRanking,
   getMasterlistPartsForSite,
   scanMasterlistData,
   scanKgbMasterlistData,
@@ -684,12 +686,12 @@ export default function Dashboard() {
   const categoryChartData = useMemo(() => {
     const raw = masterSummary.categoryStats || {};
     const colors = {
-      'Battery': '#059669',
+      'Battery': '#10b981',
       'Display': '#0284c7',
-      'Rear System & Logic': '#7c3aed',
-      'Camera': '#db2777',
-      'Back Glass': '#0d9488',
-      'Component': '#475569'
+      'Rear System & Logic': '#6366f1',
+      'Camera': '#ec4899',
+      'Back Glass': '#14b8a6',
+      'Component': '#64748b'
     };
 
     return Object.entries(raw).map(([cat, count]) => ({
@@ -699,18 +701,43 @@ export default function Dashboard() {
     })).sort((a, b) => b.count - a.count);
   }, [masterSummary]);
 
-  // Top 8 Sites for Bar Chart
+  const [hubRankBy, setHubRankBy] = useState('demand'); // 'demand' | 'revenue' | 'income'
+
+  const allPartsHubsReport = useMemo(() => {
+    return getAllPartsServiceHubsRanking({
+      sortBy: hubRankBy,
+      limit: 'ALL'
+    }, activeMasterlist, activePeriod);
+  }, [hubRankBy, activeMasterlist, activePeriod]);
+
+  const allPartsHubsTableReport = useMemo(() => {
+    return getAllPartsServiceHubsRanking({
+      sortBy: hubRankBy,
+      search: reportSearch,
+      limit: reportLimit
+    }, activeMasterlist, activePeriod);
+  }, [hubRankBy, reportSearch, reportLimit, activeMasterlist, activePeriod]);
+
+  // Top 8 Sites for Bar Chart (All Parts Demand, Revenue & Income)
   const topSitesChartData = useMemo(() => {
-    return (masterSitesReport?.all || []).slice(0, 8).map(s => {
+    return (allPartsHubsReport?.all || []).slice(0, 8).map(s => {
       const label = s.shortName || s.siteName || 'Branch';
       return {
         name: label.length > 12 ? label.substring(0, 12) + '...' : label,
         fullName: label,
-        'iPhone Units': s.totalUnits || 0,
-        'Valuation ($k)': Math.round((s.totalValUSD || 0) / 1000)
+        region: s.region,
+        'Total Parts': s.totalUnits || 0,
+        'Revenue ($k)': Math.round((s.totalRevenueUSD || 0) / 1000),
+        'Income ($k)': Math.round((s.totalIncomeUSD || 0) / 1000),
+        iphoneUnits: s.iphoneUnits || 0,
+        nonIphoneUnits: s.nonIphoneUnits || 0,
+        totalRevenueUSD: s.totalRevenueUSD || 0,
+        totalRevenuePHP: s.totalRevenuePHP || 0,
+        totalIncomeUSD: s.totalIncomeUSD || 0,
+        totalIncomePHP: s.totalIncomePHP || 0
       };
     });
-  }, [masterSitesReport]);
+  }, [allPartsHubsReport]);
 
   // DC Stock Grouped Snapshot Table
   const groupedInventory = useMemo(() => {
@@ -825,8 +852,17 @@ export default function Dashboard() {
         : masterPartsReport;
 
       const sitesReportToExport = mode === 'all'
-        ? getMasterlistSites({ search: '', limit: 'ALL', region: 'ALL', categories: null }, activeMasterlist, activePeriod)
-        : masterSitesReport;
+        ? getAllPartsServiceHubsRanking({ sortBy: hubRankBy, search: '', limit: 'ALL' }, activeMasterlist, activePeriod)
+        : (reportTab === 'top-sites' ? allPartsHubsTableReport : allPartsHubsReport);
+
+      let chartImages = [];
+      try {
+        chartImages = await captureChartsFromContainer(
+          typeof document !== 'undefined' ? (document.querySelector('.dashboard-page') || document.body) : null
+        );
+      } catch {
+        chartImages = [];
+      }
 
       await exportDashboardReportToExcel({
         activeTab: reportTab,
@@ -838,7 +874,8 @@ export default function Dashboard() {
         reportCategory: mode === 'all' ? 'ALL' : reportCategory,
         reportSearch: mode === 'all' ? '' : reportSearch,
         periodLabel: currentPeriodLabel,
-        exportMode: mode
+        exportMode: mode,
+        chartImages
       });
 
       showToast?.(
@@ -874,8 +911,8 @@ export default function Dashboard() {
         : masterPartsReport;
 
       const sitesReportToExport = mode === 'all'
-        ? getMasterlistSites({ search: '', limit: 'ALL', region: 'ALL', categories: null }, activeMasterlist, activePeriod)
-        : masterSitesReport;
+        ? getAllPartsServiceHubsRanking({ sortBy: hubRankBy, search: '', limit: 'ALL' }, activeMasterlist, activePeriod)
+        : (reportTab === 'top-sites' ? allPartsHubsTableReport : allPartsHubsReport);
 
       const chartImages = await captureChartsFromContainer(
         typeof document !== 'undefined' ? (document.querySelector('.dashboard-page') || document.body) : null
@@ -1419,144 +1456,534 @@ export default function Dashboard() {
       </div>
 
       {/* ───────────────────────────────────────────────────────────────── */}
-      {/* 2B. CONSUMABLES & SERVICE TOOLS LIVE OVERVIEW                     */}
+      {/* 2B. DAILY TREND ANALYSIS (FROM DAILY KGB USED REPORT)             */}
       {/* ───────────────────────────────────────────────────────────────── */}
-      <div
-        className="card"
-        style={{
-          padding: '18px 20px',
-          border: '1px solid #e2e8f0',
-          borderRadius: '12px',
-          background: '#ffffff',
-          marginBottom: '4px'
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{ background: '#0f172a', color: '#38bdf8', padding: '8px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Wrench size={18} />
+      {visibleDailyTrends.length > 0 && (
+        <div
+          className="card"
+          style={{
+            padding: '22px 24px',
+            border: '1px solid #e2e8f0',
+            borderRadius: '14px',
+            background: '#ffffff',
+            boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04), 0 6px 16px -4px rgba(15, 23, 42, 0.04)'
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '18px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: '#eff6ff', border: '1px solid #bfdbfe', color: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <TrendingUp size={18} />
+              </div>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.01em' }}>
+                    Daily iPhone Parts Consumption Trend
+                  </h3>
+                  <span
+                    className="badge"
+                    style={{
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      padding: '2px 9px',
+                      borderRadius: '999px',
+                      background: '#eff6ff',
+                      color: '#0369a1',
+                      border: '1px solid #bae6fd'
+                    }}
+                  >
+                    {activeMasterlist.dailyTrendSummary?.totalActiveDays || visibleDailyTrends.length} Active Days
+                  </span>
+                </div>
+                <p style={{ fontSize: '12px', color: '#64748b', margin: '3px 0 0 0' }}>
+                  Daily operational repair volume tracked from Repair Closed Date in the GSX KGB Used Report
+                </p>
+              </div>
             </div>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                <h3 style={{ margin: 0, fontSize: '15.5px', fontWeight: 800, color: '#0f172a' }}>
-                  Consumables &amp; Service Tools Center
-                </h3>
-                <span
+
+            <div style={{ display: 'flex', background: '#f1f5f9', padding: '3px', borderRadius: '9px', border: '1px solid #e2e8f0', gap: '2px' }}>
+              {[
+                { key: '14D', label: '14 Days' },
+                { key: '30D', label: '30 Days' },
+                { key: 'ALL', label: 'All Days' }
+              ].map(opt => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => setDailyTrendRange(opt.key)}
                   style={{
-                    fontSize: '11px',
+                    border: 'none',
+                    background: dailyTrendRange === opt.key ? '#0f172a' : 'transparent',
+                    color: dailyTrendRange === opt.key ? '#ffffff' : '#475569',
+                    padding: '6px 13px',
+                    borderRadius: '6px',
+                    fontSize: '11.5px',
                     fontWeight: 700,
-                    padding: '2px 8px',
-                    borderRadius: '999px',
-                    background: ctSyncStatus?.isSyncing ? '#fef3c7' : '#ecfdf5',
-                    color: ctSyncStatus?.isSyncing ? '#b45309' : '#047857',
-                    border: `1px solid ${ctSyncStatus?.isSyncing ? '#fde68a' : '#a7f3d0'}`
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease'
                   }}
                 >
-                  {ctSyncStatus?.isSyncing ? 'Syncing Cloud...' : 'Live Cloud Synced'}
-                </span>
-              </div>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                Real-time non-repair consumables stock, serialized tool assets, packing lists &amp; cross-site movement ledger
-              </p>
+                  {opt.label}
+                </button>
+              ))}
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              onClick={() => setActiveTab('consumables-tools')}
+          {/* 4 Compact Daily Summary KPIs */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '12px', marginBottom: '18px' }}>
+            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderTop: '3px solid #0284c7', borderRadius: '10px', padding: '11px 14px' }}>
+              <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                Latest Day ({activeMasterlist.dailyTrendSummary?.latestLabel || '—'})
+              </div>
+              <div style={{ fontSize: '21px', fontWeight: 800, color: '#0284c7', marginTop: '4px', fontVariantNumeric: 'tabular-nums' }}>
+                {(activeMasterlist.dailyTrendSummary?.latestUnits || 0).toLocaleString()} <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>units</span>
+              </div>
+            </div>
+            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderTop: '3px solid #6366f1', borderRadius: '10px', padding: '11px 14px' }}>
+              <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                7-Day Daily Avg
+              </div>
+              <div style={{ fontSize: '21px', fontWeight: 800, color: '#0f172a', marginTop: '4px', fontVariantNumeric: 'tabular-nums' }}>
+                {(activeMasterlist.dailyTrendSummary?.avgDailyUnits7d || 0).toLocaleString()} <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>units/day</span>
+              </div>
+            </div>
+            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderTop: '3px solid #10b981', borderRadius: '10px', padding: '11px 14px' }}>
+              <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                Peak Day ({activeMasterlist.dailyTrendSummary?.peakDay?.label || '—'})
+              </div>
+              <div style={{ fontSize: '21px', fontWeight: 800, color: '#059669', marginTop: '4px', fontVariantNumeric: 'tabular-nums' }}>
+                {(activeMasterlist.dailyTrendSummary?.peakDay?.units || 0).toLocaleString()} <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>units</span>
+              </div>
+            </div>
+            <div
+              style={{
+                background: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                borderTop: `3px solid ${
+                  activeMasterlist.dailyTrendSummary?.dayOverDayPct == null
+                    ? '#94a3b8'
+                    : activeMasterlist.dailyTrendSummary.dayOverDayPct >= 0
+                      ? '#10b981'
+                      : '#ef4444'
+                }`,
+                borderRadius: '10px',
+                padding: '11px 14px'
+              }}
             >
-              Open CT Center
-            </button>
+              <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                Day-over-Day
+              </div>
+              <div
+                style={{
+                  fontSize: '21px',
+                  fontWeight: 800,
+                  marginTop: '4px',
+                  fontVariantNumeric: 'tabular-nums',
+                  color: activeMasterlist.dailyTrendSummary?.dayOverDayPct == null
+                    ? '#64748b'
+                    : activeMasterlist.dailyTrendSummary.dayOverDayPct >= 0
+                      ? '#059669'
+                      : '#dc2626'
+                }}
+              >
+                {activeMasterlist.dailyTrendSummary?.dayOverDayPct == null
+                  ? '—'
+                  : `${activeMasterlist.dailyTrendSummary.dayOverDayPct >= 0 ? '+' : ''}${activeMasterlist.dailyTrendSummary.dayOverDayPct}%`}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ height: '250px', width: '100%', minWidth: 0 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={visibleDailyTrends} margin={{ top: 12, right: 18, left: 0, bottom: 4 }}>
+                <defs>
+                  <linearGradient id="kgbDailyUnitsGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#0284c7" stopOpacity={0.28} />
+                    <stop offset="65%" stopColor="#38bdf8" stopOpacity={0.08} />
+                    <stop offset="95%" stopColor="#0284c7" stopOpacity={0.0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis
+                  dataKey="label"
+                  tick={{ fontSize: 11, fill: '#64748b' }}
+                  axisLine={{ stroke: '#e2e8f0' }}
+                  tickLine={false}
+                  minTickGap={16}
+                />
+                <YAxis
+                  width={42}
+                  tick={{ fontSize: 11, fill: '#64748b' }}
+                  axisLine={false}
+                  tickLine={false}
+                  tickFormatter={(v) => Number(v).toLocaleString()}
+                />
+                {activeMasterlist.dailyTrendSummary?.avgDailyUnits7d > 0 && (
+                  <ReferenceLine
+                    y={activeMasterlist.dailyTrendSummary.avgDailyUnits7d}
+                    stroke="#6366f1"
+                    strokeDasharray="4 4"
+                    strokeOpacity={0.65}
+                    label={{
+                      value: `7d Avg: ${activeMasterlist.dailyTrendSummary.avgDailyUnits7d}`,
+                      position: 'insideTopRight',
+                      fill: '#6366f1',
+                      fontSize: 10.5,
+                      fontWeight: 700
+                    }}
+                  />
+                )}
+                <Tooltip
+                  cursor={{ stroke: '#0284c7', strokeWidth: 1, strokeDasharray: '3 3' }}
+                  content={({ active, payload }) => {
+                    if (!active || !payload || payload.length === 0) return null;
+                    const row = payload[0]?.payload || {};
+                    return (
+                      <div
+                        style={{
+                          background: '#0f172a',
+                          color: '#f8fafc',
+                          padding: '10px 14px',
+                          borderRadius: '10px',
+                          boxShadow: '0 10px 25px rgba(15, 23, 42, 0.25)',
+                          border: '1px solid #334155',
+                          fontSize: '12px',
+                          minWidth: '185px'
+                        }}
+                      >
+                        <div style={{ fontWeight: 700, color: '#e2e8f0', marginBottom: '6px', borderBottom: '1px solid #334155', paddingBottom: '4px' }}>
+                          {row.date || row.label} • {row.activeSites || 0} active hubs
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '14px', marginBottom: '2px' }}>
+                          <span style={{ color: '#94a3b8' }}>iPhone Parts Used</span>
+                          <strong style={{ color: '#38bdf8' }}>{Number(row.units || 0).toLocaleString()} units</strong>
+                        </div>
+                        {typeof row.valuationUSD === 'number' && row.valuationUSD > 0 && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '14px' }}>
+                            <span style={{ color: '#94a3b8' }}>Est. Valuation</span>
+                            <strong style={{ color: '#34d399' }}>${Number(row.valuationUSD).toLocaleString()}</strong>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="units"
+                  stroke="#0284c7"
+                  strokeWidth={2.5}
+                  fill="url(#kgbDailyUnitsGrad)"
+                  dot={visibleDailyTrends.length <= 16 ? { r: 3, fill: '#ffffff', stroke: '#0284c7', strokeWidth: 2 } : false}
+                  activeDot={{ r: 5, fill: '#0284c7', stroke: '#ffffff', strokeWidth: 2 }}
+                  isAnimationActive={false}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* ───────────────────────────────────────────────────────────────── */}
+      {/* 2C. ANALYTICS ROW: CATEGORY DISTRIBUTION & TOP HUBS DEMAND BARS   */}
+      {/* ───────────────────────────────────────────────────────────────── */}
+      <div className="dashboard-analytics-grid">
+        {/* Left: Category Breakdown Donut */}
+        <div
+          className="card"
+          style={{
+            padding: '22px 24px',
+            border: '1px solid #e2e8f0',
+            borderRadius: '14px',
+            background: '#ffffff',
+            boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04), 0 6px 16px -4px rgba(15, 23, 42, 0.04)'
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '18px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ width: '34px', height: '34px', borderRadius: '9px', background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#059669', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Layers size={17} />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.01em' }}>
+                  iPhone Demand by Category
+                </h3>
+                <p style={{ fontSize: '12px', color: '#64748b', margin: '2px 0 0 0' }}>
+                  Distribution of {masterSummary.totalUnits.toLocaleString()} iPhone repairs across component families
+                </p>
+              </div>
+            </div>
+            <span
+              className="badge badge-primary"
+              style={{
+                fontSize: '11px',
+                fontWeight: 700,
+                padding: '3px 10px',
+                borderRadius: '999px',
+                background: '#eff6ff',
+                color: '#0369a1',
+                border: '1px solid #bae6fd',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              {masterSummary.totalUnits.toLocaleString()} Repairs
+            </span>
+          </div>
+
+          <div className="dashboard-category-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '14px', minHeight: '245px' }}>
+            <div style={{ width: '48%', height: '235px', minWidth: 0, position: 'relative' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={categoryChartData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={56}
+                    outerRadius={86}
+                    paddingAngle={2.5}
+                    cornerRadius={4}
+                    dataKey="count"
+                    isAnimationActive={false}
+                  >
+                    {categoryChartData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} stroke="#ffffff" strokeWidth={2} />
+                    ))}
+                  </Pie>
+                  <text x="50%" y="46%" textAnchor="middle" dominantBaseline="central" fill="#0f172a" fontSize={18} fontWeight={800}>
+                    {masterSummary.totalUnits.toLocaleString()}
+                  </text>
+                  <text x="50%" y="57%" textAnchor="middle" dominantBaseline="central" fill="#64748b" fontSize={10} fontWeight={700}>
+                    TOTAL UNITS
+                  </text>
+                  <Tooltip
+                    content={({ active, payload }) => {
+                      if (!active || !payload || payload.length === 0) return null;
+                      const item = payload[0]?.payload || {};
+                      const totalDemand = masterSummary.totalUnits || 1;
+                      const pct = ((Number(item.count || 0) / totalDemand) * 100).toFixed(1);
+                      return (
+                        <div
+                          style={{
+                            background: '#0f172a',
+                            color: '#f8fafc',
+                            padding: '9px 13px',
+                            borderRadius: '9px',
+                            boxShadow: '0 10px 25px rgba(15, 23, 42, 0.25)',
+                            border: '1px solid #334155',
+                            fontSize: '12px'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, marginBottom: '3px' }}>
+                            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: item.color }} />
+                            <span>{item.name}</span>
+                          </div>
+                          <div style={{ color: '#cbd5e1' }}>
+                            <strong style={{ color: '#ffffff' }}>{Number(item.count || 0).toLocaleString()}</strong> repairs ({pct}%)
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Custom Legend with Proportional Share Bars */}
+            <div style={{ width: '52%', display: 'flex', flexDirection: 'column', gap: '9px', maxHeight: '240px', overflowY: 'auto', paddingRight: '2px' }}>
+              {categoryChartData.map(item => {
+                const totalDemand = masterSummary.totalUnits || 1;
+                const pct = Math.round((item.count / totalDemand) * 100);
+                return (
+                  <div
+                    key={item.name}
+                    data-chart-legend-item="true"
+                    data-legend-label={`${item.name} (${pct}%)`}
+                    data-legend-color={item.color}
+                    style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '7px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <span style={{ width: '9px', height: '9px', borderRadius: '50%', background: item.color, flexShrink: 0 }} />
+                        <span style={{ fontWeight: 600, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</span>
+                      </div>
+                      <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+                        <strong style={{ color: '#0f172a' }}>{item.count.toLocaleString()}</strong>{' '}
+                        <span style={{ color: '#64748b', fontSize: '11px', fontWeight: 600 }}>({pct}%)</span>
+                      </div>
+                    </div>
+                    <div style={{ height: '4px', width: '100%', background: '#f1f5f9', borderRadius: '999px', overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${Math.max(pct, 2)}%`, background: item.color, borderRadius: '999px' }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '12px' }}>
-          <div
-            onClick={() => setActiveTab('ct-receiving')}
-            style={{
-              padding: '12px 14px',
-              borderRadius: '10px',
-              background: '#fffbeb',
-              border: '1px solid #fde68a',
-              cursor: 'pointer'
-            }}
-          >
-            <div style={{ fontSize: '11px', fontWeight: 700, color: '#92400e', textTransform: 'uppercase' }}>
-              Open CT Orders
+        {/* Right: Top 8 Hubs All-Parts Demand, Revenue & Income Bar Chart */}
+        <div
+          className="card"
+          style={{
+            padding: '22px 24px',
+            border: '1px solid #e2e8f0',
+            borderRadius: '14px',
+            background: '#ffffff',
+            boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04), 0 6px 16px -4px rgba(15, 23, 42, 0.04)'
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '10px', marginBottom: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ width: '34px', height: '34px', borderRadius: '9px', background: '#eff6ff', border: '1px solid #bfdbfe', color: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Building2 size={17} />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.01em' }}>
+                  Top Service Hubs • All Parts Demand &amp; Revenue
+                </h3>
+                <p style={{ fontSize: '12px', color: '#64748b', margin: '2px 0 0 0' }}>
+                  All-parts demand ({allPartsHubsReport.grandTotalUnits.toLocaleString()} units), revenue &amp; income per branch
+                </p>
+              </div>
             </div>
-            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>
-              {ctDashboardSummary.openOrders}
-            </div>
-            <div style={{ fontSize: '11.5px', color: '#78350f' }}>
-              Pending or partial PO deliveries
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', background: '#f1f5f9', padding: '2px', borderRadius: '8px', border: '1px solid #e2e8f0', gap: '2px' }}>
+                {[
+                  { key: 'demand', label: 'Demand' },
+                  { key: 'revenue', label: 'Revenue' }
+                ].map(opt => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => setHubRankBy(opt.key)}
+                    style={{
+                      border: 'none',
+                      background: hubRankBy === opt.key ? '#0f172a' : 'transparent',
+                      color: hubRankBy === opt.key ? '#ffffff' : '#475569',
+                      padding: '4px 10px',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setReportTab('top-sites')}
+                style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+              >
+                <span>View All {allPartsHubsReport.totalSitesCount || masterSitesReport?.totalSitesCount || 28} Hubs</span>
+                <ArrowUpRight size={13} />
+              </button>
             </div>
           </div>
 
-          <div
-            onClick={() => setActiveTab('consumables-tools')}
-            style={{
-              padding: '12px 14px',
-              borderRadius: '10px',
-              background: '#f8fafc',
-              border: '1px solid #e2e8f0',
-              cursor: 'pointer'
-            }}
-          >
-            <div style={{ fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>
-              Consumables On Hand
-            </div>
-            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>
-              {ctDashboardSummary.consumablesOnHand.toLocaleString()}
-            </div>
-            <div style={{ fontSize: '11.5px', color: ctDashboardSummary.lowStockSkus > 0 ? '#b45309' : '#64748b' }}>
-              {ctDashboardSummary.lowStockSkus > 0
-                ? `${ctDashboardSummary.lowStockSkus} SKU(s) at or below min threshold`
-                : 'Stocked across active sites'}
-            </div>
-          </div>
+          {/* Top Performer Highlight Strip */}
+          {allPartsHubsReport.topByDemand && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '8px', marginBottom: '12px' }}>
+              <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px', padding: '7px 10px' }}>
+                <div style={{ fontSize: '10px', fontWeight: 700, color: '#0369a1', textTransform: 'uppercase' }}>
+                  #1 Parts Demand
+                </div>
+                <div style={{ fontSize: '12px', fontWeight: 800, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {allPartsHubsReport.topByDemand.shortName}
+                </div>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: '#0284c7', fontVariantNumeric: 'tabular-nums' }}>
+                  {allPartsHubsReport.topByDemand.totalUnits.toLocaleString()} units
+                </div>
+              </div>
 
-          <div
-            onClick={() => setActiveTab('consumables-tools')}
-            style={{
-              padding: '12px 14px',
-              borderRadius: '10px',
-              background: '#eff6ff',
-              border: '1px solid #bfdbfe',
-              cursor: 'pointer'
-            }}
-          >
-            <div style={{ fontSize: '11px', fontWeight: 700, color: '#1d4ed8', textTransform: 'uppercase' }}>
-              Tracked Tool Units
+              <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '8px', padding: '7px 10px' }}>
+                <div style={{ fontSize: '10px', fontWeight: 700, color: '#047857', textTransform: 'uppercase' }}>
+                  #1 Revenue
+                </div>
+                <div style={{ fontSize: '12px', fontWeight: 800, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {allPartsHubsReport.topByRevenue?.shortName || '—'}
+                </div>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: '#059669', fontVariantNumeric: 'tabular-nums' }}>
+                  ${Math.round(allPartsHubsReport.topByRevenue?.totalRevenueUSD || 0).toLocaleString()}
+                </div>
+              </div>
             </div>
-            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>
-              {ctDashboardSummary.toolsTotal}
-            </div>
-            <div style={{ fontSize: '11.5px', color: '#1e40af' }}>
-              {ctDashboardSummary.toolsAvailable} available • {ctDashboardSummary.toolsInUse} in use
-            </div>
-          </div>
+          )}
 
-          <div
-            onClick={() => setActiveTab('ct-movements')}
-            style={{
-              padding: '12px 14px',
-              borderRadius: '10px',
-              background: '#ecfdf5',
-              border: '1px solid #a7f3d0',
-              cursor: 'pointer'
-            }}
-          >
-            <div style={{ fontSize: '11px', fontWeight: 700, color: '#047857', textTransform: 'uppercase' }}>
-              CT Shipments &amp; Archive
-            </div>
-            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>
-              {ctDashboardSummary.totalShipments}
-            </div>
-            <div style={{ fontSize: '11.5px', color: '#065f46' }}>
-              {ctDashboardSummary.activeShipments} in transit • {ctDashboardSummary.deliveredShipments} delivered
-            </div>
+          <div style={{ height: '220px', width: '100%', minWidth: 0 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={topSitesChartData} margin={{ top: 8, right: 12, left: 0, bottom: 8 }} barGap={3} barCategoryGap="20%">
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis
+                  dataKey="name"
+                  interval={0}
+                  angle={-20}
+                  textAnchor="end"
+                  height={48}
+                  tick={{ fontSize: 10.5, fill: '#475569', fontWeight: 600 }}
+                  axisLine={{ stroke: '#e2e8f0' }}
+                  tickLine={false}
+                />
+                <YAxis
+                  width={42}
+                  tick={{ fontSize: 11, fill: '#64748b' }}
+                  axisLine={false}
+                  tickLine={false}
+                  tickFormatter={(v) => Number(v).toLocaleString()}
+                />
+                <Tooltip
+                  cursor={{ fill: '#f8fafc' }}
+                  content={({ active, payload }) => {
+                    if (!active || !payload || payload.length === 0) return null;
+                    const row = payload[0]?.payload || {};
+                    return (
+                      <div
+                        style={{
+                          background: '#0f172a',
+                          color: '#f8fafc',
+                          padding: '10px 14px',
+                          borderRadius: '10px',
+                          boxShadow: '0 10px 25px rgba(15, 23, 42, 0.25)',
+                          border: '1px solid #334155',
+                          fontSize: '12px',
+                          minWidth: '215px'
+                        }}
+                      >
+                        <div style={{ fontWeight: 700, color: '#e2e8f0', marginBottom: '6px', borderBottom: '1px solid #334155', paddingBottom: '4px' }}>
+                          {row.fullName || row.name}
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '14px', marginBottom: '3px' }}>
+                          <span style={{ color: '#94a3b8' }}>Total Parts Demand</span>
+                          <strong style={{ color: '#38bdf8' }}>{Number(row['Total Parts'] || 0).toLocaleString()} units</strong>
+                        </div>
+                        {row.nonIphoneUnits > 0 && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '14px', marginBottom: '4px', fontSize: '11px', color: '#94a3b8' }}>
+                            <span>iPhone / Other Parts</span>
+                            <span>{Number(row.iphoneUnits || 0).toLocaleString()} / {Number(row.nonIphoneUnits || 0).toLocaleString()}</span>
+                          </div>
+                        )}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '14px', marginBottom: '3px' }}>
+                          <span style={{ color: '#94a3b8' }}>Revenue Generated</span>
+                          <strong style={{ color: '#34d399' }}>
+                            ${Math.round(row.totalRevenueUSD || 0).toLocaleString()} (₱{Math.round(row.totalRevenuePHP || 0).toLocaleString()})
+                          </strong>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '14px' }}>
+                          <span style={{ color: '#94a3b8' }}>Income Generated</span>
+                          <strong style={{ color: '#a5b4fc' }}>
+                            ${Math.round(row.totalIncomeUSD || 0).toLocaleString()} (₱{Math.round(row.totalIncomePHP || 0).toLocaleString()})
+                          </strong>
+                        </div>
+                      </div>
+                    );
+                  }}
+                />
+                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: '11.5px', paddingTop: '2px' }} />
+                <Bar dataKey="Total Parts" fill="#0284c7" radius={[4, 4, 0, 0]} maxBarSize={26} isAnimationActive={false} />
+                <Bar dataKey="Revenue ($k)" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={26} isAnimationActive={false} />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </div>
       </div>
@@ -2316,7 +2743,7 @@ export default function Dashboard() {
         )}
 
         {/* ───────────────────────────────────────────────────────────────── */}
-        {/* VIEW 2: ALL SERVICE HUBS (28 BRANCHES RANKING)                    */}
+        {/* VIEW 2: ALL SERVICE HUBS (ALL PARTS DEMAND, REVENUE & INCOME)     */}
         {/* ───────────────────────────────────────────────────────────────── */}
         {reportTab === 'top-sites' && (
           <div>
@@ -2335,22 +2762,56 @@ export default function Dashboard() {
                 gap: '12px'
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <span style={{ fontWeight: 800, fontSize: '13.5px', color: '#0f172a' }}>
-                  28 Service Branches iPhone Ranking
+                  Service Branches All-Parts Performance Ranking
                 </span>
-                <span className="badge badge-primary">{masterSitesReport.totalSitesCount} Branches</span>
+                <span className="badge badge-primary">{allPartsHubsTableReport.totalSitesCount} Branches</span>
+                <div style={{ display: 'flex', background: '#ffffff', padding: '2px', borderRadius: '7px', border: '1px solid #cbd5e1', gap: '2px', marginLeft: '4px' }}>
+                  {[
+                    { key: 'demand', label: 'Demand' },
+                    { key: 'revenue', label: 'Revenue' }
+                  ].map(opt => (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => setHubRankBy(opt.key)}
+                      style={{
+                        border: 'none',
+                        background: hubRankBy === opt.key ? '#0f172a' : 'transparent',
+                        color: hubRankBy === opt.key ? '#ffffff' : '#475569',
+                        padding: '3px 9px',
+                        borderRadius: '5px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '12.5px', flexWrap: 'wrap' }}>
                 <div>
-                  Top Branch: <strong style={{ color: '#0284c7' }}>{masterSitesReport.topSite?.shortName} ({masterSitesReport.topSite?.totalUnits} units)</strong>
+                  Total Parts:{' '}
+                  <strong style={{ color: '#0284c7' }}>
+                    {allPartsHubsTableReport.grandTotalUnits.toLocaleString()} units
+                  </strong>
                 </div>
                 <div style={{ width: '1px', height: '16px', background: '#cbd5e1' }} />
                 <div>
-                  Total Network Demand:{' '}
-                  <strong style={{ color: '#10b981', fontFamily: 'var(--font-sans)' }}>
-                    {masterSitesReport.grandTotalUnits.toLocaleString()} units
+                  Network Revenue:{' '}
+                  <strong style={{ color: '#059669' }}>
+                    ${Math.round(allPartsHubsTableReport.grandTotalRevenueUSD).toLocaleString()}
+                  </strong>
+                </div>
+                <div style={{ width: '1px', height: '16px', background: '#cbd5e1' }} />
+                <div>
+                  Network Income:{' '}
+                  <strong style={{ color: '#4f46e5' }}>
+                    ${Math.round(allPartsHubsTableReport.grandTotalIncomeUSD).toLocaleString()}
                   </strong>
                 </div>
               </div>
@@ -2362,18 +2823,19 @@ export default function Dashboard() {
                 <thead>
                   <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
                     <th style={{ width: '60px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>RANK</th>
-                    <th style={{ minWidth: '220px', padding: '12px 14px', color: '#475569', fontWeight: 700 }}>SERVICE BRANCH NAME</th>
-                    <th style={{ width: '130px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>REGION</th>
-                    <th style={{ width: '140px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>IPHONE UNITS</th>
-                    <th style={{ width: '130px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>DISTINCT SKUS</th>
-                    <th style={{ width: '160px', textAlign: 'right', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>TOTAL VALUATION</th>
-                    <th style={{ minWidth: '240px', padding: '12px 14px', color: '#475569', fontWeight: 700 }}>TOP CONSUMED IPHONE PART</th>
-                    <th style={{ width: '130px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>NETWORK SHARE</th>
-                    <th style={{ width: '110px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>VIEW</th>
+                    <th style={{ minWidth: '210px', padding: '12px 14px', color: '#475569', fontWeight: 700 }}>SERVICE BRANCH NAME</th>
+                    <th style={{ width: '120px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>REGION</th>
+                    <th style={{ width: '150px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>ALL PARTS DEMAND</th>
+                    <th style={{ width: '120px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>DISTINCT SKUS</th>
+                    <th style={{ width: '160px', textAlign: 'right', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>REVENUE GENERATED</th>
+                    <th style={{ width: '155px', textAlign: 'right', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>INCOME GENERATED</th>
+                    <th style={{ minWidth: '210px', padding: '12px 14px', color: '#475569', fontWeight: 700 }}>TOP CONSUMED PART</th>
+                    <th style={{ width: '125px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>NETWORK SHARE</th>
+                    <th style={{ width: '105px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>VIEW</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {masterSitesReport.displayList.map((site, idx) => (
+                  {allPartsHubsTableReport.displayList.map((site, idx) => (
                     <tr
                       key={site.siteName}
                       style={{
@@ -2435,14 +2897,14 @@ export default function Dashboard() {
                         </span>
                       </td>
 
-                      {/* Total Units */}
+                      {/* Total Units (All Parts) */}
                       <td style={{ textAlign: 'center', padding: '13px 14px', whiteSpace: 'nowrap' }}>
                         <span
                           style={{
                             background: '#f0f9ff',
                             color: '#0369a1',
                             border: '1px solid #bae6fd',
-                            padding: '5px 14px',
+                            padding: '5px 12px',
                             borderRadius: '6px',
                             fontWeight: 800,
                             fontSize: '13px',
@@ -2453,6 +2915,11 @@ export default function Dashboard() {
                         >
                           {site.totalUnits.toLocaleString()} units
                         </span>
+                        {site.nonIphoneUnits > 0 && (
+                          <div style={{ fontSize: '10.5px', color: '#64748b', marginTop: '3px' }}>
+                            {site.iphoneUnits.toLocaleString()} iPhone • {site.nonIphoneUnits.toLocaleString()} Other
+                          </div>
+                        )}
                       </td>
 
                       {/* Distinct SKUs */}
@@ -2460,10 +2927,24 @@ export default function Dashboard() {
                         {site.distinctPartsCount} SKUs
                       </td>
 
-                      {/* Total Valuation */}
+                      {/* Revenue Generated */}
                       <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
-                        <div style={{ fontWeight: 800, color: '#059669', fontSize: '13px' }}>${site.totalValUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-                        <div style={{ fontSize: '11px', color: '#64748b' }}>₱{site.totalValPHP.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                        <div style={{ fontWeight: 800, color: '#059669', fontSize: '13px' }}>
+                          ${Math.round(site.totalRevenueUSD || 0).toLocaleString()}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#64748b' }}>
+                          ₱{Math.round(site.totalRevenuePHP || 0).toLocaleString()}
+                        </div>
+                      </td>
+
+                      {/* Income Generated */}
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                        <div style={{ fontWeight: 800, color: '#4f46e5', fontSize: '13px' }}>
+                          ${Math.round(site.totalIncomeUSD || 0).toLocaleString()}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#64748b' }}>
+                          ₱{Math.round(site.totalIncomePHP || 0).toLocaleString()}
+                        </div>
                       </td>
 
                       {/* Top Part */}
@@ -2658,244 +3139,6 @@ export default function Dashboard() {
           </div>
         )}
       </div>
-
-      {/* ───────────────────────────────────────────────────────────────── */}
-      {/* 4. ANALYTICS ROW: CATEGORY DISTRIBUTION & TOP HUBS DEMAND BARS     */}
-      {/* ───────────────────────────────────────────────────────────────── */}
-      <div className="dashboard-analytics-grid">
-        {/* Left: Category Breakdown Donut */}
-        <div className="card" style={{ padding: '22px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <div>
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>iPhone Demand by Category</h3>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                Distribution of {masterSummary.totalUnits.toLocaleString()} iPhone repairs across component families
-              </p>
-            </div>
-            <span className="badge badge-primary">{masterSummary.totalUnits.toLocaleString()} Repairs</span>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '230px' }}>
-            <div style={{ width: '50%', height: '100%', minWidth: 0, position: 'relative' }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={categoryChartData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={50}
-                    outerRadius={80}
-                    paddingAngle={3}
-                    dataKey="count"
-                    isAnimationActive={false}
-                  >
-                    {categoryChartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    formatter={(value, name) => [`${value} repairs`, name]}
-                    contentStyle={{ background: '#0f172a', color: '#fff', borderRadius: '8px', border: 'none', fontSize: '12px' }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-
-            {/* Custom Legend */}
-            <div style={{ width: '48%', display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '230px', overflowY: 'auto' }}>
-              {categoryChartData.map(item => {
-                const totalDemand = masterSummary.totalUnits || 1;
-                const pct = Math.round((item.count / totalDemand) * 100);
-                return (
-                  <div key={item.name} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11.5px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      <span style={{ width: '9px', height: '9px', borderRadius: '50%', background: item.color, flexShrink: 0 }} />
-                      <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>{item.name}</span>
-                    </div>
-                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-sans)', flexShrink: 0 }}>
-                      <strong>{item.count.toLocaleString()}</strong> <span style={{ color: 'var(--text-muted)', fontSize: '10.5px' }}>({pct}%)</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-
-        {/* Right: Top 8 Hubs Demand Bar Chart */}
-        <div className="card" style={{ padding: '22px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <div>
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Top Service Hubs iPhone Demand</h3>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                Highest repair volume service branches for iPhone
-              </p>
-            </div>
-            <button className="btn btn-secondary btn-sm" onClick={() => setReportTab('top-sites')}>
-              <span>View All 28 Hubs</span>
-              <ArrowUpRight size={13} />
-            </button>
-          </div>
-
-          <div style={{ height: '230px', width: '100%', minWidth: 0 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={topSitesChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="name" tick={{ fontSize: 10.5, fill: '#64748b' }} axisLine={{ stroke: '#cbd5e1' }} tickLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                <Tooltip
-                  formatter={(value, name) => [name === 'Valuation ($k)' ? `$${value}k` : `${value} units`, name]}
-                  contentStyle={{ background: '#0f172a', color: '#fff', borderRadius: '8px', border: 'none', fontSize: '12px' }}
-                />
-                <Legend iconType="circle" wrapperStyle={{ fontSize: '11.5px', paddingTop: '6px' }} />
-                <Bar dataKey="iPhone Units" fill="#0284c7" radius={[4, 4, 0, 0]} isAnimationActive={false} />
-                <Bar dataKey="Valuation ($k)" fill="#10b981" radius={[4, 4, 0, 0]} isAnimationActive={false} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </div>
-
-      {/* ───────────────────────────────────────────────────────────────── */}
-      {/* 4B. DAILY TREND ANALYSIS (FROM DAILY KGB USED REPORT)             */}
-      {/* ───────────────────────────────────────────────────────────────── */}
-      {visibleDailyTrends.length > 0 && (
-        <div
-          className="card"
-          style={{
-            padding: '22px',
-            border: '1px solid #e2e8f0',
-            borderRadius: '12px',
-            background: '#ffffff'
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <TrendingUp size={18} color="#0284c7" />
-                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>
-                  Daily iPhone Parts Consumption Trend
-                </h3>
-                <span className="badge badge-primary" style={{ fontSize: '11px' }}>
-                  {activeMasterlist.dailyTrendSummary?.totalActiveDays || visibleDailyTrends.length} Active Days
-                </span>
-              </div>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '3px 0 0 0' }}>
-                Daily operational repair volume tracked from Repair Closed Date in the GSX KGB Used Report
-              </p>
-            </div>
-
-            <div style={{ display: 'flex', background: '#f1f5f9', padding: '3px', borderRadius: '8px', border: '1px solid #e2e8f0', gap: '2px' }}>
-              {[
-                { key: '14D', label: '14 Days' },
-                { key: '30D', label: '30 Days' },
-                { key: 'ALL', label: 'All Days' }
-              ].map(opt => (
-                <button
-                  key={opt.key}
-                  type="button"
-                  onClick={() => setDailyTrendRange(opt.key)}
-                  style={{
-                    border: 'none',
-                    background: dailyTrendRange === opt.key ? '#0f172a' : 'transparent',
-                    color: dailyTrendRange === opt.key ? '#ffffff' : '#475569',
-                    padding: '5px 12px',
-                    borderRadius: '6px',
-                    fontSize: '11.5px',
-                    fontWeight: 700,
-                    cursor: 'pointer'
-                  }}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* 4 Compact Daily Summary KPIs */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', marginBottom: '16px' }}>
-            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px 14px' }}>
-              <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                Latest Day ({activeMasterlist.dailyTrendSummary?.latestLabel || '—'})
-              </div>
-              <div style={{ fontSize: '20px', fontWeight: 800, color: '#0284c7', marginTop: '2px' }}>
-                {(activeMasterlist.dailyTrendSummary?.latestUnits || 0).toLocaleString()} <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>units</span>
-              </div>
-            </div>
-            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px 14px' }}>
-              <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                7-Day Daily Avg
-              </div>
-              <div style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>
-                {(activeMasterlist.dailyTrendSummary?.avgDailyUnits7d || 0).toLocaleString()} <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>units/day</span>
-              </div>
-            </div>
-            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px 14px' }}>
-              <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                Peak Day ({activeMasterlist.dailyTrendSummary?.peakDay?.label || '—'})
-              </div>
-              <div style={{ fontSize: '20px', fontWeight: 800, color: '#059669', marginTop: '2px' }}>
-                {(activeMasterlist.dailyTrendSummary?.peakDay?.units || 0).toLocaleString()} <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>units</span>
-              </div>
-            </div>
-            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px 14px' }}>
-              <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                Day-over-Day
-              </div>
-              <div
-                style={{
-                  fontSize: '20px',
-                  fontWeight: 800,
-                  marginTop: '2px',
-                  color: activeMasterlist.dailyTrendSummary?.dayOverDayPct == null
-                    ? '#64748b'
-                    : activeMasterlist.dailyTrendSummary.dayOverDayPct >= 0
-                      ? '#059669'
-                      : '#dc2626'
-                }}
-              >
-                {activeMasterlist.dailyTrendSummary?.dayOverDayPct == null
-                  ? '—'
-                  : `${activeMasterlist.dailyTrendSummary.dayOverDayPct >= 0 ? '+' : ''}${activeMasterlist.dailyTrendSummary.dayOverDayPct}%`}
-              </div>
-            </div>
-          </div>
-
-          <div style={{ height: '240px', width: '100%', minWidth: 0 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={visibleDailyTrends} margin={{ top: 8, right: 16, left: -16, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="kgbDailyUnitsGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#0284c7" stopOpacity={0.28} />
-                    <stop offset="95%" stopColor="#0284c7" stopOpacity={0.02} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip
-                  formatter={(value, name) => [
-                    name === 'valuationUSD' ? `$${Number(value).toLocaleString()}` : `${Number(value).toLocaleString()} units`,
-                    name === 'valuationUSD' ? 'Valuation (USD)' : 'iPhone Parts Used'
-                  ]}
-                  labelFormatter={(label, payload) => {
-                    const row = payload?.[0]?.payload;
-                    return row ? `${row.date} (${row.activeSites} active hubs)` : label;
-                  }}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="units"
-                  stroke="#0284c7"
-                  strokeWidth={2.5}
-                  fill="url(#kgbDailyUnitsGrad)"
-                  isAnimationActive={false}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
 
       {/* ───────────────────────────────────────────────────────────────── */}
       {/* 5. QUICK WORKSTATION LAUNCHPAD                                    */}
@@ -3459,6 +3702,149 @@ export default function Dashboard() {
             </table>
           </div>
         )}
+      </div>
+
+      {/* ───────────────────────────────────────────────────────────────── */}
+      {/* 8. CONSUMABLES & SERVICE TOOLS LIVE OVERVIEW                      */}
+      {/* ───────────────────────────────────────────────────────────────── */}
+      <div
+        className="card"
+        style={{
+          padding: '22px 24px',
+          border: '1px solid #e2e8f0',
+          borderRadius: '14px',
+          background: '#ffffff',
+          boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04), 0 6px 16px -4px rgba(15, 23, 42, 0.04)'
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ width: '36px', height: '36px', background: '#0f172a', color: '#38bdf8', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <Wrench size={18} />
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.01em' }}>
+                  Consumables &amp; Service Tools Center
+                </h3>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    padding: '2px 9px',
+                    borderRadius: '999px',
+                    background: ctSyncStatus?.isSyncing ? '#fef3c7' : '#ecfdf5',
+                    color: ctSyncStatus?.isSyncing ? '#b45309' : '#047857',
+                    border: `1px solid ${ctSyncStatus?.isSyncing ? '#fde68a' : '#a7f3d0'}`
+                  }}
+                >
+                  {ctSyncStatus?.isSyncing ? 'Syncing Cloud...' : 'Live Cloud Synced'}
+                </span>
+              </div>
+              <p style={{ fontSize: '12px', color: '#64748b', margin: '2px 0 0 0' }}>
+                Real-time non-repair consumables stock, serialized tool assets, packing lists &amp; cross-site movement ledger
+              </p>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => setActiveTab('consumables-tools')}
+            >
+              Open CT Center
+            </button>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '12px' }}>
+          <div
+            onClick={() => setActiveTab('ct-receiving')}
+            style={{
+              padding: '12px 14px',
+              borderRadius: '10px',
+              background: '#fffbeb',
+              border: '1px solid #fde68a',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{ fontSize: '11px', fontWeight: 700, color: '#92400e', textTransform: 'uppercase' }}>
+              Open CT Orders
+            </div>
+            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
+              {ctDashboardSummary.openOrders}
+            </div>
+            <div style={{ fontSize: '11.5px', color: '#78350f' }}>
+              Pending or partial PO deliveries
+            </div>
+          </div>
+
+          <div
+            onClick={() => setActiveTab('consumables-tools')}
+            style={{
+              padding: '12px 14px',
+              borderRadius: '10px',
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{ fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>
+              Consumables On Hand
+            </div>
+            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
+              {ctDashboardSummary.consumablesOnHand.toLocaleString()}
+            </div>
+            <div style={{ fontSize: '11.5px', color: ctDashboardSummary.lowStockSkus > 0 ? '#b45309' : '#64748b' }}>
+              {ctDashboardSummary.lowStockSkus > 0
+                ? `${ctDashboardSummary.lowStockSkus} SKU(s) at or below min threshold`
+                : 'Stocked across active sites'}
+            </div>
+          </div>
+
+          <div
+            onClick={() => setActiveTab('consumables-tools')}
+            style={{
+              padding: '12px 14px',
+              borderRadius: '10px',
+              background: '#eff6ff',
+              border: '1px solid #bfdbfe',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{ fontSize: '11px', fontWeight: 700, color: '#1d4ed8', textTransform: 'uppercase' }}>
+              Tracked Tool Units
+            </div>
+            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
+              {ctDashboardSummary.toolsTotal}
+            </div>
+            <div style={{ fontSize: '11.5px', color: '#1e40af' }}>
+              {ctDashboardSummary.toolsAvailable} available • {ctDashboardSummary.toolsInUse} in use
+            </div>
+          </div>
+
+          <div
+            onClick={() => setActiveTab('ct-movements')}
+            style={{
+              padding: '12px 14px',
+              borderRadius: '10px',
+              background: '#ecfdf5',
+              border: '1px solid #a7f3d0',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{ fontSize: '11px', fontWeight: 700, color: '#047857', textTransform: 'uppercase' }}>
+              CT Shipments &amp; Archive
+            </div>
+            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
+              {ctDashboardSummary.totalShipments}
+            </div>
+            <div style={{ fontSize: '11.5px', color: '#065f46' }}>
+              {ctDashboardSummary.activeShipments} in transit • {ctDashboardSummary.deliveredShipments} delivered
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* --- Superadmin PDF Download Options Modal --- */}

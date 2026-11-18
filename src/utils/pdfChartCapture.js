@@ -123,7 +123,8 @@ function findMainChartSvg(wrapper) {
 }
 
 /**
- * Extract legend items (label + hex/rgb color) from a Recharts wrapper if present.
+ * Extract legend items (label + hex/rgb color) from a Recharts wrapper if present,
+ * falling back to custom `[data-chart-legend-item]` elements inside the parent card.
  */
 function extractLegendItems(wrapper) {
   const items = [];
@@ -143,6 +144,20 @@ function extractLegendItems(wrapper) {
     }
     items.push({ label, color: color || '#64748b' });
   });
+
+  if (items.length === 0) {
+    const card = wrapper.closest('.card') || wrapper.parentElement?.parentElement;
+    if (card) {
+      card.querySelectorAll('[data-chart-legend-item]').forEach((node) => {
+        const label = (node.getAttribute('data-legend-label') || node.textContent || '').replace(/\s+/g, ' ').trim();
+        const color = node.getAttribute('data-legend-color') || '#64748b';
+        if (label) {
+          items.push({ label, color });
+        }
+      });
+    }
+  }
+
   return items;
 }
 

@@ -282,6 +282,79 @@ async function runTests() {
     console.log('  ✓ PASS: Excel and PDF exports defensively handle object periodLabel ({ year, month, label }) without error');
   }
 
+  // 10. Test Chart Embedding in Excel (.xlsx) & PDF Exports
+  {
+    const samplePng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const sampleCharts = [
+      {
+        title: 'Daily iPhone Parts Consumption Trend',
+        subtitle: 'Daily operational repair volume',
+        legendItems: [{ label: 'iPhone Parts Used', color: '#0284c7' }],
+        dataUrl: samplePng,
+        width: 600,
+        height: 250
+      },
+      {
+        title: 'iPhone Demand by Category',
+        subtitle: 'Distribution across component families',
+        legendItems: [{ label: 'Battery (43%)', color: '#10b981' }, { label: 'Display (22%)', color: '#0284c7' }],
+        dataUrl: samplePng,
+        width: 400,
+        height: 240
+      },
+      {
+        title: 'Top Service Hubs iPhone Demand',
+        subtitle: 'Highest repair volume service branches',
+        legendItems: [{ label: 'iPhone Units', color: '#0284c7' }, { label: 'Valuation ($k)', color: '#10b981' }],
+        dataUrl: samplePng,
+        width: 500,
+        height: 240
+      }
+    ];
+
+    const excelAllRes = await exportDashboardReportToExcel({
+      activeTab: 'top-parts',
+      masterPartsReport,
+      masterSitesReport,
+      sitePartsReport,
+      masterSummary,
+      periodLabel: 'November 2026',
+      exportMode: 'all',
+      chartImages: sampleCharts
+    });
+    const execSheet = excelAllRes.workbook.getWorksheet('Executive Overview');
+    assert.ok(execSheet, 'Executive Overview sheet must exist');
+    assert.strictEqual(execSheet.getImages().length, 3, 'Executive Overview should embed all 3 dashboard charts');
+
+    const excelSiteRes = await exportDashboardReportToExcel({
+      activeTab: 'site-parts',
+      masterPartsReport,
+      masterSitesReport,
+      sitePartsReport,
+      masterSummary,
+      selectedSiteName: sitesList[0].siteName,
+      periodLabel: 'November 2026',
+      exportMode: 'current',
+      chartImages: sampleCharts
+    });
+    const visualSheet = excelSiteRes.workbook.getWorksheet('Visual Analytics');
+    assert.ok(visualSheet, 'Branch Parts Excel export should add Visual Analytics sheet when charts are present');
+    assert.strictEqual(visualSheet.getImages().length, 3, 'Visual Analytics sheet should embed all 3 dashboard charts');
+
+    const pdfWithChartsRes = exportDashboardReportToPDF({
+      activeTab: 'top-parts',
+      masterPartsReport,
+      masterSitesReport,
+      sitePartsReport,
+      masterSummary,
+      periodLabel: 'November 2026',
+      exportMode: 'current',
+      chartImages: sampleCharts
+    });
+    assert.ok(pdfWithChartsRes.doc.getNumberOfPages() >= 2, 'PDF with charts should append Visual Analytics page(s)');
+    console.log('  ✓ PASS: Excel (.xlsx) and PDF exports embed all 3 dashboard charts cleanly');
+  }
+
   console.log('====================================================');
   console.log('ALL DASHBOARD REPORTS EXPORT TESTS PASSED (100%)');
   console.log('====================================================');

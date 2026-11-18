@@ -394,8 +394,17 @@ export function scanKgbMasterlistData(kgbRecords, options = {}) {
   let totalValUSD = 0;
   let duplicatesRemoved = 0;
   const seenKeys = new Set();
+  const seenAllKeys = new Set();
   const partsMap = new Map();
   const sitesMap = new Map();
+  const allPartsSitesMap = new Map();
+  const allPartsDistinctSet = new Set();
+  let allPartsTotalUnits = 0;
+  let allPartsTotalValUSD = 0;
+  let allPartsTotalRevenueUSD = 0;
+  let allPartsTotalIncomeUSD = 0;
+  let allPartsIphoneUnits = 0;
+  let allPartsNonIphoneUnits = 0;
   const dailyMap = new Map();
   const categoryStats = {
     'Battery': 0,
@@ -421,7 +430,7 @@ export function scanKgbMasterlistData(kgbRecords, options = {}) {
     ).trim();
     const qty = Math.max(1, parseInt(r.quantity, 10) || 1);
 
-    if (!desc.toLowerCase().includes('iphone') && !pn.toLowerCase().includes('iphone')) continue;
+    const isIphone = desc.toLowerCase().includes('iphone') || pn.toLowerCase().includes('iphone');
 
     // Deduplicate across KGB records by serial or composite work-order key
     const serial = String(r.productKgb || r.product_kgb || r.serialNumber || r.serial_number || '').trim().toUpperCase();
@@ -434,17 +443,86 @@ export function scanKgbMasterlistData(kgbRecords, options = {}) {
       ? `S:${serial}`
       : `NS:${orderId}|${repairNum}|${pn}|${dateKey}|${site.toUpperCase()}`;
 
+    const cat = KNOWN_PART_CATEGORIES[pn] || r.category || detectCategory(desc);
+    const price = KNOWN_PART_PRICES[pn] || (r.priceUSD ? parseFloat(r.priceUSD) : null) || resolvePrice(pn, desc, cat);
+    const rowVal = price * qty;
+    const explicitRevUSD = r.revenueUSD != null
+      ? parseFloat(r.revenueUSD)
+      : (r.linePriceTotal != null && parseFloat(r.linePriceTotal) > 0
+        ? parseFloat(r.linePriceTotal) / USD_TO_PHP_RATE
+        : null);
+    const rowRevenueUSD = explicitRevUSD != null && !Number.isNaN(explicitRevUSD)
+      ? explicitRevUSD
+      : rowVal * 1.25;
+    const explicitIncomeUSD = r.incomeUSD != null ? parseFloat(r.incomeUSD) : null;
+    const rowIncomeUSD = explicitIncomeUSD != null && !Number.isNaN(explicitIncomeUSD)
+      ? explicitIncomeUSD
+      : Math.max(0, rowRevenueUSD - rowVal);
+
+    if (!seenAllKeys.has(dedupeKey)) {
+      seenAllKeys.add(dedupeKey);
+      if (pn) allPartsDistinctSet.add(pn);
+      allPartsTotalUnits += qty;
+      allPartsTotalValUSD += rowVal;
+      allPartsTotalRevenueUSD += rowRevenueUSD;
+      allPartsTotalIncomeUSD += rowIncomeUSD;
+      if (isIphone) {
+        allPartsIphoneUnits += qty;
+      } else {
+        allPartsNonIphoneUnits += qty;
+      }
+
+      if (!allPartsSitesMap.has(site)) {
+        allPartsSitesMap.set(site, {
+          siteName: site,
+          totalUnits: 0,
+          iphoneUnits: 0,
+          nonIphoneUnits: 0,
+          totalValUSD: 0,
+          totalRevenueUSD: 0,
+          totalIncomeUSD: 0,
+          partsMap: new Map()
+        });
+      }
+      const as = allPartsSitesMap.get(site);
+      as.totalUnits += qty;
+      if (isIphone) {
+        as.iphoneUnits += qty;
+      } else {
+        as.nonIphoneUnits += qty;
+      }
+      as.totalValUSD += rowVal;
+      as.totalRevenueUSD += rowRevenueUSD;
+      as.totalIncomeUSD += rowIncomeUSD;
+      if (!as.partsMap.has(pn)) {
+        as.partsMap.set(pn, {
+          part_number: pn,
+          description: desc,
+          category: cat,
+          isIphone,
+          priceUSD: price,
+          units: 0,
+          totalValUSD: 0,
+          totalRevenueUSD: 0,
+          totalIncomeUSD: 0
+        });
+      }
+      const asp = as.partsMap.get(pn);
+      asp.units += qty;
+      asp.totalValUSD += rowVal;
+      asp.totalRevenueUSD += rowRevenueUSD;
+      asp.totalIncomeUSD += rowIncomeUSD;
+    }
+
+    if (!isIphone) continue;
+
     if (seenKeys.has(dedupeKey)) {
       duplicatesRemoved++;
       continue;
     }
     seenKeys.add(dedupeKey);
 
-    const cat = KNOWN_PART_CATEGORIES[pn] || r.category || detectCategory(desc);
-    const price = KNOWN_PART_PRICES[pn] || (r.priceUSD ? parseFloat(r.priceUSD) : null) || resolvePrice(pn, desc, cat);
-
     totalUnits += qty;
-    const rowVal = price * qty;
     totalValUSD += rowVal;
     categoryStats[cat] = (categoryStats[cat] || 0) + qty;
 
@@ -544,6 +622,41 @@ export function scanKgbMasterlistData(kgbRecords, options = {}) {
     })
     .sort((a, b) => b.totalUnits - a.totalUnits);
 
+  const allPartsSites = Array.from(allPartsSitesMap.values())
+    .map((s, idx) => {
+      const allParts = Array.from(s.partsMap.values()).sort((a, b) => b.units - a.units);
+      const isMM = !/cebu|davao|iloilo|naga|la union|zamboanga|cagayan|lanang|lima|newpoint/i.test(s.siteName);
+      const shortName = s.siteName
+        .replace('MOBILECARE - APP ', '')
+        .replace('MOBILECARE - ASP ', '')
+        .replace('MOBILECARE - ', '')
+        .replace('MOBILECARE SERVICES', 'General Services');
+
+      return {
+        id: `site-kgb-all-${idx}`,
+        siteName: s.siteName,
+        shortName,
+        region: isMM ? 'Metro Manila' : 'Provincial',
+        isMM,
+        totalUnits: s.totalUnits,
+        iphoneUnits: s.iphoneUnits,
+        nonIphoneUnits: s.nonIphoneUnits,
+        totalValUSD: s.totalValUSD,
+        totalValPHP: s.totalValUSD * USD_TO_PHP_RATE,
+        totalRevenueUSD: s.totalRevenueUSD,
+        totalRevenuePHP: s.totalRevenueUSD * USD_TO_PHP_RATE,
+        totalIncomeUSD: s.totalIncomeUSD,
+        totalIncomePHP: s.totalIncomeUSD * USD_TO_PHP_RATE,
+        distinctPartsCount: allParts.length,
+        topParts: allParts.slice(0, 10),
+        topPart: allParts[0] || null,
+        pctShare: allPartsTotalUnits > 0 ? (s.totalUnits / allPartsTotalUnits) * 100 : 0,
+        revenueSharePct: allPartsTotalRevenueUSD > 0 ? (s.totalRevenueUSD / allPartsTotalRevenueUSD) * 100 : 0,
+        incomeSharePct: allPartsTotalIncomeUSD > 0 ? (s.totalIncomeUSD / allPartsTotalIncomeUSD) * 100 : 0
+      };
+    })
+    .sort((a, b) => b.totalUnits - a.totalUnits);
+
   const dailyTrends = Array.from(dailyMap.values())
     .sort((a, b) => a.date.localeCompare(b.date))
     .map(d => ({
@@ -589,6 +702,20 @@ export function scanKgbMasterlistData(kgbRecords, options = {}) {
     totalSites: sites.length,
     categoryStats,
     sites,
+    allPartsSites,
+    allPartsSummary: {
+      totalUnits: allPartsTotalUnits,
+      iphoneUnits: allPartsIphoneUnits,
+      nonIphoneUnits: allPartsNonIphoneUnits,
+      totalValUSD: allPartsTotalValUSD,
+      totalValPHP: allPartsTotalValUSD * USD_TO_PHP_RATE,
+      totalRevenueUSD: allPartsTotalRevenueUSD,
+      totalRevenuePHP: allPartsTotalRevenueUSD * USD_TO_PHP_RATE,
+      totalIncomeUSD: allPartsTotalIncomeUSD,
+      totalIncomePHP: allPartsTotalIncomeUSD * USD_TO_PHP_RATE,
+      distinctPartsCount: allPartsDistinctSet.size,
+      totalSites: allPartsSites.length
+    },
     partsSummary,
     topParts: partsSummary.slice(0, 200),
     dailyTrends,
@@ -939,6 +1066,128 @@ export function getMasterlistSites({ search = '', limit = 'ALL', region = 'ALL',
     displayList,
     all: list,
     topSite: list[0] || null
+  };
+}
+
+/**
+ * Get all service hubs ranked by all-parts demand, revenue, and income generated per site.
+ * Uses `allPartsSites` when scanned from KGB Used Report, falling back to `sites` for baseline datasets.
+ */
+export function getAllPartsServiceHubsRanking(
+  { sortBy = 'demand', search = '', limit = 'ALL', region = 'ALL' } = {},
+  customData = null,
+  targetPeriod = null
+) {
+  if (isMasterlistCleared()) {
+    return {
+      totalSitesCount: 0,
+      grandTotalUnits: 0,
+      grandIphoneUnits: 0,
+      grandNonIphoneUnits: 0,
+      grandTotalValUSD: 0,
+      grandTotalRevenueUSD: 0,
+      grandTotalRevenuePHP: 0,
+      grandTotalIncomeUSD: 0,
+      grandTotalIncomePHP: 0,
+      displayList: [],
+      all: [],
+      topByDemand: null,
+      topByRevenue: null,
+      topByIncome: null
+    };
+  }
+
+  const data = getActiveMasterlist(customData, targetPeriod);
+  const rawSites = Array.isArray(data.allPartsSites) && data.allPartsSites.length > 0
+    ? data.allPartsSites
+    : (data.sites || []);
+
+  let list = rawSites.map((s, idx) => {
+    const isMM = s.isMM !== undefined
+      ? s.isMM
+      : !/cebu|davao|iloilo|naga|la union|zamboanga|cagayan|lanang|lima|newpoint/i.test(s.siteName);
+    const shortName = s.shortName || s.siteName
+      .replace('MOBILECARE - APP ', '')
+      .replace('MOBILECARE - ASP ', '')
+      .replace('MOBILECARE - ', '')
+      .replace('MOBILECARE SERVICES', 'General Services');
+
+    const totalUnits = Number(s.totalUnits || 0);
+    const iphoneUnits = s.iphoneUnits != null ? Number(s.iphoneUnits) : totalUnits;
+    const nonIphoneUnits = s.nonIphoneUnits != null ? Number(s.nonIphoneUnits) : Math.max(0, totalUnits - iphoneUnits);
+    const totalValUSD = Number(s.totalValUSD || 0);
+    const totalRevenueUSD = s.totalRevenueUSD != null ? Number(s.totalRevenueUSD) : totalValUSD * 1.25;
+    const totalIncomeUSD = s.totalIncomeUSD != null ? Number(s.totalIncomeUSD) : Math.max(0, totalRevenueUSD - totalValUSD);
+
+    return {
+      id: s.id || `site-all-${idx}`,
+      siteName: s.siteName,
+      shortName,
+      region: s.region || (isMM ? 'Metro Manila' : 'Provincial'),
+      isMM,
+      totalUnits,
+      iphoneUnits,
+      nonIphoneUnits,
+      totalValUSD,
+      totalValPHP: totalValUSD * USD_TO_PHP_RATE,
+      totalRevenueUSD,
+      totalRevenuePHP: totalRevenueUSD * USD_TO_PHP_RATE,
+      totalIncomeUSD,
+      totalIncomePHP: totalIncomeUSD * USD_TO_PHP_RATE,
+      distinctPartsCount: s.distinctPartsCount || (s.allParts ? s.allParts.length : 0),
+      topPart: s.topPart || (s.allParts ? s.allParts[0] : null) || null
+    };
+  });
+
+  if (region !== 'ALL') {
+    list = list.filter(s => (region === 'MM' ? s.isMM : !s.isMM));
+  }
+
+  if (search && search.trim()) {
+    const q = search.toLowerCase().trim();
+    list = list.filter(s =>
+      s.siteName.toLowerCase().includes(q) ||
+      s.shortName.toLowerCase().includes(q) ||
+      s.region.toLowerCase().includes(q)
+    );
+  }
+
+  const grandTotalUnits = list.reduce((sum, s) => sum + s.totalUnits, 0);
+  const grandIphoneUnits = list.reduce((sum, s) => sum + s.iphoneUnits, 0);
+  const grandNonIphoneUnits = list.reduce((sum, s) => sum + s.nonIphoneUnits, 0);
+  const grandTotalValUSD = list.reduce((sum, s) => sum + s.totalValUSD, 0);
+  const grandTotalRevenueUSD = list.reduce((sum, s) => sum + s.totalRevenueUSD, 0);
+  const grandTotalIncomeUSD = list.reduce((sum, s) => sum + s.totalIncomeUSD, 0);
+
+  list = list.map(s => ({
+    ...s,
+    pctShare: grandTotalUnits > 0 ? (s.totalUnits / grandTotalUnits) * 100 : 0,
+    revenueSharePct: grandTotalRevenueUSD > 0 ? (s.totalRevenueUSD / grandTotalRevenueUSD) * 100 : 0,
+    incomeSharePct: grandTotalIncomeUSD > 0 ? (s.totalIncomeUSD / grandTotalIncomeUSD) * 100 : 0
+  }));
+
+  const byDemand = [...list].sort((a, b) => b.totalUnits - a.totalUnits || b.totalRevenueUSD - a.totalRevenueUSD);
+  const byRevenue = [...list].sort((a, b) => b.totalRevenueUSD - a.totalRevenueUSD || b.totalUnits - a.totalUnits);
+  const byIncome = [...list].sort((a, b) => b.totalIncomeUSD - a.totalIncomeUSD || b.totalRevenueUSD - a.totalRevenueUSD);
+
+  const sorted = sortBy === 'revenue' ? byRevenue : (sortBy === 'income' ? byIncome : byDemand);
+  const displayList = limit === 'ALL' ? sorted : sorted.slice(0, Number(limit) || 10);
+
+  return {
+    totalSitesCount: sorted.length,
+    grandTotalUnits,
+    grandIphoneUnits,
+    grandNonIphoneUnits,
+    grandTotalValUSD,
+    grandTotalRevenueUSD,
+    grandTotalRevenuePHP: grandTotalRevenueUSD * USD_TO_PHP_RATE,
+    grandTotalIncomeUSD,
+    grandTotalIncomePHP: grandTotalIncomeUSD * USD_TO_PHP_RATE,
+    displayList,
+    all: sorted,
+    topByDemand: byDemand[0] || null,
+    topByRevenue: byRevenue[0] || null,
+    topByIncome: byIncome[0] || null
   };
 }
 

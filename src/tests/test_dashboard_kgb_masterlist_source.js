@@ -11,6 +11,7 @@ import {
   getMasterlistSummary,
   getMasterlistParts,
   getMasterlistSites,
+  getAllPartsServiceHubsRanking,
   getMasterlistPartsForSite
 } from '../utils/rawMasterlistScanner.js';
 
@@ -122,6 +123,32 @@ assert.ok(dashboardSrc.includes('Last Data Refresh:'), 'Dashboard.jsx must displ
 assert.ok(dashboardSrc.includes('KGB Used Report Verified'), 'Dashboard.jsx must show KGB validation status');
 assert.ok(dashboardSrc.includes('Daily iPhone Parts Consumption Trend'), 'Dashboard.jsx must render Daily Trend Analysis section');
 assert.ok(!dashboardSrc.includes('getActiveMasterlist(null, activePeriod)'), 'Dashboard.jsx must not fall back to monthly getActiveMasterlist');
+
+// Verify all-parts service hubs ranking includes non-iPhone parts, revenue, and income
+assert.ok(scanned.allPartsSummary, 'scanKgbMasterlistData must include allPartsSummary');
+assert.strictEqual(scanned.allPartsSummary.totalUnits, 4, 'All-parts summary must include the iPad part (4 total units)');
+assert.strictEqual(scanned.allPartsSummary.iphoneUnits, 3, 'All-parts summary must track 3 iPhone units');
+assert.strictEqual(scanned.allPartsSummary.nonIphoneUnits, 1, 'All-parts summary must track 1 non-iPhone unit');
+const allHubsByDemand = getAllPartsServiceHubsRanking({ sortBy: 'demand', limit: 'ALL' }, scanned);
+const allHubsByRevenue = getAllPartsServiceHubsRanking({ sortBy: 'revenue', limit: 'ALL' }, scanned);
+const allHubsByIncome = getAllPartsServiceHubsRanking({ sortBy: 'income', limit: 'ALL' }, scanned);
+assert.strictEqual(allHubsByDemand.grandTotalUnits, 4, 'All-parts hubs ranking must total 4 units across all parts');
+assert.ok(allHubsByRevenue.grandTotalRevenueUSD > 0, 'All-parts hubs ranking must compute positive revenue');
+assert.ok(allHubsByIncome.grandTotalIncomeUSD > 0, 'All-parts hubs ranking must compute positive income');
+assert.ok(allHubsByRevenue.topByRevenue, 'All-parts hubs ranking must expose topByRevenue');
+assert.ok(allHubsByIncome.topByIncome, 'All-parts hubs ranking must expose topByIncome');
+
+// Verify new section order: Daily Trend -> Category & Top Hubs -> Distribution Intelligence -> ... -> Consumables & Service Tools Center at bottom
+const idxTrend = dashboardSrc.indexOf('Daily iPhone Parts Consumption Trend');
+const idxCategory = dashboardSrc.indexOf('iPhone Demand by Category');
+const idxTopHubs = dashboardSrc.indexOf('Top Service Hubs • All Parts Demand &amp; Revenue');
+const idxDistIntel = dashboardSrc.indexOf('Distribution Intelligence • iPhone Masterlist Reports');
+const idxSnapshot = dashboardSrc.indexOf('DC Stock Inventory Snapshot');
+const idxConsumables = dashboardSrc.indexOf('Consumables &amp; Service Tools Center');
+assert.ok(
+  idxTrend > 0 && idxTrend < idxCategory && idxCategory < idxTopHubs && idxTopHubs < idxDistIntel && idxDistIntel < idxSnapshot && idxSnapshot < idxConsumables,
+  'Dashboard.jsx must place Daily Trend at top, Category & Top Hubs directly below it, above Distribution Intelligence, and Consumables & Service Tools Center at the bottom'
+);
 
 const fixablySrc = fs.readFileSync(path.join(projectRoot, 'src/components/FixablyInventoryDashboard.jsx'), 'utf8');
 assert.ok(fixablySrc.includes('computeKgbContentHash'), 'FixablyInventoryDashboard.jsx must compute KGB content hash');
