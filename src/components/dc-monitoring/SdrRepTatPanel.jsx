@@ -127,7 +127,7 @@ export default function SdrRepTatPanel({ analytics, onExportSdrPdf }) {
   const drilldownRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const src = all2026.validOrders || [];
-    return src.filter(o => {
+    const filtered = src.filter(o => {
       if (siteFilter !== 'ALL' && o.locationName !== siteFilter) return false;
       if (tatFilter !== 'ALL' && o.tatCategory !== tatFilter) return false;
       if (q) {
@@ -135,6 +135,18 @@ export default function SdrRepTatPanel({ analytics, onExportSdrPdf }) {
         if (!hay.includes(q)) return false;
       }
       return true;
+    });
+
+    return [...filtered].sort((a, b) => {
+      const dateA = String(a.closedDate || a.receivedDate || '');
+      const dateB = String(b.closedDate || b.receivedDate || '');
+      if (dateB !== dateA) return dateB.localeCompare(dateA);
+
+      const recA = String(a.receivedDate || '');
+      const recB = String(b.receivedDate || '');
+      if (recB !== recA) return recB.localeCompare(recA);
+
+      return String(b.orderId || '').localeCompare(String(a.orderId || ''), undefined, { numeric: true });
     });
   }, [all2026.validOrders, siteFilter, tatFilter, searchQuery]);
 

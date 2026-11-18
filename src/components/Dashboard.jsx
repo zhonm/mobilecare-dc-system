@@ -208,6 +208,7 @@ export default function Dashboard() {
 
   // Masterlist Direct Ingestion State
   const fileInputRef = useRef(null);
+  const distributionIntelligenceRef = useRef(null);
   const [isUploadingMasterlist, setIsUploadingMasterlist] = useState(false);
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1873,7 +1874,13 @@ export default function Dashboard() {
               </div>
               <button
                 className="btn btn-secondary btn-sm"
-                onClick={() => setReportTab('top-sites')}
+                onClick={() => {
+                  setReportTab('top-sites');
+                  setReportLimit('ALL');
+                  setTimeout(() => {
+                    distributionIntelligenceRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }, 50);
+                }}
                 style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
               >
                 <span>View All {allPartsHubsReport.totalSitesCount || masterSitesReport?.totalSitesCount || 28} Hubs</span>
@@ -1992,11 +1999,13 @@ export default function Dashboard() {
       {/* 3. MANAGER DISTRIBUTION INTELLIGENCE & REPORTS CENTER             */}
       {/* ───────────────────────────────────────────────────────────────── */}
       <div
+        ref={distributionIntelligenceRef}
         className="card"
         style={{
           padding: '24px',
           border: '1px solid #e2e8f0',
           borderRadius: '12px',
+          scrollMarginTop: '16px',
           background: '#ffffff',
           boxShadow: '0 4px 16px -2px rgba(0, 0, 0, 0.05)'
         }}
@@ -2342,56 +2351,58 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Clean iPhone Category Filter Pills */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '16px', paddingBottom: '14px', borderBottom: '1px solid #f1f5f9' }}>
-          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#64748b', marginRight: '4px', whiteSpace: 'nowrap' }}>
-            Filter Category:
-          </span>
+        {/* Clean iPhone Category Filter Pills (shown for parts views, hidden on Service Hubs) */}
+        {reportTab !== 'top-sites' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '16px', paddingBottom: '14px', borderBottom: '1px solid #f1f5f9' }}>
+            <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#64748b', marginRight: '4px', whiteSpace: 'nowrap' }}>
+              Filter Category:
+            </span>
 
-          {IPHONE_CATEGORIES.map(cat => {
-            const isSelected = reportCategory === cat.key;
-            const count = cat.key === 'ALL'
-              ? (Array.isArray(selectedCategories) && selectedCategories.length < 5
-                  ? masterPartsReport.totalFilteredUnits
-                  : masterSummary.totalUnits)
-              : (masterSummary.categoryStats[cat.key] || 0);
+            {IPHONE_CATEGORIES.map(cat => {
+              const isSelected = reportCategory === cat.key;
+              const count = cat.key === 'ALL'
+                ? (Array.isArray(selectedCategories) && selectedCategories.length < 5
+                    ? masterPartsReport.totalFilteredUnits
+                    : masterSummary.totalUnits)
+                : (masterSummary.categoryStats[cat.key] || 0);
 
-            const pillLabel = cat.key === 'ALL'
-              ? (Array.isArray(selectedCategories) && selectedCategories.length < 5
-                  ? 'All Active Categories'
-                  : 'All iPhone Parts')
-              : cat.label;
+              const pillLabel = cat.key === 'ALL'
+                ? (Array.isArray(selectedCategories) && selectedCategories.length < 5
+                    ? 'All Active Categories'
+                    : 'All iPhone Parts')
+                : cat.label;
 
-            return (
-              <button
-                key={cat.key}
-                type="button"
-                onClick={() => setReportCategory(cat.key)}
-                style={{
-                  border: '1px solid',
-                  borderColor: isSelected ? '#0284c7' : '#cbd5e1',
-                  background: isSelected ? '#0284c7' : '#ffffff',
-                  color: isSelected ? '#ffffff' : '#334155',
-                  padding: '5px 12px',
-                  borderRadius: '6px',
-                  fontSize: '12px',
-                  fontWeight: isSelected ? 700 : 600,
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  whiteSpace: 'nowrap',
-                  transition: 'all 0.12s ease'
-                }}
-              >
-                <span style={{ whiteSpace: 'nowrap' }}>{pillLabel}</span>
-                <span style={{ fontSize: '11px', fontWeight: 700, background: isSelected ? 'rgba(255,255,255,0.22)' : '#f1f5f9', color: isSelected ? '#ffffff' : '#64748b', padding: '1px 6px', borderRadius: '4px', whiteSpace: 'nowrap' }}>
-                  {count.toLocaleString()}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+              return (
+                <button
+                  key={cat.key}
+                  type="button"
+                  onClick={() => setReportCategory(cat.key)}
+                  style={{
+                    border: '1px solid',
+                    borderColor: isSelected ? '#0284c7' : '#cbd5e1',
+                    background: isSelected ? '#0284c7' : '#ffffff',
+                    color: isSelected ? '#ffffff' : '#334155',
+                    padding: '5px 12px',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    fontWeight: isSelected ? 700 : 600,
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    whiteSpace: 'nowrap',
+                    transition: 'all 0.12s ease'
+                  }}
+                >
+                  <span style={{ whiteSpace: 'nowrap' }}>{pillLabel}</span>
+                  <span style={{ fontSize: '11px', fontWeight: 700, background: isSelected ? 'rgba(255,255,255,0.22)' : '#f1f5f9', color: isSelected ? '#ffffff' : '#64748b', padding: '1px 6px', borderRadius: '4px', whiteSpace: 'nowrap' }}>
+                    {count.toLocaleString()}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {/* Filter Controls Bar: Search, Sort, Limit */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '18px' }}>
