@@ -583,13 +583,14 @@ assert.equal(consPdfStr.includes('Prepared and Counted by:'), true, 'PDF must in
 assert.equal(consPdfStr.includes('Verified by:'), true, 'PDF must include Verified by footer');
 assert.equal(consPdfStr.includes('Receiving Branch Signature:'), true, 'PDF must include Receiving Branch Signature footer');
 assert.equal(consPdfStr.includes('Pickup By:'), true, 'PDF must include Pickup By footer');
-assert.equal(consPdfStr.includes('BUSINESS DISTRIBUTION CENTER'), true, 'PDF must include Declaration Form page');
+assert.equal(consPdfStr.includes('TRANSFER TO'), true, 'PDF must include Declaration Form page');
+assert.equal(consPdfStr.includes('BUSINESS DISTRIBUTION CENTER'), false, 'Declaration Form must use prominent MDC DC logo without redundant text');
 assert.equal(consPdfStr.includes('ID HERE'), true, 'Declaration Form must include ID HERE box');
 assert.equal(consPdfStr.includes('SHIPPED'), false, 'PL must omit Status field');
 
 const plOnlyBytes = generateConsumablesToolsPackingListPdfBytes(consShipRes.shipment, { includeDeclarationForm: false });
 const plOnlyStr = Buffer.from(plOnlyBytes).toString('latin1');
-assert.equal(plOnlyStr.includes('BUSINESS DISTRIBUTION CENTER'), false, 'PL-only mode must omit Declaration Form page');
+assert.equal(plOnlyStr.includes('ID HERE'), false, 'PL-only mode must omit Declaration Form page');
 
 console.log('  ✓ PASS: Consumable serial number recording & duplicate guard passed');
 

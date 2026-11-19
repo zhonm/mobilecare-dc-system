@@ -42,7 +42,7 @@ import { parseScanOutPartsFile, downloadScanOutTemplate, exportPackingListXLSX }
 import { generateNextInvoiceRef, generateNextShipmentNumber, filterAvailableDcInStockUnits, isDraftSupersededOrFulfilled } from '../utils/appContextHelpers';
 import { cleanSerialNumberInput, extractSerialNumber } from '../utils/serialTracker';
 import { barcodeAudio } from '../utils/barcodeAudio';
-import mobilecareNoBGLogo from '../assets/mobilecareNoBGLogo.png';
+import mdcDcLogoNoBg from '../assets/mdc logo-noBG.png';
 import StatusChangeLoadingModal from './StatusChangeLoadingModal';
 import {
   hasBatteryItem,
@@ -3203,33 +3203,69 @@ export default function ScanOutPacking() {
             <h2>Packing List</h2>
           </div>
 
-          {/* Company Branding & Metadata Block */}
-          <div className="packing-company-meta">
-            <div className="packing-company-brand">
-              <img
-                src={mobilecareNoBGLogo}
-                alt="Mobile Care Logo"
-                className="packing-company-logo"
-              />
-              <div className="packing-company-address">
-                <h3 className="packing-company-name">
+          {/* Company Branding & Metadata Block — 1:1 Parity with Corporate PDF */}
+          <div
+            className="packing-company-meta"
+            style={{
+              alignItems: 'stretch',
+              paddingBottom: '14px',
+              marginBottom: '14px',
+              borderBottom: '1px solid #e2e8f0'
+            }}
+          >
+            <div
+              className="packing-company-brand"
+              style={{
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                justifyContent: 'flex-start',
+                gap: '6px'
+              }}
+            >
+              <div style={{ overflow: 'hidden', lineHeight: 0 }}>
+                <img
+                  src={mdcDcLogoNoBg}
+                  alt="Mobile Care Distribution Center Logo"
+                  className="packing-company-logo"
+                  style={{
+                    width: '215px',
+                    height: 'auto',
+                    objectFit: 'contain',
+                    display: 'block',
+                    marginLeft: '-15px',
+                    marginTop: '-19px',
+                    marginBottom: '-9px'
+                  }}
+                />
+              </div>
+              <div className="packing-company-address" style={{ marginTop: '4px' }}>
+                <h3 className="packing-company-name" style={{ marginBottom: '2px' }}>
                   MOBILE CARE SERVICES PHILS. INC.
                 </h3>
                 <p className="packing-company-line">Business and Distribution Center</p>
-                <p className="packing-company-line">2/L Northeast Square, #47</p>
-                <p className="packing-company-line">Connecticut St. Northeast Greenhills</p>
+                <p className="packing-company-line">2/L Northeast Square, #47 Connecticut St., Northeast Greenhills</p>
                 <p className="packing-company-line" style={{ margin: 0 }}>San Juan City, Metro Manila</p>
               </div>
             </div>
 
-            {/* Right Meta Column */}
-            <div className="packing-invoice-meta">
+            {/* Right Meta Card (matching PDF rounded #F8FAFC card, preserving App.css 2-col grid) */}
+            <div
+              className="packing-invoice-meta"
+              style={{
+                background: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                borderRadius: '6px',
+                padding: '10px 14px',
+                width: '305px',
+                alignContent: 'center'
+              }}
+            >
               <div className="packing-invoice-meta-row">
-                <strong>INVOICE REF:</strong>
+                <strong style={{ color: '#475569' }}>INVOICE REF:</strong>
                 <input
                   type="text"
                   className="packing-inline-input font-mono"
-                  style={{ fontWeight: 600 }}
+                  style={{ fontWeight: 700, color: '#0f172a' }}
                   value={currentShipment.invoice_ref || ''}
                   placeholder="___________________"
                   title="Click to edit Invoice Reference"
@@ -3237,7 +3273,7 @@ export default function ScanOutPacking() {
                 />
               </div>
               <div className="packing-invoice-meta-row">
-                <strong>CREATED DATE:</strong>
+                <strong style={{ color: '#475569' }}>CREATED DATE:</strong>
                 <input
                   type="text"
                   className="packing-inline-input"
@@ -3247,7 +3283,7 @@ export default function ScanOutPacking() {
                 />
               </div>
               <div className="packing-invoice-meta-row">
-                <strong>SHIPMENT DATE:</strong>
+                <strong style={{ color: '#475569' }}>SHIPMENT DATE:</strong>
                 <input
                   type="text"
                   className="packing-inline-input"
@@ -3258,7 +3294,7 @@ export default function ScanOutPacking() {
                 />
               </div>
               <div className="packing-invoice-meta-row">
-                <strong>TRACKING NUMBER:</strong>
+                <strong style={{ color: '#475569' }}>TRACKING NUMBER:</strong>
                 <input
                   type="text"
                   className="packing-inline-input font-mono"
@@ -3269,13 +3305,13 @@ export default function ScanOutPacking() {
                 />
               </div>
               <div className="packing-invoice-meta-row">
-                <strong>BOX/S #:</strong>
+                <strong style={{ color: '#475569' }}>BOX/S #:</strong>
                 <span className="packing-meta-val">
                   {currentShipment.box_number_label || `${boxNumber}/${totalBoxes}`}
                 </span>
               </div>
               <div className="packing-invoice-meta-row">
-                <strong>COURIER:</strong>
+                <strong style={{ color: '#475569' }}>COURIER:</strong>
                 <input
                   type="text"
                   className="packing-inline-input"
@@ -3287,7 +3323,7 @@ export default function ScanOutPacking() {
               </div>
               {Boolean(currentShipment.transfer_slip_number || currentShipment.transfer_slip) && (
                 <div className="packing-invoice-meta-row">
-                  <strong>TRANSFER SLIP #:</strong>
+                  <strong style={{ color: '#475569' }}>TRANSFER SLIP #:</strong>
                   <input
                     type="text"
                     className="packing-inline-input font-mono"

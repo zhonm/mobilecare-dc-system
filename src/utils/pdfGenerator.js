@@ -1,6 +1,6 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { MOBILECARE_LOGO_BASE64, MOBILECARE_NO_BG_LOGO_BASE64 } from '../assets/logoBase64.js';
+import { MOBILECARE_LOGO_BASE64, MOBILECARE_NO_BG_LOGO_BASE64, MDC_DC_LOGO_NO_BG_BASE64 } from '../assets/logoBase64.js';
 import { calculateWeeklySplit, getRowParityOffset } from './allocationEngine.js';
 import { getPartCategory, getCategoryBadgeStyle } from './categoryFilter.js';
 import { formatAuditEntityDisplay } from './appContextHelpers.js';
@@ -37,9 +37,9 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   const margin = 12;
   const tableWidth = pageWidth - (margin * 2);
 
-  const logoToUse = MOBILECARE_NO_BG_LOGO_BASE64 || MOBILECARE_LOGO_BASE64;
-  const logoWidth = 22; // Slightly smaller for better balance & readability (was 28)
-  const logoHeight = 10.65; // exact 1442:698 aspect ratio (balanced, high-res & transparent)
+  const logoToUse = MDC_DC_LOGO_NO_BG_BASE64 || MOBILECARE_NO_BG_LOGO_BASE64 || MOBILECARE_LOGO_BASE64;
+  const logoWidth = 58; // Larger MDC Distribution Center horizontal logo so "DISTRIBUTION CENTER" text is clearly legible (1538:472 = 3.2585 ratio)
+  const logoHeight = 17.8; // Exact proportional height (58 / 3.2585 = 17.80mm)
 
   // Calculate Total Declared Value in PHP (part price × 85 PHP)
   const totalDeclaredValuePHP = (typeof shipment.declared_value === 'number' && shipment.declared_value > 0)
@@ -86,48 +86,48 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
       doc.setTextColor(15, 23, 42);
       doc.text('Packing List', pageWidth / 2, 12, { align: 'center' });
 
-      // Top Left: Mobile Care Logo (Crisp mobilecareNoBGLogo) + Company Info
-      // Vertically centered relative to the 5-line company text block beside it
-      const headerTopY = 21;
-      const compX = margin + logoWidth + 4; // margin + 22 + 4 = 38
-      const compTitleY = headerTopY + 2;
-      const lineGap = 3.0;
-      const compLastLineY = compTitleY + (lineGap * 4);
-
-      // Exact vertical bounds of the 5-line text block (title cap-height to last line descender)
-      const textBlockTop = compTitleY - 2.2;
-      const textBlockBottom = compLastLineY + 0.6;
-      const textBlockCenterY = (textBlockTop + textBlockBottom) / 2;
-      const logoY = textBlockCenterY - (logoHeight / 2);
+      // Top Left: New MDC Distribution Center Logo optically aligned flush with left margin & right metadata card
+      // PNG visible pixel bounds (1538x472): left pad = 7.15%, top pad = 31.14%, bottom pad = 16.31%
+      const headerTopY = 19.0;
+      const logoLeftPad = logoWidth * 0.0715;
+      const logoTopPad = logoHeight * 0.3114;
+      const logoVisibleHeight = logoHeight * (1 - 0.3114 - 0.1631);
+      const logoX = margin - logoLeftPad;
+      const logoY = headerTopY - logoTopPad;
 
       try {
         if (logoToUse) {
-          doc.addImage(logoToUse, 'PNG', margin, logoY, logoWidth, logoHeight);
+          doc.addImage(logoToUse, 'PNG', logoX, logoY, logoWidth, logoHeight);
         }
       } catch (e) {
         console.warn('Could not render logo in PDF:', e);
       }
 
-      doc.setFontSize(9);
+      const compX = margin;
+      const compTitleY = headerTopY + logoVisibleHeight + 4.4;
+      const lineGap = 3.1;
+      const compLastLineY = compTitleY + (lineGap * 3);
+
+      doc.setFontSize(8.5);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(15, 23, 42);
       doc.text('MOBILE CARE SERVICES PHILS. INC.', compX, compTitleY);
-      
+
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7.2);
+      doc.setFontSize(7.1);
       doc.setTextColor(51, 65, 85);
       doc.text('Business and Distribution Center', compX, compTitleY + lineGap);
-      doc.text('2/L Northeast Square, #47', compX, compTitleY + lineGap * 2);
-      doc.text('Connecticut St. Northeast Greenhills', compX, compTitleY + lineGap * 3);
-      doc.text('San Juan City, Metro Manila', compX, compTitleY + lineGap * 4);
+      doc.text('2/L Northeast Square, #47 Connecticut St., Northeast Greenhills', compX, compTitleY + lineGap * 2, { maxWidth: 102 });
+      doc.text('San Juan City, Metro Manila', compX, compTitleY + lineGap * 3);
 
-      // Top Right: Invoice / Shipment Metadata Box
-      const rightBoxWidth = 84;
-      const rightColX = pageWidth - margin - rightBoxWidth;
-      const rightValX = pageWidth - margin;
+      // Top Right: Structured Invoice / Shipment Metadata Panel (aligned flush top & bottom with left column)
+      const rightBoxWidth = 76;
+      const rightBoxX = pageWidth - margin - rightBoxWidth;
+      const rightColX = rightBoxX + 3.5;
+      const rightValX = pageWidth - margin - 3.5;
 
       const metaRows = [
-        { label: 'INVOICE REF:', val: shipment.invoice_ref || shipment.shipment_number || '___________________' },
+        { label: 'INVOICE REF:', val: shipment.invoice_ref || shipment.shipment_number || '___________________', boldVal: true },
         { label: 'CREATED DATE:', val: createdDateStr },
         { label: 'SHIPMENT DATE:', val: shipmentDateStr },
         { label: 'TRACKING NUMBER:', val: trackingNumberStr },
@@ -136,27 +136,43 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
         ...((shipment.transfer_slip_number || shipment.transfer_slip) ? [{ label: 'TRANSFER SLIP #:', val: (shipment.transfer_slip_number || shipment.transfer_slip) }] : [])
       ];
 
-      let metaY = headerTopY + 1;
-      const metaGap = 3.1;
+      const metaGap = 3.2;
+      const metaBoxPadTop = 3.6;
+      const metaBoxPadBottom = 2.4;
+      const metaBoxHeight = Math.max(
+        (compLastLineY + 1.2) - headerTopY,
+        metaBoxPadTop + ((metaRows.length - 1) * metaGap) + metaBoxPadBottom + 1.5
+      );
+
+      doc.setFillColor(248, 250, 252);
+      doc.setDrawColor(226, 232, 240);
+      doc.setLineWidth(0.3);
+      doc.roundedRect(rightBoxX, headerTopY, rightBoxWidth, metaBoxHeight, 1.5, 1.5, 'FD');
+
+      let metaY = headerTopY + metaBoxPadTop + 0.6;
       metaRows.forEach(row => {
         doc.setFont('helvetica', 'bold');
-        doc.setFontSize(7.2);
-        doc.setTextColor(15, 23, 42);
+        doc.setFontSize(6.8);
+        doc.setTextColor(71, 85, 105);
         doc.text(row.label, rightColX, metaY);
 
-        doc.setFont('helvetica', 'normal');
+        doc.setFont('helvetica', row.boldVal ? 'bold' : 'normal');
         doc.setFontSize(7.2);
         doc.setTextColor(15, 23, 42);
         doc.text(String(row.val), rightValX, metaY, { align: 'right' });
         metaY += metaGap;
       });
 
-      // Ship To Section
-      const companyBottomY = compLastLineY;
-      const metaBottomY = headerTopY + 1 + (metaRows.length * metaGap);
-      const logoBottomY = logoY + logoHeight;
-      const maxHeaderBottomY = Math.max(companyBottomY, metaBottomY, logoBottomY);
-      const shipToY = maxHeaderBottomY + 4;
+      // Ship To Section (with clean divider & generous breathing room below Header)
+      const companyBottomY = compLastLineY + 1.2;
+      const metaBottomY = headerTopY + metaBoxHeight;
+      const maxHeaderBottomY = Math.max(companyBottomY, metaBottomY);
+      const dividerY = maxHeaderBottomY + 3.5;
+      doc.setDrawColor(226, 232, 240);
+      doc.setLineWidth(0.3);
+      doc.line(margin, dividerY, pageWidth - margin, dividerY);
+
+      const shipToY = dividerY + 5;
 
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(8.2);
@@ -450,25 +466,20 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
 
   const decMargin = 20;
   const decPageWidth = doc.internal.pageSize.getWidth();
-  const decHeaderY = 26;
-  const decLogoWidth = 24; // slightly smaller: preserves exact 1442:698 aspect ratio (balanced)
-  const decLogoHeight = 11.62;
-  const decCompX = decMargin + decLogoWidth + 5;
+  const decHeaderY = 18;
+  const decLogoWidth = 96; // Large, prominent MDC Distribution Center logo (1538:472 = 3.2585 aspect ratio)
+  const decLogoHeight = 29.46;
+  const decLogoX = (decPageWidth - decLogoWidth) / 2;
 
-  // Top Left: Mobile Care Logo (Medium size, transparent background) + BUSINESS DISTRIBUTION CENTER
+  // Top Center: Prominent MDC Distribution Center Logo (replaces separate "BUSINESS DISTRIBUTION CENTER" text)
   try {
-    const logoToUse = MOBILECARE_NO_BG_LOGO_BASE64 || MOBILECARE_LOGO_BASE64;
+    const logoToUse = MDC_DC_LOGO_NO_BG_BASE64 || MOBILECARE_NO_BG_LOGO_BASE64 || MOBILECARE_LOGO_BASE64;
     if (logoToUse) {
-      doc.addImage(logoToUse, 'PNG', decMargin, decHeaderY, decLogoWidth, decLogoHeight);
+      doc.addImage(logoToUse, 'PNG', decLogoX, decHeaderY, decLogoWidth, decLogoHeight);
     }
   } catch (e) {
     console.warn('Could not render logo in Declaration Form PDF:', e);
   }
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(12);
-  doc.setTextColor(15, 23, 42);
-  doc.text('BUSINESS DISTRIBUTION CENTER', decCompX, decHeaderY + (decLogoHeight / 2) + 1.4);
 
   // Two-Column Section Geometry
   const formStartY = 58;
@@ -2943,12 +2954,14 @@ export function buildConsumablesToolsPackingListDoc(shipment = {}, options = {})
   const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 12;
   const contentWidth = pageWidth - margin * 2;
-  const logoToUse = options.logoBase64 || MOBILECARE_NO_BG_LOGO_BASE64;
+  const logoToUse = options.logoBase64 || MDC_DC_LOGO_NO_BG_BASE64 || MOBILECARE_NO_BG_LOGO_BASE64;
 
-  // Clean White Header
-  if (logoToUse && typeof window !== 'undefined') {
+  // Clean White Header with optically left/top-aligned MDC Distribution Center Logo (1538:472 = 3.2585 ratio)
+  const ctLogoW = 58;
+  const ctLogoH = 17.8;
+  if (logoToUse) {
     try {
-      doc.addImage(logoToUse, 'PNG', margin, 11.5, 22, 10.65);
+      doc.addImage(logoToUse, 'PNG', margin - (ctLogoW * 0.0715), 11.2 - (ctLogoH * 0.3114), ctLogoW, ctLogoH);
     } catch {
       // Optional logo render in headless/browser
     }
@@ -2957,19 +2970,19 @@ export function buildConsumablesToolsPackingListDoc(shipment = {}, options = {})
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
   doc.setTextColor(15, 23, 42);
-  doc.text('CONSUMABLES & TOOLS PACKING LIST', pageWidth - margin, 16.5, { align: 'right' });
+  doc.text('CONSUMABLES & TOOLS PACKING LIST', pageWidth - margin, 15.2, { align: 'right' });
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
   doc.setTextColor(100, 116, 139);
-  doc.text('MOBILE CARE SERVICES PHILS. INC. — NON-REPAIR ASSETS & SUPPLIES', pageWidth - margin, 21.8, { align: 'right' });
+  doc.text('MOBILE CARE SERVICES PHILS. INC. — NON-REPAIR ASSETS & SUPPLIES', pageWidth - margin, 20.2, { align: 'right' });
 
   doc.setDrawColor(203, 213, 225);
   doc.setLineWidth(0.4);
-  doc.line(margin, 26.5, pageWidth - margin, 26.5);
+  doc.line(margin, 25.5, pageWidth - margin, 25.5);
 
   // Ship-From and Ship-To Side-by-Side Boxes
-  const boxTopY = 30;
+  const boxTopY = 29;
   const boxHeight = 32;
   const halfW = (contentWidth - 4) / 2;
 
@@ -3196,23 +3209,18 @@ export function buildConsumablesToolsPackingListDoc(shipment = {}, options = {})
     doc.addPage();
 
     const decMargin = 20;
-    const decHeaderY = 26;
-    const decLogoWidth = 24;
-    const decLogoHeight = 11.62;
-    const decCompX = decMargin + decLogoWidth + 5;
+    const decHeaderY = 18;
+    const decLogoWidth = 96; // Large, prominent MDC Distribution Center logo (1538:472 = 3.2585 ratio)
+    const decLogoHeight = 29.46;
+    const decLogoX = (pageWidth - decLogoWidth) / 2;
 
-    if (logoToUse && typeof window !== 'undefined') {
+    if (logoToUse) {
       try {
-        doc.addImage(logoToUse, 'PNG', decMargin, decHeaderY, decLogoWidth, decLogoHeight);
+        doc.addImage(logoToUse, 'PNG', decLogoX, decHeaderY, decLogoWidth, decLogoHeight);
       } catch {
         // Optional logo render in headless/browser
       }
     }
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12);
-    doc.setTextColor(15, 23, 42);
-    doc.text('BUSINESS DISTRIBUTION CENTER', decCompX, decHeaderY + decLogoHeight / 2 + 1.4);
 
     const formStartY = 58;
     const decLeftColX = decMargin;

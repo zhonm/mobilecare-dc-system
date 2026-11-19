@@ -175,11 +175,11 @@ async function runTests() {
     const decPageNumber = renderedTexts.find(t => t.page === 2 && /Page \d+ of \d+/.test(t.text));
     assert.strictEqual(decPageNumber, undefined, 'Declaration Form (Page 2) must NOT have page numbering');
 
-    // Check Page 1 logo is mobilecareNoBGLogo with 22x10.65 dimensions (slightly smaller for balance)
+    // Check Page 1 logo is the new MDC Distribution Center logo with 58x17.8mm dimensions (exact 1538:472 aspect ratio)
     const p1Logo = addedImages.find(img => img.page === 1);
     assert(p1Logo, 'Page 1 must have a logo');
-    assert.strictEqual(p1Logo.w, 22, 'Page 1 logo width must be 22mm (balanced size)');
-    assert.strictEqual(p1Logo.h, 10.65, 'Page 1 logo height must be 10.65mm');
+    assert.strictEqual(p1Logo.w, 58, 'Page 1 logo width must be 58mm (new MDC DC logo)');
+    assert.strictEqual(p1Logo.h, 17.8, 'Page 1 logo height must be 17.8mm (exact 1538:472 aspect ratio)');
 
     // Check space below "Packing List" title on Page 1 (generous breathing room)
     const p1Title = renderedTexts.find(t => t.page === 1 && t.text === 'Packing List');
