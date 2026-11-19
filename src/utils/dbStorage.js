@@ -168,7 +168,8 @@ class DbStorage {
     'mdc_auto_logout_settings',
     'mdc_uploaded_slot_site_stock',
     'mdc_uploaded_slot_kgb_used',
-    'mdc_uploaded_slot_stock_transfer'
+    'mdc_uploaded_slot_stock_transfer',
+    'mdc_scan_in_audit_ledger_v1'
   ]) {
     try {
       const db = await this.getDb();
@@ -180,7 +181,7 @@ class DbStorage {
           const cursor = event.target.result;
           if (cursor) {
             const k = cursor.key;
-            if (!preserveKeys.includes(k) && !String(k).startsWith('sb-') && !String(k).startsWith('mdc_uploaded_slot_')) {
+            if (!preserveKeys.includes(k) && !String(k).startsWith('sb-') && !String(k).startsWith('mdc_uploaded_slot_') && !String(k).startsWith('mdc_scan_in_audit_')) {
               cursor.delete();
             }
             cursor.continue();

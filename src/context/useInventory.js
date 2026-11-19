@@ -22,6 +22,7 @@ import { queuedSavedRecordsUpsert, flushSavedRecordsQueue } from '../utils/saved
 import { cleanSerialNumberInput } from '../utils/serialTracker';
 import { resolveSiteFromSheetOrCode } from '../utils/excelParser';
 import { formatSiteOwner, normalizeSiteCode, recordPartTransfer } from '../services/transferHistoryService';
+import { buildScanInAuditRecord, appendScanInAuditRecords, isDcAuditSite } from '../services/scanInAuditService';
 import { parseKgbUsedFile, matchAndReconcileKgbConsumption, MASTER_USED_PARTS_REGISTRY_DOC_ID } from '../utils/kgbConsumptionEngine';
 
 export { getBasePoNumber, consolidatePurchaseOrdersList, consolidateDcIntakeRecordsList };
@@ -1233,6 +1234,22 @@ export function useInventory({
       latest_transfer_date: nowIso
     };
 
+    // Permanently record EVERY scanned part across all sites & transaction types (Transfer, Forecasting, SVNR, CRBR, etc.)
+    try {
+      const auditRec = buildScanInAuditRecord(newUnit, {
+        originSite: previousSiteCode || (effectiveAssignment === 'Transfer Parts' ? 'Inter-Site Transfer' : 'Supplier / Inbound'),
+        receivingSiteCode: resolvedSiteCode || (isDcDest ? 'DC-MDC' : 'BRANCH'),
+        receivingSiteName: targetSiteName || (isDcDest ? 'Distribution Center (DC-MDC)' : resolvedSiteCode),
+        referenceNumber: matchedPo?.po_number || previousManifestRef || newUnit.id,
+        intakeMethod: allowOverride ? 'Return Override' : 'Barcode Scan',
+        recordSource: 'scan_in',
+        notes: overrideReason || ''
+      });
+      appendScanInAuditRecords([auditRec], {
+        userName: currentUser?.fullName || 'Warehouse Staff'
+      }).catch(() => {});
+    } catch (e) {}
+
     // Clean any stale local packing drafts that might contain this serial from a previous session
     try {
       for (let i = 0; i < localStorage.length; i++) {
@@ -1898,6 +1915,28 @@ export function useInventory({
 
     if (newUnits.length === 0) {
       return { success: false, error: 'No valid units found to import' };
+    }
+
+    // Permanently record all spreadsheet scan-in batches across all sites & transaction types (excluding Fixably sync snapshots)
+    if (!options?.isFixablySync) {
+      try {
+        const batchAuditRecs = newUnits.map(u => {
+          const siteCode = u.site_code || (isDcAuditSite(u.site_code, u.current_site_id) ? 'DC-MDC' : 'BRANCH');
+          return buildScanInAuditRecord(u, {
+            originSite: u.previous_site_code || (String(u.intake_assignment || '').toUpperCase().includes('TRANSFER') ? 'Inter-Site Transfer' : 'Supplier / Inbound'),
+            receivingSiteCode: siteCode,
+            receivingSiteName: u.site_name || (siteCode === 'DC-MDC' ? 'Distribution Center (DC-MDC)' : siteCode),
+            referenceNumber: u.po_number || u.id || 'BATCH-IMPORT',
+            intakeMethod: 'Spreadsheet Import',
+            recordSource: 'scan_in'
+          });
+        });
+        if (batchAuditRecs.length > 0) {
+          appendScanInAuditRecords(batchAuditRecs, {
+            userName: currentUser?.fullName || 'Warehouse Staff (Import)'
+          }).catch(() => {});
+        }
+      } catch (e) {}
     }
 
     if (newlyCreatedParts.length > 0 && setParts) {

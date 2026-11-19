@@ -46,6 +46,8 @@ import { filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
 import IntakeRecords from './IntakeRecords';
 import RequestParts from './RequestParts';
+import ScanInAuditTrailPanel from './ScanInAuditTrailPanel';
+import { loadScanInAuditLedger, subscribeScanInAuditSync } from '../services/scanInAuditService';
 
 // Pure category & assignment classification helpers
 function isUnitTransferParts(u) {
@@ -121,6 +123,22 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
       setActiveReceiveTab(initialTab);
     }
   }, [initialTab]);
+
+  const [auditRecordCount, setAuditRecordCount] = useState(0);
+  useEffect(() => {
+    let mounted = true;
+    const refreshCount = () => {
+      loadScanInAuditLedger().then(list => {
+        if (mounted) setAuditRecordCount(Array.isArray(list) ? list.length : 0);
+      }).catch(() => {});
+    };
+    refreshCount();
+    const unsub = subscribeScanInAuditSync(refreshCount);
+    return () => {
+      mounted = false;
+      unsub();
+    };
+  }, [inventoryUnits?.length]);
 
   const userSiteObj = useMemo(() => {
     const rawId = currentUser?.siteId || currentUser?.site_id;
@@ -1785,6 +1803,36 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
                 </div>
               </div>
             </button>
+
+            {/* PMG Card 3: Permanent Scan-In Audit Trail */}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeReceiveTab === 'audit'}
+              className={`scanin-tab-card scanin-tab-btn ${activeReceiveTab === 'audit' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveReceiveTab('audit');
+                try {
+                  localStorage.setItem('mdc_pmg_receive_tab', 'audit');
+                } catch (e) {}
+              }}
+            >
+              <div className="scanin-tab-card-icon">
+                <ShieldCheck size={22} />
+              </div>
+              <div className="scanin-tab-card-content">
+                <div className="scanin-tab-card-header">
+                  <span className="scanin-tab-card-title">Scan-In Audit Trail</span>
+                  <span className="scanin-tab-badge">
+                    <Lock size={11} />
+                    {auditRecordCount.toLocaleString()} locked
+                  </span>
+                </div>
+                <div className="scanin-tab-card-subtitle">
+                  Permanent read-only receipt proof &amp; compliance log
+                </div>
+              </div>
+            </button>
           </>
         ) : (
           <>
@@ -1837,11 +1885,45 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
                 </div>
               </div>
             </button>
+
+            {/* Superadmin Card 3: Permanent Scan-In Audit Trail */}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeReceiveTab === 'audit'}
+              className={`scanin-tab-card scanin-tab-btn ${activeReceiveTab === 'audit' ? 'active' : ''}`}
+              onClick={() => setActiveReceiveTab('audit')}
+            >
+              <div className="scanin-tab-card-icon">
+                <ShieldCheck size={22} />
+              </div>
+              <div className="scanin-tab-card-content">
+                <div className="scanin-tab-card-header">
+                  <span className="scanin-tab-card-title">Scan-In Audit Trail</span>
+                  <span className="scanin-tab-badge">
+                    <Lock size={11} />
+                    {auditRecordCount.toLocaleString()} locked
+                  </span>
+                </div>
+                <div className="scanin-tab-card-subtitle">
+                  Permanent immutable receipt log — read-only &amp; tamper-proof
+                </div>
+              </div>
+            </button>
           </>
         )}
       </div>
 
-      {isPmgUser && activeReceiveTab === 'stock' ? (
+      {activeReceiveTab === 'audit' ? (
+        <ScanInAuditTrailPanel
+          inventoryUnits={inventoryUnits}
+          dcIntakeRecords={dcIntakeRecords}
+          sites={sites}
+          currentUser={currentUser}
+          showToast={showToast}
+          onCountChange={setAuditRecordCount}
+        />
+      ) : isPmgUser && activeReceiveTab === 'stock' ? (
         <RequestParts
           defaultTab="stock_on_hand"
           embeddedMode={true}

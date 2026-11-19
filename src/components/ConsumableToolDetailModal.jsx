@@ -184,7 +184,8 @@ export default function ConsumableToolDetailModal({
                   <table className="data-table" style={{ width: '100%', fontSize: '12px' }}>
                     <thead>
                       <tr>
-                        <th>Asset Tag</th>
+                        <th>System Asset Tag</th>
+                        <th>Admin Asset Tag</th>
                         <th>Serial Number</th>
                         <th>Site</th>
                         <th>Status</th>
@@ -196,6 +197,7 @@ export default function ConsumableToolDetailModal({
                       {itemAssets.map(a => (
                         <tr key={a.id}>
                           <td className="font-mono" style={{ fontWeight: 700 }}>{a.asset_tag}</td>
+                          <td className="font-mono" style={{ fontWeight: 600, color: a.admin_asset_tag ? '#0369a1' : '#94a3b8' }}>{a.admin_asset_tag || '—'}</td>
                           <td className="font-mono">{a.serial_number || '—'}</td>
                           <td>{a.site_code}</td>
                           <td>

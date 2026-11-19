@@ -847,6 +847,7 @@ export function AppProvider({ children }) {
         checkoutTool: consumablesToolsDomain.checkoutTool,
         checkinTool: consumablesToolsDomain.checkinTool,
         updateToolStatus: consumablesToolsDomain.updateToolStatus,
+        updateToolMetadata: consumablesToolsDomain.updateToolMetadata,
         consumeCtStock: consumablesToolsDomain.consumeCtStock,
         createCtShipment: consumablesToolsDomain.createCtShipment,
         confirmCtDelivery: consumablesToolsDomain.confirmCtDelivery,

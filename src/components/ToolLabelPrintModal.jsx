@@ -55,9 +55,9 @@ function buildBarcodeBars(codeText = '') {
 }
 
 function AssetLabelCard({ asset }) {
-  const payload = `${asset.asset_tag}|${asset.part_number}|${asset.serial_number || 'NO-SN'}`;
+  const payload = `${asset.asset_tag}|${asset.admin_asset_tag || ''}|${asset.part_number}|${asset.serial_number || 'NO-SN'}`;
   const matrix = useMemo(() => buildDeterministicMatrix(payload, 13), [payload]);
-  const barcode = useMemo(() => buildBarcodeBars(asset.serial_number || asset.asset_tag), [asset.serial_number, asset.asset_tag]);
+  const barcode = useMemo(() => buildBarcodeBars(asset.serial_number || asset.admin_asset_tag || asset.asset_tag), [asset.serial_number, asset.admin_asset_tag, asset.asset_tag]);
 
   return (
     <div
@@ -88,11 +88,17 @@ function AssetLabelCard({ asset }) {
         <div className="font-mono" style={{ fontSize: '13px', fontWeight: 800, color: '#0f172a', marginTop: '1px', wordBreak: 'break-all' }}>
           {asset.asset_tag}
         </div>
+        {asset.admin_asset_tag && (
+          <div className="font-mono" style={{ fontSize: '11px', fontWeight: 700, color: '#0369a1', marginTop: '1px' }}>
+            Admin Tag: {asset.admin_asset_tag}
+          </div>
+        )}
         <div style={{ fontSize: '11.5px', fontWeight: 600, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {asset.part_number} · {asset.description}
         </div>
         <div className="font-mono" style={{ fontSize: '10.5px', color: '#334155', marginTop: '2px' }}>
           {asset.serial_number ? `SN: ${asset.serial_number}` : 'Unserialized Tool'} · Site: {asset.site_code}
+          {asset.assigned_to ? ` · Assigned: ${asset.assigned_to}` : ''}
         </div>
         <svg
           width="100%"
@@ -125,9 +131,10 @@ export default function ToolLabelPrintModal({ assets = [], onClose }) {
           <div style="border:1.5px solid #0f172a;border-radius:8px;padding:10px 12px;margin-bottom:10px;page-break-inside:avoid;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
             <div style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;">MOBILECARE TOOL ASSET</div>
             <div style="font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-variant-numeric:tabular-nums;font-size:14px;font-weight:800;color:#0f172a;margin:2px 0;">${asset.asset_tag}</div>
+            ${asset.admin_asset_tag ? `<div style="font-size:11.5px;font-weight:700;color:#0369a1;margin-bottom:2px;">Admin Tag: ${asset.admin_asset_tag}</div>` : ''}
             <div style="font-size:12px;font-weight:600;color:#1e293b;">${asset.part_number} — ${asset.description}</div>
             <div style="font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-variant-numeric:tabular-nums;font-size:11px;color:#334155;margin-top:4px;">
-              ${asset.serial_number ? `SN: ${asset.serial_number}` : 'Unserialized Tool'} | Site: ${asset.site_code}
+              ${asset.serial_number ? `SN: ${asset.serial_number}` : 'Unserialized Tool'} | Site: ${asset.site_code}${asset.assigned_to ? ` | Assigned: ${asset.assigned_to}` : ''}
             </div>
           </div>`
       )

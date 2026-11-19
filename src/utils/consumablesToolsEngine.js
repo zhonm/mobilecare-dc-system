@@ -732,6 +732,99 @@ export function transitionToolAsset({
   return { ok: true, updatedAsset: updated, nextToolAssets, movement };
 }
 
+/**
+ * Updates editable metadata fields (`admin_asset_tag` and/or `assigned_to`) on an individual tool asset
+ * while enforcing uniqueness of non-empty Admin Asset Tags and recording a structured audit movement.
+ */
+export function updateToolAssetMetadata({
+  toolAssets = [],
+  assetId,
+  adminAssetTag,
+  assignedTo,
+  actorName = 'Admin',
+  actorId = null,
+  notes = '',
+  timestamp = new Date().toISOString()
+}) {
+  const idx = (toolAssets || []).findIndex(a => a.id === assetId);
+  if (idx < 0) {
+    return { ok: false, errorCode: 'ASSET_NOT_FOUND', message: 'Tool asset not found.' };
+  }
+
+  const current = toolAssets[idx];
+  const nextAdminTag = adminAssetTag !== undefined
+    ? (String(adminAssetTag || '').trim() || null)
+    : (current.admin_asset_tag || null);
+  const nextAssignedTo = assignedTo !== undefined
+    ? (String(assignedTo || '').trim() || null)
+    : (current.assigned_to || null);
+
+  if (nextAdminTag) {
+    const normalizedNewTag = nextAdminTag.toUpperCase();
+    const conflict = (toolAssets || []).find(
+      a => a.id !== assetId && a.admin_asset_tag && String(a.admin_asset_tag).trim().toUpperCase() === normalizedNewTag
+    );
+    if (conflict) {
+      return {
+        ok: false,
+        errorCode: 'DUPLICATE_ADMIN_TAG',
+        message: `Admin Asset Tag "${nextAdminTag}" is already assigned to ${conflict.asset_tag} (${conflict.part_number}).`
+      };
+    }
+  }
+
+  const prevAdminTag = current.admin_asset_tag || null;
+  const prevAssignedTo = current.assigned_to || null;
+  const tagChanged = prevAdminTag !== nextAdminTag;
+  const assigneeChanged = prevAssignedTo !== nextAssignedTo;
+
+  if (!tagChanged && !assigneeChanged) {
+    return { ok: true, changed: false, updatedAsset: current, nextToolAssets: toolAssets, movement: null };
+  }
+
+  const updated = {
+    ...current,
+    admin_asset_tag: nextAdminTag,
+    assigned_to: nextAssignedTo,
+    assigned_at: assigneeChanged ? (nextAssignedTo ? timestamp : null) : current.assigned_at,
+    updated_at: timestamp
+  };
+
+  const nextToolAssets = [...toolAssets];
+  nextToolAssets[idx] = updated;
+
+  const changeParts = [];
+  if (tagChanged) {
+    changeParts.push(`Admin Tag: ${prevAdminTag || '—'} → ${nextAdminTag || '—'}`);
+  }
+  if (assigneeChanged) {
+    changeParts.push(`Assigned To: ${prevAssignedTo || '—'} → ${nextAssignedTo || '—'}`);
+  }
+
+  const movement = {
+    id: generateCtId('ct-mov'),
+    catalog_id: current.catalog_id,
+    part_number: current.part_number,
+    description: current.description,
+    item_kind: 'tool',
+    action: 'updated',
+    quantity: 1,
+    serial_numbers: current.serial_number ? [current.serial_number] : [],
+    asset_tags: [current.asset_tag, ...(nextAdminTag ? [nextAdminTag] : [])],
+    from_site_code: current.site_code,
+    to_site_code: current.site_code,
+    reference_type: 'tool_asset',
+    reference_id: current.id,
+    reference_number: current.asset_tag,
+    performed_by: actorId,
+    performed_by_name: actorName,
+    notes: notes || `Updated ${current.asset_tag}: ${changeParts.join(' | ')}`,
+    created_at: timestamp
+  };
+
+  return { ok: true, changed: true, updatedAsset: updated, nextToolAssets, movement };
+}
+
 export function consumeConsumableStock({
   catalogItems = [],
   stockRows = [],
@@ -1091,7 +1184,7 @@ export function validateAndScanPackItem({
     };
   };
 
-  // Helper to match an available tool asset by serial_number or asset_tag
+  // Helper to match an available tool asset by serial_number, asset_tag, or admin_asset_tag
   const allowedSites = new Set(
     [targetSiteCode, fromSiteCode].map(s => String(s || '').trim().toUpperCase()).filter(Boolean)
   );
@@ -1100,7 +1193,8 @@ export function validateAndScanPackItem({
     const matches = (toolAssets || []).filter(a => {
       const sn = normalizePartNumber(a.serial_number);
       const tag = normalizePartNumber(a.asset_tag);
-      if (sn !== token && tag !== token) return false;
+      const adminTag = normalizePartNumber(a.admin_asset_tag);
+      if (sn !== token && tag !== token && adminTag !== token) return false;
       if (requiredPn && normalizePartNumber(a.part_number) !== requiredPn) return false;
       if (allowedSites.size > 0 && !allowedSites.has(String(a.site_code || '').toUpperCase())) return false;
       return true;

@@ -30,7 +30,8 @@ export const PRESERVED_SESSION_KEYS = [
   'mdc_auto_logout_settings',
   'mdc_uploaded_slot_site_stock',
   'mdc_uploaded_slot_kgb_used',
-  'mdc_uploaded_slot_stock_transfer'
+  'mdc_uploaded_slot_stock_transfer',
+  'mdc_scan_in_audit_ledger_v1'
 ];
 
 /**
@@ -39,7 +40,7 @@ export const PRESERVED_SESSION_KEYS = [
 export function isPreservedKey(key) {
   if (!key) return false;
   if (PRESERVED_SESSION_KEYS.includes(key)) return true;
-  if (key.startsWith('sb-') || key.includes('supabase.auth') || key.includes('turnstile') || key.startsWith('mdc_uploaded_slot_')) {
+  if (key.startsWith('sb-') || key.includes('supabase.auth') || key.includes('turnstile') || key.startsWith('mdc_uploaded_slot_') || key.startsWith('mdc_scan_in_audit_')) {
     return true;
   }
   return false;

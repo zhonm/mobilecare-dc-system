@@ -16,7 +16,9 @@ import {
   Trash2,
   Search,
   Plus,
-  X
+  X,
+  FileSpreadsheet,
+  Check
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import {
@@ -27,6 +29,10 @@ import {
   isValidGsPoNumber,
   generateNextGsPoNumber
 } from '../utils/consumablesToolsEngine';
+import {
+  exportCtCenterToExcel,
+  exportCtMovementsToExcel
+} from '../utils/ctExcelExporter';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import {
   generateConsumablesToolsPackingListPDF,
@@ -57,6 +63,7 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
     checkoutTool,
     checkinTool,
     updateToolStatus,
+    updateToolMetadata,
     consumeCtStock,
     createCtShipment,
     confirmCtDelivery,
@@ -123,10 +130,14 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
     items: []
   });
 
-  // --- Tool Assets Filter & Checkout State ---
+  // --- Tool Assets Filter, Inline Edit & Checkout State ---
   const [assetStatusFilter, setAssetStatusFilter] = useState('ALL');
   const [assetSearch, setAssetSearch] = useState('');
   const [assetAssigneeInput, setAssetAssigneeInput] = useState('');
+  const [editingAssetId, setEditingAssetId] = useState(null);
+  const [editAdminTag, setEditAdminTag] = useState('');
+  const [editAssignedTo, setEditAssignedTo] = useState('');
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
 
   // --- Shipping & Packing List State ---
   const [shipFromSite, setShipFromSite] = useState('DC-MDC');
@@ -173,6 +184,9 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
   const [historySiteFilter, setHistorySiteFilter] = useState('ALL');
   const [historyViewMode, setHistoryViewMode] = useState('combined'); // 'combined' | 'shipments' | 'movements'
   const [historySearch, setHistorySearch] = useState('');
+  const [historyDateFrom, setHistoryDateFrom] = useState('');
+  const [historyDateTo, setHistoryDateTo] = useState('');
+  const [historyDisplayLimit, setHistoryDisplayLimit] = useState(200);
 
   // --- Derived Metrics ---
   const kpis = useMemo(() => {
@@ -243,10 +257,20 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
     }
   };
 
+  const catalogByPnMap = useMemo(() => {
+    const map = new Map();
+    (ctCatalog || []).forEach(c => {
+      if (c?.part_number) {
+        map.set(normalizePartNumber(c.part_number), c);
+      }
+    });
+    return map;
+  }, [ctCatalog]);
+
   const matchedCatalogForReceive = useMemo(() => {
     const clean = normalizePartNumber(recvPn);
-    return ctCatalog.find(c => normalizePartNumber(c.part_number) === clean) || null;
-  }, [ctCatalog, recvPn]);
+    return catalogByPnMap.get(clean) || null;
+  }, [catalogByPnMap, recvPn]);
 
   const parsedRecvSerialPreview = useMemo(() => parseSerialTokens(recvSerials), [recvSerials]);
 
@@ -256,7 +280,7 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
       if (assetStatusFilter !== 'ALL' && a.status !== assetStatusFilter) return false;
       if (siteFilter !== 'ALL' && String(a.site_code || '').toUpperCase() !== siteFilter.toUpperCase()) return false;
       if (q) {
-        const hay = `${a.asset_tag} ${a.serial_number || ''} ${a.part_number} ${a.description} ${a.assigned_to || ''} ${a.site_code}`.toLowerCase();
+        const hay = `${a.asset_tag} ${a.admin_asset_tag || ''} ${a.serial_number || ''} ${a.part_number} ${a.description} ${a.assigned_to || ''} ${a.site_code}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -291,6 +315,9 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
         const reg = siteRegionMap.get(toCode) || 'Province';
         if (reg !== historyRegionFilter) return false;
       }
+      const shpDate = String(shp.shipment_date || shp.created_at || '').slice(0, 10);
+      if (historyDateFrom && shpDate && shpDate < historyDateFrom) return false;
+      if (historyDateTo && shpDate && shpDate > historyDateTo) return false;
       if (q) {
         const itemsText = (shp.items || []).map(it => `${it.part_number} ${it.description || ''} ${(it.serial_numbers || []).join(' ')}`).join(' ');
         const hay = `${shp.packing_list_number || ''} ${shp.shipment_number || ''} ${shp.ts_number || ''} ${shp.to_site_code || ''} ${shp.to_site_name || ''} ${shp.carrier || ''} ${shp.tracking_number || ''} ${shp.prepared_by_name || ''} ${shp.received_by_name || ''} ${itemsText}`.toLowerCase();
@@ -298,12 +325,11 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
       }
       return true;
     });
-  }, [ctShipments, historySearch, historySiteFilter, historyRegionFilter, siteRegionMap]);
+  }, [ctShipments, historySearch, historySiteFilter, historyRegionFilter, historyDateFrom, historyDateTo, siteRegionMap]);
 
-  const filteredMovements = useMemo(() => {
+  const baseFilteredMovements = useMemo(() => {
     const q = historySearch.trim().toLowerCase();
     return (ctMovements || []).filter(m => {
-      if (historyActionFilter !== 'ALL' && m.action !== historyActionFilter) return false;
       const toCode = String(m.to_site_code || '').toUpperCase();
       const fromCode = String(m.from_site_code || '').toUpperCase();
       if (historySiteFilter !== 'ALL' && toCode !== historySiteFilter.toUpperCase() && fromCode !== historySiteFilter.toUpperCase()) {
@@ -314,13 +340,30 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
         const fromReg = siteRegionMap.get(fromCode);
         if (toReg !== historyRegionFilter && fromReg !== historyRegionFilter) return false;
       }
+      const movDate = String(m.created_at || '').slice(0, 10);
+      if (historyDateFrom && movDate && movDate < historyDateFrom) return false;
+      if (historyDateTo && movDate && movDate > historyDateTo) return false;
       if (q) {
-        const hay = `${m.part_number} ${m.description || ''} ${m.reference_number || ''} ${m.from_site_code || ''} ${m.to_site_code || ''} ${m.performed_by_name || ''} ${(m.serial_numbers || []).join(' ')} ${(m.asset_tags || []).join(' ')}`.toLowerCase();
+        const hay = `${m.part_number} ${m.description || ''} ${m.reference_number || ''} ${m.from_site_code || ''} ${m.to_site_code || ''} ${m.performed_by_name || ''} ${m.notes || ''} ${(m.serial_numbers || []).join(' ')} ${(m.asset_tags || []).join(' ')}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
-  }, [ctMovements, historyActionFilter, historySiteFilter, historyRegionFilter, historySearch, siteRegionMap]);
+  }, [ctMovements, historySiteFilter, historyRegionFilter, historyDateFrom, historyDateTo, historySearch, siteRegionMap]);
+
+  const movementActionCounts = useMemo(() => {
+    const counts = { ALL: baseFilteredMovements.length };
+    baseFilteredMovements.forEach(m => {
+      const k = String(m.action || 'other').toLowerCase();
+      counts[k] = (counts[k] || 0) + 1;
+    });
+    return counts;
+  }, [baseFilteredMovements]);
+
+  const filteredMovements = useMemo(() => {
+    if (historyActionFilter === 'ALL') return baseFilteredMovements;
+    return baseFilteredMovements.filter(m => m.action === historyActionFilter);
+  }, [baseFilteredMovements, historyActionFilter]);
 
   const historyStats = useMemo(() => {
     const todayIso = new Date().toISOString().slice(0, 10);
@@ -567,6 +610,74 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
     a.download = `MDC_Consumables_Tools_History_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const handleExportMovementsExcel = async () => {
+    setIsExportingExcel(true);
+    try {
+      const fileName = await exportCtMovementsToExcel({
+        movements: filteredMovements,
+        shipments: filteredHistoryShipments,
+        siteRegionMap,
+        regionFilter: historyRegionFilter,
+        siteFilter: historySiteFilter,
+        actionFilter: historyActionFilter,
+        dateFrom: historyDateFrom,
+        dateTo: historyDateTo,
+        searchQuery: historySearch,
+        generatedBy: currentUser?.fullName || currentUser?.email || 'Admin'
+      });
+      showToast?.(`Exported ${fileName}`, 'success');
+    } catch (err) {
+      showToast?.(`Excel export failed: ${err?.message || err}`, 'error');
+    } finally {
+      setIsExportingExcel(false);
+    }
+  };
+
+  const handleExportCenterExcel = async () => {
+    setIsExportingExcel(true);
+    try {
+      const fileName = await exportCtCenterToExcel({
+        toolAssets: ctToolAssets,
+        consumablesStock: ctStock,
+        catalog: ctCatalog,
+        siteFilter,
+        statusFilter: assetStatusFilter,
+        searchQuery: assetSearch,
+        generatedBy: currentUser?.fullName || currentUser?.email || 'Admin'
+      });
+      showToast?.(`Exported ${fileName}`, 'success');
+    } catch (err) {
+      showToast?.(`Excel export failed: ${err?.message || err}`, 'error');
+    } finally {
+      setIsExportingExcel(false);
+    }
+  };
+
+  const startEditAsset = (asset) => {
+    if (!userCanEdit) return;
+    setEditingAssetId(asset.id);
+    setEditAdminTag(asset.admin_asset_tag || '');
+    setEditAssignedTo(asset.assigned_to || '');
+  };
+
+  const cancelEditAsset = () => {
+    setEditingAssetId(null);
+    setEditAdminTag('');
+    setEditAssignedTo('');
+  };
+
+  const saveEditAsset = (asset) => {
+    if (!updateToolMetadata) return;
+    const res = updateToolMetadata({
+      assetId: asset.id,
+      adminAssetTag: editAdminTag,
+      assignedTo: editAssignedTo
+    });
+    if (res?.ok) {
+      cancelEditAsset();
+    }
   };
 
   // --- Shipping Builder Helpers (Site-Filtered Packing Candidates) ---
@@ -1045,9 +1156,17 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
             </div>
 
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-              <select className="form-select" value={siteFilter} onChange={(e) => setSiteFilter(e.target.value)} style={{ height: '36px', fontSize: '12.5px', minWidth: '125px' }}>
-                <option value="ALL">All Sites</option>
-                {siteChoices.map(s => <option key={s.code} value={s.code}>{s.code}</option>)}
+              <select
+                className="form-select"
+                value={siteFilter}
+                onChange={(e) => setSiteFilter(e.target.value)}
+                title="Filter table and Excel export by site (or All Sites)"
+                style={{ height: '36px', fontSize: '12.5px', minWidth: '175px' }}
+              >
+                <option value="ALL">All Sites ({siteChoices.length})</option>
+                {siteChoices.map(s => (
+                  <option key={s.code} value={s.code}>{s.code} — {s.name}</option>
+                ))}
               </select>
               <input
                 type="text"
@@ -1055,16 +1174,27 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                 placeholder="Checkout tech/assignee..."
                 value={assetAssigneeInput}
                 onChange={(e) => setAssetAssigneeInput(e.target.value)}
-                style={{ height: '36px', fontSize: '12.5px', width: '175px' }}
+                style={{ height: '36px', fontSize: '12.5px', width: '165px' }}
               />
               <input
                 type="text"
                 className="form-input"
-                placeholder="Search tag, serial, PN..."
+                placeholder="Search sys/admin tag, serial, PN, assignee..."
                 value={assetSearch}
                 onChange={(e) => setAssetSearch(e.target.value)}
-                style={{ height: '36px', fontSize: '12.5px', width: '190px' }}
+                style={{ height: '36px', fontSize: '12.5px', width: '215px' }}
               />
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={isExportingExcel}
+                onClick={handleExportCenterExcel}
+                title={siteFilter === 'ALL' ? 'Export Consumables & Tools Excel report for All Sites' : `Export Consumables & Tools Excel report for ${siteFilter} only`}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', height: '36px' }}
+              >
+                <FileSpreadsheet size={14} />
+                <span>{isExportingExcel ? 'Exporting...' : `Export Excel (${siteFilter === 'ALL' ? 'All Sites' : siteFilter})`}</span>
+              </button>
               {filteredAssets.length > 0 && (
                 <button type="button" className="btn btn-secondary btn-sm" onClick={() => setLabelAssetsModal(filteredAssets.slice(0, 24))} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', height: '36px' }}>
                   <QrCode size={14} />
@@ -1080,10 +1210,11 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
             </div>
           ) : (
             <div className="table-container" style={{ overflowX: 'auto' }}>
-              <table className="data-table" style={{ width: '100%', fontSize: '12.5px', minWidth: '760px' }}>
+              <table className="data-table" style={{ width: '100%', fontSize: '12.5px', minWidth: '940px' }}>
                 <thead>
                   <tr>
-                    <th>Asset Tag</th>
+                    <th>System Asset Tag</th>
+                    <th>Admin Asset Tag</th>
                     <th>Serial Number</th>
                     <th>Part Number</th>
                     <th>Description</th>
@@ -1094,9 +1225,55 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredAssets.map(asset => (
+                  {filteredAssets.map(asset => {
+                    const isEditingRow = editingAssetId === asset.id;
+                    return (
                     <tr key={asset.id}>
-                      <td className="font-mono" style={{ fontWeight: 700 }}>{asset.asset_tag}</td>
+                      <td className="font-mono" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{asset.asset_tag}</td>
+                      <td style={{ minWidth: '150px' }}>
+                        {isEditingRow ? (
+                          <input
+                            type="text"
+                            className="form-input font-mono"
+                            value={editAdminTag}
+                            onChange={(e) => setEditAdminTag(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') { e.preventDefault(); saveEditAsset(asset); }
+                              if (e.key === 'Escape') { e.preventDefault(); cancelEditAsset(); }
+                            }}
+                            placeholder="Enter Admin Tag..."
+                            autoFocus
+                            style={{ height: '28px', fontSize: '12px', padding: '2px 7px', width: '145px' }}
+                          />
+                        ) : userCanEdit ? (
+                          <button
+                            type="button"
+                            onClick={() => startEditAsset(asset)}
+                            title="Click to edit Admin Asset Tag & Assigned Person"
+                            style={{
+                              background: asset.admin_asset_tag ? '#f0f9ff' : 'transparent',
+                              border: asset.admin_asset_tag ? '1px solid #bae6fd' : '1px dashed #cbd5e1',
+                              borderRadius: '6px',
+                              padding: '3px 8px',
+                              fontSize: '12px',
+                              fontFamily: asset.admin_asset_tag ? 'var(--font-mono, monospace)' : 'inherit',
+                              fontWeight: asset.admin_asset_tag ? 700 : 500,
+                              color: asset.admin_asset_tag ? '#0369a1' : '#94a3b8',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px'
+                            }}
+                          >
+                            <span>{asset.admin_asset_tag || '+ Add Tag'}</span>
+                            <Pencil size={11} style={{ opacity: 0.7 }} />
+                          </button>
+                        ) : (
+                          <span className="font-mono" style={{ fontWeight: 600, color: asset.admin_asset_tag ? '#0369a1' : '#94a3b8' }}>
+                            {asset.admin_asset_tag || '—'}
+                          </span>
+                        )}
+                      </td>
                       <td className="font-mono">{asset.serial_number || '—'}</td>
                       <td className="font-mono">{asset.part_number}</td>
                       <td>{asset.description}</td>
@@ -1106,31 +1283,105 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                           {asset.status}
                         </span>
                       </td>
-                      <td>{asset.assigned_to || '—'}</td>
+                      <td style={{ minWidth: '155px' }}>
+                        {isEditingRow ? (
+                          <input
+                            type="text"
+                            className="form-input"
+                            value={editAssignedTo}
+                            onChange={(e) => setEditAssignedTo(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') { e.preventDefault(); saveEditAsset(asset); }
+                              if (e.key === 'Escape') { e.preventDefault(); cancelEditAsset(); }
+                            }}
+                            placeholder="Assigned person..."
+                            style={{ height: '28px', fontSize: '12px', padding: '2px 7px', width: '150px' }}
+                          />
+                        ) : userCanEdit ? (
+                          <button
+                            type="button"
+                            onClick={() => startEditAsset(asset)}
+                            title="Click to assign or update person"
+                            style={{
+                              background: asset.assigned_to ? '#f8fafc' : 'transparent',
+                              border: asset.assigned_to ? '1px solid #e2e8f0' : '1px dashed #cbd5e1',
+                              borderRadius: '6px',
+                              padding: '3px 8px',
+                              fontSize: '12px',
+                              fontWeight: asset.assigned_to ? 600 : 500,
+                              color: asset.assigned_to ? '#0f172a' : '#94a3b8',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px'
+                            }}
+                          >
+                            <span>{asset.assigned_to || '+ Assign'}</span>
+                            <Pencil size={11} style={{ opacity: 0.7 }} />
+                          </button>
+                        ) : (
+                          <span>{asset.assigned_to || '—'}</span>
+                        )}
+                      </td>
                       <td style={{ textAlign: 'right' }}>
                         <div style={{ display: 'inline-flex', gap: '5px' }}>
-                          {asset.status === 'available' && (
-                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => checkoutTool({ assetId: asset.id, assignedTo: assetAssigneeInput.trim() || currentUser?.fullName || 'Shop Technician' })}>
-                              Check Out
-                            </button>
+                          {isEditingRow ? (
+                            <>
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                onClick={() => saveEditAsset(asset)}
+                                title="Save Admin Tag & Assignee"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                              >
+                                <Check size={13} />
+                                <span>Save</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={cancelEditAsset}
+                                title="Cancel"
+                              >
+                                <X size={13} />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              {userCanEdit && (
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={() => startEditAsset(asset)}
+                                  title="Edit Admin Asset Tag & Assigned Person"
+                                >
+                                  <Pencil size={12} />
+                                </button>
+                              )}
+                              {asset.status === 'available' && (
+                                <button type="button" className="btn btn-secondary btn-sm" onClick={() => checkoutTool({ assetId: asset.id, assignedTo: assetAssigneeInput.trim() || asset.assigned_to || currentUser?.fullName || 'Shop Technician' })}>
+                                  Check Out
+                                </button>
+                              )}
+                              {(asset.status === 'in_use' || asset.status === 'missing') && (
+                                <button type="button" className="btn btn-secondary btn-sm" onClick={() => checkinTool({ assetId: asset.id })}>
+                                  Check In
+                                </button>
+                              )}
+                              {asset.status === 'available' && (
+                                <button type="button" className="btn btn-secondary btn-sm" onClick={() => updateToolStatus({ assetId: asset.id, newStatus: 'missing' })}>
+                                  Missing
+                                </button>
+                              )}
+                              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setLabelAssetsModal([asset])} title="QR/Barcode Label">
+                                <QrCode size={13} />
+                              </button>
+                            </>
                           )}
-                          {(asset.status === 'in_use' || asset.status === 'missing') && (
-                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => checkinTool({ assetId: asset.id })}>
-                              Check In
-                            </button>
-                          )}
-                          {asset.status === 'available' && (
-                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => updateToolStatus({ assetId: asset.id, newStatus: 'missing' })}>
-                              Missing
-                            </button>
-                          )}
-                          <button type="button" className="btn btn-secondary btn-sm" onClick={() => setLabelAssetsModal([asset])} title="QR/Barcode Label">
-                            <QrCode size={13} />
-                          </button>
                         </div>
                       </td>
                     </tr>
-                  ))}
+                  );})}
                 </tbody>
               </table>
             </div>
@@ -1354,9 +1605,11 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                   <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>
                     PO Line Items (Click to autofill):
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '140px', overflowY: 'auto' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '165px', overflowY: 'auto' }}>
                     {(activeReceivingOrder.items || []).map(it => {
                       const rem = Math.max(0, (it.quantity_ordered || 0) - (it.quantity_received || 0));
+                      const catEntry = catalogByPnMap.get(normalizePartNumber(it.part_number));
+                      const itemDesc = it.description || catEntry?.description || '';
                       return (
                         <button
                           key={it.id}
@@ -1365,20 +1618,37 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                             setRecvPn(it.part_number);
                             setRecvQty(String(Math.max(1, rem)));
                           }}
+                          title={itemDesc ? `${it.part_number} — ${itemDesc}` : it.part_number}
                           style={{
                             textAlign: 'left',
-                            padding: '5px 8px',
+                            padding: '6px 8px',
                             borderRadius: '6px',
                             border: normalizePartNumber(recvPn) === normalizePartNumber(it.part_number) ? '1px solid #0284c7' : '1px solid #e2e8f0',
-                            background: '#ffffff',
+                            background: normalizePartNumber(recvPn) === normalizePartNumber(it.part_number) ? '#f0f9ff' : '#ffffff',
                             fontSize: '12px',
                             display: 'flex',
                             justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: '8px',
                             cursor: 'pointer'
                           }}
                         >
-                          <span className="font-mono" style={{ fontWeight: 700 }}>{it.part_number}</span>
-                          <span>Rec: {it.quantity_received}/{it.quantity_ordered}</span>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flex: 1 }}>
+                            <span className="font-mono" style={{ fontWeight: 700, flexShrink: 0, color: '#0f172a' }}>{it.part_number}</span>
+                            {itemDesc && (
+                              <span style={{ color: '#475569', fontSize: '11.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                — {itemDesc}
+                              </span>
+                            )}
+                          </span>
+                          <span style={{
+                            flexShrink: 0,
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            color: rem === 0 ? '#15803d' : '#0369a1'
+                          }}>
+                            Rec: {it.quantity_received}/{it.quantity_ordered}
+                          </span>
                         </button>
                       );
                     })}
@@ -2193,6 +2463,17 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                   onChange={(e) => setHistorySearch(e.target.value)}
                   style={{ height: '34px', fontSize: '12.5px', width: '250px' }}
                 />
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={isExportingExcel}
+                  onClick={handleExportMovementsExcel}
+                  title="Download formatted Excel (.xlsx) report of filtered movements & shipments"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                >
+                  <FileSpreadsheet size={13} />
+                  <span>{isExportingExcel ? 'Exporting...' : 'Export Excel (.xlsx)'}</span>
+                </button>
                 <button type="button" className="btn btn-secondary btn-sm" onClick={handleExportMovementsCsv} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
                   <Download size={13} />
                   <span>Export CSV</span>
@@ -2200,7 +2481,7 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
               </div>
             </div>
 
-            {/* Region & Site Filter Row */}
+            {/* Region, Site & Date Range Filter Row */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #f1f5f9' }}>
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Region:</span>
@@ -2227,13 +2508,49 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                   className="form-select"
                   value={historySiteFilter}
                   onChange={(e) => setHistorySiteFilter(e.target.value)}
-                  style={{ height: '30px', fontSize: '12px', width: '200px', padding: '2px 8px' }}
+                  style={{ height: '30px', fontSize: '12px', width: '195px', padding: '2px 8px' }}
                 >
                   <option value="ALL">All Locations ({siteChoices.length})</option>
                   {siteChoices.map(s => (
                     <option key={s.code} value={s.code}>{s.code} — {s.name}</option>
                   ))}
                 </select>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginLeft: '4px' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Date:</span>
+                  <input
+                    type="date"
+                    value={historyDateFrom}
+                    onChange={(e) => setHistoryDateFrom(e.target.value)}
+                    title="Filter from date"
+                    style={{ height: '30px', fontSize: '11.5px', padding: '2px 6px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                  />
+                  <span style={{ fontSize: '11px', color: '#94a3b8' }}>→</span>
+                  <input
+                    type="date"
+                    value={historyDateTo}
+                    onChange={(e) => setHistoryDateTo(e.target.value)}
+                    title="Filter to date"
+                    style={{ height: '30px', fontSize: '11.5px', padding: '2px 6px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                  />
+                </div>
+                {(historyRegionFilter !== 'ALL' || historySiteFilter !== 'ALL' || historyActionFilter !== 'ALL' || historyDateFrom || historyDateTo || historySearch) && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      setHistoryRegionFilter('ALL');
+                      setHistorySiteFilter('ALL');
+                      setHistoryActionFilter('ALL');
+                      setHistoryDateFrom('');
+                      setHistoryDateTo('');
+                      setHistorySearch('');
+                      setHistoryDisplayLimit(200);
+                    }}
+                    style={{ height: '28px', padding: '0 8px', fontSize: '11px' }}
+                  >
+                    Reset Filters
+                  </button>
+                )}
               </div>
 
               <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
@@ -2434,11 +2751,17 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
             <div className="card" style={{ borderRadius: '12px', border: '1px solid #e2e8f0', padding: 0, overflow: 'hidden' }}>
               <div style={{ padding: '12px 18px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                  {['ALL', 'ordered', 'received', 'in_stock', 'consumed', 'checked_out', 'checked_in', 'shipped', 'delivered'].map(act => (
+                  {['ALL', 'ordered', 'received', 'in_stock', 'consumed', 'checked_out', 'checked_in', 'shipped', 'delivered', 'status_change', 'updated'].map(act => {
+                    const count = movementActionCounts[act] || 0;
+                    if (act !== 'ALL' && count === 0 && historyActionFilter !== act) return null;
+                    return (
                     <button
                       key={act}
                       type="button"
-                      onClick={() => setHistoryActionFilter(act)}
+                      onClick={() => {
+                        setHistoryActionFilter(act);
+                        setHistoryDisplayLimit(200);
+                      }}
                       style={{
                         padding: '5px 10px',
                         borderRadius: '7px',
@@ -2448,12 +2771,16 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                         fontSize: '11.5px',
                         fontWeight: 700,
                         textTransform: 'uppercase',
-                        cursor: 'pointer'
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px'
                       }}
                     >
-                      {act.replace('_', ' ')}
+                      <span>{act.replace(/_/g, ' ')}</span>
+                      <span style={{ fontSize: '10.5px', opacity: 0.75 }}>({count})</span>
                     </button>
-                  ))}
+                  );})}
                 </div>
               </div>
 
@@ -2473,7 +2800,7 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredMovements.slice(0, 200).map(m => (
+                    {filteredMovements.slice(0, historyDisplayLimit).map(m => (
                       <tr key={m.id}>
                         <td className="font-mono" style={{ whiteSpace: 'nowrap' }}>
                           <div style={{ fontWeight: 700, color: '#0f172a' }}>{formatMovementDate(m.created_at)}</div>
@@ -2481,9 +2808,14 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                             {formatTo12HourTime ? formatTo12HourTime(m.created_at) : ''}
                           </div>
                         </td>
-                        <td style={{ fontWeight: 700, textTransform: 'uppercase' }}>{m.action}</td>
+                        <td style={{ fontWeight: 700, textTransform: 'uppercase' }}>{String(m.action || '').replace(/_/g, ' ')}</td>
                         <td className="font-mono" style={{ fontWeight: 700 }}>{m.part_number}</td>
-                        <td>{m.description || '—'}</td>
+                        <td>
+                          <div>{m.description || '—'}</div>
+                          {m.notes && m.action === 'updated' && (
+                            <div style={{ fontSize: '11px', color: '#0369a1', marginTop: '2px' }}>{m.notes}</div>
+                          )}
+                        </td>
                         <td className="font-mono" style={{ textAlign: 'center', fontWeight: 700 }}>{m.quantity}</td>
                         <td>{m.from_site_code || '—'} → {m.to_site_code || '—'}</td>
                         <td className="font-mono">{[...(m.serial_numbers || []), ...(m.asset_tags || [])].join(', ') || '—'}</td>
@@ -2494,6 +2826,22 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                   </tbody>
                 </table>
               </div>
+              {filteredMovements.length > 0 && (
+                <div style={{ padding: '10px 18px', borderTop: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', color: '#64748b', background: '#f8fafc' }}>
+                  <span>
+                    Showing <strong>{Math.min(historyDisplayLimit, filteredMovements.length)}</strong> of <strong>{filteredMovements.length}</strong> movement(s)
+                  </span>
+                  {filteredMovements.length > historyDisplayLimit && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => setHistoryDisplayLimit(prev => prev + 200)}
+                    >
+                      Show More (+200)
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -2522,11 +2870,14 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                     onChange={(e) => setConsumePn(e.target.value)}
                     required
                   >
-                    {inStockConsumables.map(row => (
-                      <option key={`${row.part_number}-${row.site_code}`} value={row.part_number}>
-                        {row.part_number} ({row.site_code}: {row.qty_on_hand} avail)
-                      </option>
-                    ))}
+                    {inStockConsumables.map(row => {
+                      const desc = row.description || catalogByPnMap.get(normalizePartNumber(row.part_number))?.description || '';
+                      return (
+                        <option key={`${row.part_number}-${row.site_code}`} value={row.part_number}>
+                          {row.part_number}{desc ? ` — ${desc}` : ''} ({row.site_code}: {row.qty_on_hand} avail)
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
                 <div>

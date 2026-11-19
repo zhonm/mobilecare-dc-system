@@ -25,6 +25,7 @@ import {
   validateAndReceiveOrderLine,
   parseConsumablesReceivingCsv,
   transitionToolAsset,
+  updateToolAssetMetadata,
   consumeConsumableStock,
   createConsumablesToolsShipment,
   confirmConsumablesToolsDelivery
@@ -1068,6 +1069,35 @@ export function useConsumablesAndTools({
     return res;
   }, [resolveActor, ctToolAssets, appendMovements, commitAndSyncState, showToast]);
 
+  const updateToolMetadata = useCallback(({ assetId, adminAssetTag, assignedTo, notes = '' }) => {
+    const actor = resolveActor();
+    const res = updateToolAssetMetadata({
+      toolAssets: ctToolAssets,
+      assetId,
+      adminAssetTag,
+      assignedTo,
+      actorName: actor.name,
+      actorId: actor.id,
+      notes
+    });
+    if (!res.ok) {
+      showToast?.(res.message, 'error');
+      return res;
+    }
+    if (!res.changed) {
+      return res;
+    }
+    setCtToolAssets(res.nextToolAssets);
+    persistDual(LS_KEYS.toolAssets, res.nextToolAssets);
+    const nextMovements = res.movement ? appendMovements([res.movement]) : ctMovements;
+    commitAndSyncState(
+      { toolAssets: res.nextToolAssets, movements: nextMovements },
+      { reason: 'tool_metadata_updated', actorName: actor.name }
+    );
+    showToast?.(`Saved updates for ${res.updatedAsset.asset_tag}`, 'success');
+    return res;
+  }, [resolveActor, ctToolAssets, ctMovements, appendMovements, commitAndSyncState, showToast]);
+
   const consumeCtStock = useCallback(({ partNumber, siteCode = 'DC-MDC', quantity, notes = '' }) => {
     const actor = resolveActor();
     const res = consumeConsumableStock({
@@ -1281,6 +1311,7 @@ export function useConsumablesAndTools({
     checkoutTool,
     checkinTool,
     updateToolStatus,
+    updateToolMetadata,
     consumeCtStock,
     createCtShipment,
     confirmCtDelivery,
