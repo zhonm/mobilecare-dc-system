@@ -27,6 +27,36 @@ export const DC_MONITORING_ALL_SLOT_IDS = [
   'sdr_baseline'
 ];
 
+export const ALL_STOCKS_LINKED_SLOT_IDS = [
+  'site_stock',
+  'kgb_used',
+  'stock_transfer'
+];
+
+export const ALL_STOCKS_SLOT_MAPPINGS = [
+  {
+    key: 'mdc_uploaded_slot_site_stock',
+    tsKey: 'mdc_uploaded_slot_site_stock_ts',
+    slotId: 'site_stock',
+    allStocksLabel: 'Slot 1: Site Stocks',
+    fallbackName: 'AllStocks_Site_Stock.csv'
+  },
+  {
+    key: 'mdc_uploaded_slot_kgb_used',
+    tsKey: 'mdc_uploaded_slot_kgb_used_ts',
+    slotId: 'kgb_used',
+    allStocksLabel: 'Slot 2: GSX KGB Used Report',
+    fallbackName: 'AllStocks_KGB_Used.csv'
+  },
+  {
+    key: 'mdc_uploaded_slot_stock_transfer',
+    tsKey: 'mdc_uploaded_slot_stock_transfer_ts',
+    slotId: 'stock_transfer',
+    allStocksLabel: 'Slot 3: Stock Transfers',
+    fallbackName: 'AllStocks_Stock_Transfers.csv'
+  }
+];
+
 // Target ~1.15 MB max serialized JSON per saved_records chunk row
 const MAX_CHUNK_JSON_BYTES = 1150000;
 
@@ -351,11 +381,14 @@ export async function saveDcMonitoringDatasets(datasets = {}, validationLogs = {
     for (const slotId of slotsToPush) {
       const rows = Array.isArray(datasets?.[slotId]) ? datasets[slotId] : [];
       if (rows.length > 0) {
+        const logEntry = validationLogs?.[slotId];
         baseSlotMeta[slotId] = {
-          updatedAt: nowIso,
+          updatedAt: logEntry?.allStocksUpdatedAt || nowIso,
           updatedBy: userName,
           parsedCount: rows.length,
-          fileName: validationLogs?.[slotId]?.fileName || baseSlotMeta[slotId]?.fileName || '',
+          fileName: logEntry?.fileName || baseSlotMeta[slotId]?.fileName || '',
+          source: logEntry?.source || baseSlotMeta[slotId]?.source || 'Direct Upload',
+          allStocksUpdatedAt: logEntry?.allStocksUpdatedAt || baseSlotMeta[slotId]?.allStocksUpdatedAt || null,
           cleared: false
         };
       }
@@ -491,6 +524,8 @@ export async function pushDcMonitoringSlotsToCloud(slotIds = [], datasets = {}, 
           parsedCount: rows.length,
           contentHash,
           fileName: validationLogs?.[slotId]?.fileName || slotMeta?.[slotId]?.fileName || '',
+          source: validationLogs?.[slotId]?.source || slotMeta?.[slotId]?.source || 'Direct Upload',
+          allStocksUpdatedAt: validationLogs?.[slotId]?.allStocksUpdatedAt || slotMeta?.[slotId]?.allStocksUpdatedAt || null,
           chunkCount: chunks.length,
           cleared: false,
           validationLog: validationLogs?.[slotId] || null
@@ -771,6 +806,8 @@ export async function syncDcMonitoringFromCloud(options = {}) {
             parsedCount: hydrated.length,
             contentHash: cSlot.contentHash || '',
             fileName: cSlot.fileName || localLogs[slotId]?.fileName || '',
+            source: cSlot.source || localLogs[slotId]?.source || 'Cloud Sync',
+            allStocksUpdatedAt: cSlot.allStocksUpdatedAt || localLogs[slotId]?.allStocksUpdatedAt || null,
             cleared: false
           };
           pulledSlots.push(slotId);
@@ -950,30 +987,111 @@ export async function fetchCloudDcMonitoringLedger(localUpdatedAt = null) {
 }
 
 /**
- * Pulls overlapping cached Fixably datasets already stored in IndexedDB by All Stocks / FIFO Audit
- * so users do not need to upload Site Stock, KGB Used, or Stock Transfers twice.
+ * Reads lightweight metadata for the 3 Fixably slots stored by All Stocks & Inventory
+ * without re-parsing CSV payloads.
  */
-export async function pullAvailableFixablySlotsFromAllStocks() {
+export async function getAllStocksSlotStatuses() {
+  const statuses = {};
+  await Promise.all(
+    ALL_STOCKS_SLOT_MAPPINGS.map(async (m) => {
+      try {
+        const cachedSlot = await dbStorage.getItem(m.key);
+        statuses[m.slotId] = {
+          available: Boolean(cachedSlot?.content),
+          fileName: cachedSlot?.name || '',
+          updatedAt: cachedSlot?.updatedAt || null,
+          rowCount: Number(cachedSlot?.rowCount || 0),
+          pendingUpload: Boolean(cachedSlot?.pendingUpload),
+          allStocksLabel: m.allStocksLabel
+        };
+      } catch (e) {
+        statuses[m.slotId] = {
+          available: false,
+          fileName: '',
+          updatedAt: null,
+          rowCount: 0,
+          pendingUpload: false,
+          allStocksLabel: m.allStocksLabel
+        };
+      }
+    })
+  );
+  return statuses;
+}
+
+/**
+ * Pulls overlapping cached Fixably datasets already stored in IndexedDB by All Stocks & Inventory
+ * so users do not need to upload Site Stock, KGB Used, or Stock Transfers twice.
+ * When currentDatasets/currentSlotMeta are supplied and force=false, only pulls slots that are
+ * missing locally or have a strictly newer finalized upload timestamp in All Stocks.
+ */
+export async function pullAvailableFixablySlotsFromAllStocks(options = {}) {
+  const {
+    slotIds = ALL_STOCKS_LINKED_SLOT_IDS,
+    currentDatasets = null,
+    currentSlotMeta = null,
+    clearedAt = null,
+    force = false,
+    includePending = false
+  } = options || {};
+
+  const targetSet = new Set(Array.isArray(slotIds) && slotIds.length > 0 ? slotIds : ALL_STOCKS_LINKED_SLOT_IDS);
   const pulledDatasets = {};
   const pulledLogs = {};
   const pulledSlotIds = [];
-  const mappings = [
-    { key: 'mdc_uploaded_slot_site_stock', slotId: 'site_stock', fallbackName: 'AllStocks_Site_Stock.csv' },
-    { key: 'mdc_uploaded_slot_kgb_used', slotId: 'kgb_used', fallbackName: 'AllStocks_KGB_Used.csv' },
-    { key: 'mdc_uploaded_slot_stock_transfer', slotId: 'stock_transfer', fallbackName: 'AllStocks_Stock_Transfers.csv' }
-  ];
+  const allStocksStatuses = {};
+  const clearedMs = parseTimestampMs(clearedAt);
 
-  for (const m of mappings) {
+  for (const m of ALL_STOCKS_SLOT_MAPPINGS) {
     try {
       const cachedSlot = await dbStorage.getItem(m.key);
-      if (!cachedSlot?.content) continue;
+      const hasContent = Boolean(cachedSlot?.content);
+      const isPending = Boolean(cachedSlot?.pendingUpload);
+      allStocksStatuses[m.slotId] = {
+        available: hasContent,
+        fileName: cachedSlot?.name || '',
+        updatedAt: cachedSlot?.updatedAt || null,
+        rowCount: Number(cachedSlot?.rowCount || 0),
+        pendingUpload: isPending,
+        allStocksLabel: m.allStocksLabel
+      };
+
+      if (!targetSet.has(m.slotId) || !hasContent) continue;
+      if (!includePending && isPending) continue;
+
+      const cachedUpdatedAt = cachedSlot.updatedAt || null;
+      const cachedUpdatedMs = parseTimestampMs(cachedUpdatedAt);
+
+      if (!force && clearedMs > 0 && cachedUpdatedMs > 0 && cachedUpdatedMs <= clearedMs) {
+        continue;
+      }
+
+      if (!force && currentDatasets && currentSlotMeta) {
+        const existingRows = Array.isArray(currentDatasets[m.slotId]) ? currentDatasets[m.slotId] : [];
+        const existingMeta = currentSlotMeta[m.slotId];
+        const existingTs = Math.max(
+          parseTimestampMs(existingMeta?.updatedAt),
+          parseTimestampMs(existingMeta?.allStocksUpdatedAt)
+        );
+        if (existingRows.length > 0 && (cachedUpdatedMs === 0 || cachedUpdatedMs <= existingTs)) {
+          continue;
+        }
+      }
+
       const { records, validationLog } = await ingestDcMonitoringFile(m.slotId, {
         name: cachedSlot.name || m.fallbackName,
         content: cachedSlot.content
       });
       if (validationLog?.status !== 'error' && Array.isArray(records) && records.length > 0) {
+        const effectiveTs = cachedUpdatedAt || validationLog.timestamp || new Date().toISOString();
         pulledDatasets[m.slotId] = records;
-        pulledLogs[m.slotId] = validationLog;
+        pulledLogs[m.slotId] = {
+          ...validationLog,
+          source: 'All Stocks & Inventory',
+          sourceSlot: m.allStocksLabel,
+          allStocksUpdatedAt: effectiveTs,
+          timestamp: effectiveTs
+        };
         pulledSlotIds.push(m.slotId);
       }
     } catch (e) {
@@ -985,7 +1103,83 @@ export async function pullAvailableFixablySlotsFromAllStocks() {
     pulledDatasets,
     pulledLogs,
     pulledSlotIds,
-    pulledCount: pulledSlotIds.length
+    pulledCount: pulledSlotIds.length,
+    allStocksStatuses
+  };
+}
+
+/**
+ * End-to-end auto-sync bridge connecting All Stocks & Inventory's 3 Fixably slots
+ * (site_stock, kgb_used, stock_transfer) into DC Stock Monitoring storage and Supabase Cloud.
+ * Safe to invoke from both FixablyInventoryDashboard (push on upload) and DcStockMonitoring (auto-pull).
+ */
+export async function syncAllStocksSlotsToDcMonitoring(options = {}) {
+  const {
+    slotIds = ALL_STOCKS_LINKED_SLOT_IDS,
+    currentState = null,
+    userName = 'System User',
+    skipCloud = false,
+    force = false,
+    includePending = false,
+    broadcastCloudEvent = null,
+    senderId = 'local'
+  } = options || {};
+
+  const baseState = currentState || (await loadDcMonitoringState());
+  const {
+    pulledDatasets,
+    pulledLogs,
+    pulledSlotIds,
+    pulledCount,
+    allStocksStatuses
+  } = await pullAvailableFixablySlotsFromAllStocks({
+    slotIds,
+    currentDatasets: baseState.datasets || {},
+    currentSlotMeta: baseState.slotMeta || {},
+    clearedAt: baseState.clearedAt || null,
+    force,
+    includePending
+  });
+
+  if (pulledCount === 0) {
+    return {
+      changed: false,
+      pulledCount: 0,
+      pulledSlotIds: [],
+      cloudSynced: false,
+      pushedSlots: [],
+      allStocksStatuses,
+      state: baseState
+    };
+  }
+
+  const nextDatasets = { ...(baseState.datasets || {}), ...pulledDatasets };
+  const nextLogs = { ...(baseState.validationLogs || {}), ...pulledLogs };
+  const saveRes = await saveDcMonitoringDatasets(nextDatasets, nextLogs, {
+    changedSlotIds: pulledSlotIds,
+    userName,
+    skipCloud,
+    broadcastCloudEvent,
+    senderId
+  });
+
+  return {
+    changed: true,
+    pulledCount,
+    pulledSlotIds,
+    cloudSynced: Boolean(saveRes?.cloudSynced),
+    pushedSlots: saveRes?.pushedSlots || [],
+    updatedAt: saveRes?.updatedAt || new Date().toISOString(),
+    allStocksStatuses,
+    state: {
+      ...baseState,
+      datasets: nextDatasets,
+      validationLogs: nextLogs,
+      slotMeta: saveRes?.slotMeta || baseState.slotMeta || {},
+      clearedAt: null,
+      updatedAt: saveRes?.updatedAt || baseState.updatedAt,
+      syncedBy: userName
+    }
   };
 }
 

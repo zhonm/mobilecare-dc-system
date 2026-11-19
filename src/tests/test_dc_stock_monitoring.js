@@ -23,10 +23,15 @@ import {
 } from '../constants/roles.js';
 import {
   DC_MONITORING_ALL_SLOT_IDS,
+  ALL_STOCKS_LINKED_SLOT_IDS,
+  ALL_STOCKS_SLOT_MAPPINGS,
   buildSlotChunksForCloud,
   hydrateSlotChunksFromCloud,
-  computeSlotContentHash
+  computeSlotContentHash,
+  pullAvailableFixablySlotsFromAllStocks,
+  syncAllStocksSlotsToDcMonitoring
 } from '../services/dcMonitoringStorageService.js';
+import dbStorage from '../utils/dbStorage.js';
 
 async function runTests() {
   console.log('TEST SUITE: DC Stock Monitoring, Ingestion & SDR/RepTAT Parity');
@@ -245,6 +250,136 @@ async function runTests() {
   assert.strictEqual(siteStockHash1, siteStockHash2, 'Identical datasets must produce matching content hashes');
   assert.notStrictEqual(siteStockHash1, siteStockHashModified, 'Modified dataset must produce distinct content hash');
   console.log('  ✓ PASS: Multi-admin Realtime, Free-Tier egress dedup & cloud sync wiring verified');
+
+  // ── 10. All Stocks & Inventory <-> DC Monitoring Auto-Sync Bridge ───────
+  const prevWindow = globalThis.window;
+  const memStore = new Map();
+  globalThis.window = {
+    localStorage: {
+      getItem: (k) => (memStore.has(k) ? memStore.get(k) : null),
+      setItem: (k, v) => { memStore.set(k, String(v)); },
+      removeItem: (k) => { memStore.delete(k); }
+    }
+  };
+  try {
+  assert.deepStrictEqual(
+    ALL_STOCKS_LINKED_SLOT_IDS,
+    ['site_stock', 'kgb_used', 'stock_transfer'],
+    'Exactly the 3 Fixably slots must be linked to All Stocks & Inventory'
+  );
+  assert.strictEqual(ALL_STOCKS_SLOT_MAPPINGS.length, 3);
+
+  const sampleSiteStockCsv = [
+    'Stock name,Stock type,Part number,Part description,Part serial,Last received date,Quantity,Part value,Total value',
+    'ASP - Vertis North,DC Stock,661-36863,Battery iPhone 15,SN-SYNC-001,2026-11-18,1,5000,5000'
+  ].join('\n');
+  const sampleKgbCsv = [
+    'Order ID,Location name,GSX repair number,Repair closed date,Product code,Product description,Product KGB,Product KBB',
+    '20111001,MOBILECARE - VERTIS NORTH,G12345678,2026-11-18,661-36863,Battery iPhone 15,SN-SYNC-001,SN-OLD-001'
+  ].join('\n');
+  const sampleTransferCsv = [
+    'Transfer received date,From stock,To stock,Product code,Product name,Transfer quantity,Serial number,Transfer value',
+    '2026-11-18,DC Stock,ASP - Vertis North,661-36863,Battery iPhone 15,1,SN-SYNC-001,5000'
+  ].join('\n');
+
+  const t1 = '2026-11-19T01:00:00.000Z';
+  const t2 = '2026-11-19T02:00:00.000Z';
+  const t3 = '2026-11-19T03:00:00.000Z';
+
+  // Seed 2 finalized slots and 1 pending (unstaged) slot in All Stocks cache
+  await dbStorage.setItem('mdc_uploaded_slot_site_stock', {
+    name: 'Custom reports - Inventory Value.csv',
+    content: sampleSiteStockCsv,
+    rowCount: 1,
+    updatedAt: t1,
+    pendingUpload: false
+  });
+  await dbStorage.setItem('mdc_uploaded_slot_kgb_used', {
+    name: 'Custom reports - GSX KBB KGBs Used.csv',
+    content: sampleKgbCsv,
+    rowCount: 1,
+    updatedAt: t1,
+    pendingUpload: true
+  });
+  await dbStorage.setItem('mdc_uploaded_slot_stock_transfer', {
+    name: 'Custom reports - Stock Transfers.csv',
+    content: sampleTransferCsv,
+    rowCount: 1,
+    updatedAt: t1,
+    pendingUpload: false
+  });
+
+  // Auto-sync should pull only finalized slots (site_stock + stock_transfer) and skip pendingUpload=true (kgb_used)
+  const autoRes1 = await syncAllStocksSlotsToDcMonitoring({
+    currentState: { datasets: {}, validationLogs: {}, slotMeta: {}, clearedAt: null },
+    userName: 'Test Admin',
+    skipCloud: true,
+    force: false,
+    includePending: false
+  });
+  assert.strictEqual(autoRes1.changed, true);
+  assert.deepStrictEqual(autoRes1.pulledSlotIds.sort(), ['site_stock', 'stock_transfer']);
+  assert.strictEqual(autoRes1.state.validationLogs.site_stock.source, 'All Stocks & Inventory');
+  assert.strictEqual(autoRes1.state.datasets.site_stock.length, 1);
+  assert.strictEqual(autoRes1.allStocksStatuses.kgb_used.pendingUpload, true);
+
+  // Re-running auto-sync with identical timestamps must be a no-op (no redundant reparsing/writes)
+  const autoResNoop = await syncAllStocksSlotsToDcMonitoring({
+    currentState: autoRes1.state,
+    userName: 'Test Admin',
+    skipCloud: true,
+    force: false
+  });
+  assert.strictEqual(autoResNoop.changed, false);
+  assert.strictEqual(autoResNoop.pulledCount, 0);
+
+  // Finalizing KGB Used in All Stocks at newer timestamp t2 must automatically pull only kgb_used
+  await dbStorage.setItem('mdc_uploaded_slot_kgb_used', {
+    name: 'Custom reports - GSX KBB KGBs Used.csv',
+    content: sampleKgbCsv,
+    rowCount: 1,
+    updatedAt: t2,
+    pendingUpload: false
+  });
+  const autoRes2 = await syncAllStocksSlotsToDcMonitoring({
+    currentState: autoRes1.state,
+    userName: 'Test Admin',
+    skipCloud: true,
+    force: false
+  });
+  assert.strictEqual(autoRes2.changed, true);
+  assert.deepStrictEqual(autoRes2.pulledSlotIds, ['kgb_used']);
+  assert.strictEqual(autoRes2.state.datasets.kgb_used.length, 1);
+
+  // Cleared workspace at t3 must NOT auto-resurrect older t1/t2 All Stocks files unless forced
+  const clearedGuardRes = await pullAvailableFixablySlotsFromAllStocks({
+    currentDatasets: {},
+    currentSlotMeta: {},
+    clearedAt: t3,
+    force: false
+  });
+  assert.strictEqual(clearedGuardRes.pulledCount, 0, 'Cleared workspace must not auto-resurrect older All Stocks slots');
+
+  // Verify cross-module wiring in FixablyInventoryDashboard, DcStockMonitoring, and IngestionCenterPanel
+  const fixablySrc = fs.readFileSync(path.resolve('src/components/FixablyInventoryDashboard.jsx'), 'utf8');
+  const ingestionSrc = fs.readFileSync(path.resolve('src/components/dc-monitoring/IngestionCenterPanel.jsx'), 'utf8');
+  assert.ok(fixablySrc.includes('syncAllStocksSlotsToDcMonitoring'), 'FixablyInventoryDashboard must push uploaded Fixably slots to DC Monitoring');
+  assert.ok(dcPageSrc.includes('syncAllStocksSlotsToDcMonitoring'), 'DcStockMonitoring must auto-sync connected Fixably slots from All Stocks');
+  assert.ok(ingestionSrc.includes('ALL_STOCKS_LINKED_SLOT_IDS'), 'IngestionCenterPanel must distinguish linked All Stocks slots from manual DC slots');
+  assert.ok(ingestionSrc.includes('Update in All Stocks'), 'IngestionCenterPanel must provide direct navigation to All Stocks & Inventory');
+
+  // Clean up test keys from local in-memory dbStorage
+  await dbStorage.removeItem('mdc_uploaded_slot_site_stock');
+  await dbStorage.removeItem('mdc_uploaded_slot_kgb_used');
+  await dbStorage.removeItem('mdc_uploaded_slot_stock_transfer');
+  } finally {
+    if (prevWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = prevWindow;
+    }
+  }
+  console.log('  ✓ PASS: All Stocks & Inventory <-> DC Monitoring live auto-sync bridge verified');
 }
 
 runTests().catch((err) => {

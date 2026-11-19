@@ -435,6 +435,12 @@ async function readInputPayload(fileOrInput) {
   } else if (fileOrInput.data && typeof fileOrInput.data === 'string') {
     text = fileOrInput.data;
     fileName = fileOrInput.fileName || fileName;
+  } else if (typeof fileOrInput.content === 'string') {
+    text = fileOrInput.content;
+    fileName = fileOrInput.fileName || fileName;
+  } else if (fileOrInput.content instanceof ArrayBuffer || ArrayBuffer.isView(fileOrInput.content)) {
+    buffer = fileOrInput.content;
+    fileName = fileOrInput.fileName || fileName;
   } else {
     throw new Error('Unsupported file input format.');
   }

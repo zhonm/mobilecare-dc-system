@@ -33,7 +33,9 @@ import {
   saveDcMonitoringDatasets,
   saveDcMonitoringLedger,
   syncDcMonitoringFromCloud,
-  pullAvailableFixablySlotsFromAllStocks,
+  syncAllStocksSlotsToDcMonitoring,
+  getAllStocksSlotStatuses,
+  ALL_STOCKS_SLOT_MAPPINGS,
   clearAllDcMonitoringData,
   subscribeDcMonitoringSync
 } from '../services/dcMonitoringStorageService';
@@ -48,7 +50,7 @@ import {
 } from './dc-monitoring/DcOperationsPanels';
 
 export default function DcStockMonitoring() {
-  const { currentUser, showToast, broadcastCloudEvent } = useApp();
+  const { currentUser, showToast, broadcastCloudEvent, setActiveTab } = useApp();
   const canPushToCloud = currentUser?.role === 'superadmin' || currentUser?.role === 'admin';
   const currentUserName = currentUser?.fullName || currentUser?.email || 'Admin';
   const senderId = String(currentUser?.id || currentUser?.email || 'anon');
@@ -58,8 +60,10 @@ export default function DcStockMonitoring() {
     syncedBy: null,
     updatedAt: null
   });
+  const [allStocksStatuses, setAllStocksStatuses] = useState({});
   const isMountedRef = useRef(true);
   const lastFocusSyncAtRef = useRef(0);
+  const allStocksSyncInFlightRef = useRef(false);
 
   const [activeSubTab, setActiveSubTab] = useState('overview');
   const [datasets, setDatasets] = useState({});
@@ -145,15 +149,76 @@ export default function DcStockMonitoring() {
     }
   }, [applySyncedStateToUi, broadcastCloudEvent, canPushToCloud, currentUserName, senderId, showToast]);
 
-  const hydrateFromStorage = useCallback(async ({ syncCloudAfter = true } = {}) => {
+  const runAutoSyncFromAllStocks = useCallback(async ({
+    currentState = null,
+    force = false,
+    includePending = false,
+    silent = true
+  } = {}) => {
+    if (allStocksSyncInFlightRef.current) return null;
+    allStocksSyncInFlightRef.current = true;
     try {
-      const local = await loadDcMonitoringState();
+      const res = await syncAllStocksSlotsToDcMonitoring({
+        currentState,
+        userName: currentUserName,
+        skipCloud: !canPushToCloud,
+        force,
+        includePending,
+        broadcastCloudEvent,
+        senderId
+      });
+      if (!isMountedRef.current) return res;
+      if (res?.allStocksStatuses) {
+        setAllStocksStatuses(res.allStocksStatuses);
+      }
+      if (res?.changed) {
+        applySyncedStateToUi(res.state, { switchFromIngestionIfLoaded: false });
+        if (res.cloudSynced) {
+          setCloudSyncState(prev => ({
+            ...prev,
+            status: 'synced',
+            isSyncing: false,
+            syncedBy: currentUserName,
+            updatedAt: res.updatedAt || prev.updatedAt
+          }));
+        }
+        showToast?.(
+          `${force ? 'Synced' : 'Auto-synced'} ${res.pulledCount} Fixably dataset(s) from All Stocks & Inventory${res.cloudSynced ? ' & Cloud' : ''}`,
+          'success'
+        );
+      } else if (!silent) {
+        const anyAvailable = Object.values(res?.allStocksStatuses || {}).some(s => s?.available);
+        showToast?.(
+          anyAvailable
+            ? 'Connected Fixably slots are already up to date with All Stocks & Inventory.'
+            : 'No Fixably files found in All Stocks & Inventory yet.',
+          'info'
+        );
+      }
+      return res;
+    } catch (err) {
+      if (!silent && isMountedRef.current) {
+        showToast?.(`Sync error: ${err?.message || err}`, 'error');
+      }
+      return null;
+    } finally {
+      allStocksSyncInFlightRef.current = false;
+    }
+  }, [applySyncedStateToUi, broadcastCloudEvent, canPushToCloud, currentUserName, senderId, showToast]);
+
+  const hydrateFromStorage = useCallback(async ({ syncCloudAfter = true, syncAllStocksAfter = true } = {}) => {
+    try {
+      const [local, statuses] = await Promise.all([
+        loadDcMonitoringState(),
+        getAllStocksSlotStatuses().catch(() => ({}))
+      ]);
       if (!isMountedRef.current) return;
       setDatasets(local.datasets || {});
       setValidationLogs(local.validationLogs || {});
       setShippingCosts(local.shippingCosts || []);
       setOrderReportOrders(local.orderReportOrders || ORDER_REPORT_BASELINE?.orders || []);
       setRemarksMap(local.remarksMap || {});
+      setAllStocksStatuses(statuses || {});
 
       const loadedCountLocal = Object.values(local.datasets || {}).filter(a => Array.isArray(a) && a.length > 0).length;
       if (loadedCountLocal === 0) {
@@ -161,22 +226,57 @@ export default function DcStockMonitoring() {
       }
       setIsLoading(false);
 
+      let latestState = local;
       if (syncCloudAfter) {
-        await runCloudSync({ localState: local, silent: true });
+        const cloudRes = await runCloudSync({ localState: local, silent: true });
+        if (cloudRes?.state) latestState = cloudRes.state;
+      }
+      if (syncAllStocksAfter && isMountedRef.current) {
+        await runAutoSyncFromAllStocks({ currentState: latestState, force: false, silent: true });
       }
     } catch (err) {
       console.warn('[DcStockMonitoring] Hydration notice:', err);
       if (isMountedRef.current) setIsLoading(false);
     }
-  }, [runCloudSync]);
+  }, [runAutoSyncFromAllStocks, runCloudSync]);
 
   useEffect(() => {
     isMountedRef.current = true;
-    hydrateFromStorage({ syncCloudAfter: true });
+    hydrateFromStorage({ syncCloudAfter: true, syncAllStocksAfter: true });
 
     const unsubLocalBroadcast = subscribeDcMonitoringSync(() => {
-      hydrateFromStorage({ syncCloudAfter: false });
+      hydrateFromStorage({ syncCloudAfter: false, syncAllStocksAfter: false });
     });
+
+    let allStocksSyncTimer = null;
+    const scheduleAllStocksSync = () => {
+      if (allStocksSyncTimer) clearTimeout(allStocksSyncTimer);
+      allStocksSyncTimer = setTimeout(() => {
+        if (isMountedRef.current) {
+          runAutoSyncFromAllStocks({ force: false, silent: true });
+        }
+      }, 450);
+    };
+
+    let bcKgb = null;
+    let bcFifo = null;
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        bcKgb = new BroadcastChannel('mdc_kgb_sync');
+        bcKgb.onmessage = () => scheduleAllStocksSync();
+      } catch (_) {}
+      try {
+        bcFifo = new BroadcastChannel('mdc_fifo_audit_sync');
+        bcFifo.onmessage = () => scheduleAllStocksSync();
+      } catch (_) {}
+    }
+
+    const watchedTsKeys = new Set(ALL_STOCKS_SLOT_MAPPINGS.map(m => m.tsKey));
+    const handleStorageChange = (ev) => {
+      if (ev?.key && watchedTsKeys.has(ev.key)) {
+        scheduleAllStocksSync();
+      }
+    };
 
     const handleCloudSignal = (ev) => {
       const detail = ev?.detail;
@@ -188,6 +288,7 @@ export default function DcStockMonitoring() {
     };
     if (typeof window !== 'undefined') {
       window.addEventListener('mdc:dc_monitoring_cloud_signal', handleCloudSignal);
+      window.addEventListener('storage', handleStorageChange);
     }
 
     const handleVisibilityOrFocus = () => {
@@ -195,7 +296,11 @@ export default function DcStockMonitoring() {
       const now = Date.now();
       if (now - lastFocusSyncAtRef.current < 15000) return;
       lastFocusSyncAtRef.current = now;
-      runCloudSync({ silent: true });
+      runCloudSync({ silent: true }).then((cloudRes) => {
+        if (isMountedRef.current) {
+          runAutoSyncFromAllStocks({ currentState: cloudRes?.state || null, force: false, silent: true });
+        }
+      });
     };
     if (typeof window !== 'undefined') {
       window.addEventListener('focus', handleVisibilityOrFocus);
@@ -204,14 +309,18 @@ export default function DcStockMonitoring() {
 
     return () => {
       isMountedRef.current = false;
+      if (allStocksSyncTimer) clearTimeout(allStocksSyncTimer);
       unsubLocalBroadcast();
+      if (bcKgb) { try { bcKgb.close(); } catch (_) {} }
+      if (bcFifo) { try { bcFifo.close(); } catch (_) {} }
       if (typeof window !== 'undefined') {
         window.removeEventListener('mdc:dc_monitoring_cloud_signal', handleCloudSignal);
+        window.removeEventListener('storage', handleStorageChange);
         window.removeEventListener('focus', handleVisibilityOrFocus);
         document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
       }
     };
-  }, [hydrateFromStorage, runCloudSync, showToast]);
+  }, [hydrateFromStorage, runAutoSyncFromAllStocks, runCloudSync, showToast]);
 
   const analytics = useMemo(() => (
     computeDcStockMonitoringAnalytics(datasets, {
@@ -318,28 +427,7 @@ export default function DcStockMonitoring() {
   const handlePullFromAllStocks = async () => {
     setIsProcessing(true);
     try {
-      const { pulledDatasets, pulledLogs, pulledSlotIds, pulledCount } = await pullAvailableFixablySlotsFromAllStocks();
-      if (pulledCount === 0) {
-        showToast?.('No Fixably files found in All Stocks & Inventory cache yet.', 'info');
-        return;
-      }
-      const nextDatasets = { ...datasets, ...pulledDatasets };
-      const nextLogs = { ...validationLogs, ...pulledLogs };
-      setDatasets(nextDatasets);
-      setValidationLogs(nextLogs);
-      const saveRes = await saveDcMonitoringDatasets(nextDatasets, nextLogs, {
-        changedSlotIds: pulledSlotIds,
-        userName: currentUserName,
-        skipCloud: !canPushToCloud,
-        broadcastCloudEvent,
-        senderId
-      });
-      if (saveRes?.cloudSynced) {
-        setCloudSyncState(prev => ({ ...prev, status: 'synced', syncedBy: currentUserName, updatedAt: saveRes.updatedAt }));
-      }
-      showToast?.(`Synced ${pulledCount} Fixably dataset(s) from All Stocks & Inventory${saveRes?.cloudSynced ? ' & Cloud' : ''}`, 'success');
-    } catch (err) {
-      showToast?.(`Sync error: ${err?.message || err}`, 'error');
+      await runAutoSyncFromAllStocks({ force: true, includePending: true, silent: false });
     } finally {
       setIsProcessing(false);
     }
@@ -568,10 +656,12 @@ export default function DcStockMonitoring() {
             <IngestionCenterPanel
               datasets={datasets}
               validationLogs={validationLogs}
+              allStocksStatuses={allStocksStatuses}
               onUploadSlotFile={handleUploadSlotFile}
               onUploadCompleteWorkbook={handleUploadCompleteWorkbook}
               onUploadOrderReport={handleUploadOrderReport}
               onPullFromAllStocks={handlePullFromAllStocks}
+              onOpenAllStocks={() => setActiveTab?.('all-stocks')}
               onClearAll={handleClearAll}
               isProcessing={isProcessing}
             />

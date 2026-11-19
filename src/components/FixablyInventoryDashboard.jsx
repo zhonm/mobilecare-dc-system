@@ -35,6 +35,7 @@ import { resolveSite, readInventoryFromLocalStorage } from '../utils/appContextH
 import { isProvincialSite } from '../utils/partResolver.js';
 import { resolveSerialFullDetails } from '../utils/serialTracker.js';
 import { syncFixablyTransfersToHistory, loadLocalTransferHistory } from '../services/transferHistoryService.js';
+import { syncAllStocksSlotsToDcMonitoring } from '../services/dcMonitoringStorageService.js';
 import {
   executeKgbConsumptionSync,
   computeKgbContentHash,
@@ -1552,6 +1553,17 @@ export default function FixablyInventoryDashboard({
             kbc.close();
           } catch (_) {}
         }
+        // Auto-sync KGB Used slot to DC Stock Monitoring & SDR workspace (local + Cloud)
+        syncAllStocksSlotsToDcMonitoring({
+          slotIds: ['kgb_used'],
+          userName: currentUser?.fullName || currentUser?.email || 'Admin',
+          skipCloud: !(currentUser?.role === 'superadmin' || currentUser?.role === 'admin'),
+          broadcastCloudEvent,
+          senderId: String(currentUser?.id || currentUser?.email || 'anon'),
+          force: true
+        }).catch((syncErr) => {
+          console.warn('[FixablyInventoryDashboard] DC Monitoring KGB auto-sync notice:', syncErr?.message || syncErr);
+        });
         await appendActivityLog({
           actionType: 'KGB_CONSUMPTION_SYNC',
           status: 'SUCCESS',
@@ -1669,6 +1681,21 @@ export default function FixablyInventoryDashboard({
       kgb_used: { ...prev.kgb_used, pendingUpload: false },
       stock_transfer: { ...prev.stock_transfer, pendingUpload: false }
     }));
+
+    // Auto-sync uploaded Fixably slots (Site Stock, KGB Used, Stock Transfers) into DC Stock Monitoring & SDR
+    const syncedSlotKeys = activeSlots.filter(k => slots[k]?.valid && slots[k]?.content);
+    if (syncedSlotKeys.length > 0) {
+      syncAllStocksSlotsToDcMonitoring({
+        slotIds: syncedSlotKeys,
+        userName: currentUser?.fullName || currentUser?.email || 'Admin',
+        skipCloud: !(currentUser?.role === 'superadmin' || currentUser?.role === 'admin'),
+        broadcastCloudEvent,
+        senderId: String(currentUser?.id || currentUser?.email || 'anon'),
+        force: true
+      }).catch((syncErr) => {
+        console.warn('[FixablyInventoryDashboard] DC Monitoring auto-sync notice:', syncErr?.message || syncErr);
+      });
+    }
   };
 
   // Drag and drop helper for individual slots
