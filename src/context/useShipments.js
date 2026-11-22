@@ -940,12 +940,17 @@ export function useShipments({
             }
 
             const targetDbId = existingShp?.id || directShipmentRow.id;
+            const effectiveShipmentNumber = existingShp?.shipment_number || directShipmentRow.shipment_number;
             effectiveDbShipmentId = targetDbId;
 
-            // Prepare upsert payload. Attempt to store extended columns if available.
-            const extendedPayload = {
+            // Prepare payload with only valid public.shipments columns. Attempt extended columns first.
+            const basePayload = {
               ...directShipmentRow,
               id: targetDbId,
+              shipment_number: effectiveShipmentNumber
+            };
+            const extendedPayload = {
+              ...basePayload,
               ...(newShipment.pickup_date ? { pickup_date: newShipment.pickup_date } : {}),
               ...(newShipment.received_date ? { received_date: newShipment.received_date } : {}),
               ...(newShipment.received_at ? { received_at: newShipment.received_at } : {}),
@@ -954,21 +959,25 @@ export function useShipments({
               ...(newShipment.receiving_notes ? { receiving_notes: newShipment.receiving_notes } : {})
             };
 
-            let { data: upsertData, error: upsertErr } = await supabase
-              .from('shipments')
-              .upsert(extendedPayload, { onConflict: 'shipment_number' })
-              .select('id');
-
-            if (upsertErr && upsertErr.message && (upsertErr.message.includes('column') || upsertErr.code === '42703')) {
-              // Table schema in Supabase does not have extended columns yet, upsert base schema payload
-              const basePayload = {
-                ...directShipmentRow,
-                id: targetDbId
-              };
-              const retryRes = await supabase
+            const writeShipmentRow = async (payload) => {
+              if (existingShp?.id) {
+                return supabase
+                  .from('shipments')
+                  .update(payload)
+                  .eq('id', existingShp.id)
+                  .select('id');
+              }
+              return supabase
                 .from('shipments')
-                .upsert(basePayload, { onConflict: 'shipment_number' })
+                .upsert(payload, { onConflict: 'shipment_number' })
                 .select('id');
+            };
+
+            let { data: upsertData, error: upsertErr } = await writeShipmentRow(extendedPayload);
+
+            if (upsertErr && (upsertErr.message?.includes('column') || upsertErr.code === '42703' || upsertErr.code === 'PGRST204')) {
+              // Table schema in Supabase does not have extended columns yet, retry with base schema payload
+              const retryRes = await writeShipmentRow(basePayload);
               upsertData = retryRes.data;
               upsertErr = retryRes.error;
             }
@@ -980,18 +989,41 @@ export function useShipments({
               }
             } else {
               console.warn('Direct shipments table upsert notice:', upsertErr.message);
-              // Fallback direct update by shipment_number using base payload
-              const basePayload = { ...directShipmentRow, id: targetDbId };
-              const { error: updErr } = await supabase
-                .from('shipments')
-                .update(basePayload)
-                .eq('shipment_number', directShipmentRow.shipment_number);
-              if (!updErr) {
+              // Fallback direct update by id or invoice_ref or shipment_number using base payload
+              let fallbackErr = upsertErr;
+              if (existingShp?.id) {
+                const { error: idErr } = await supabase.from('shipments').update(basePayload).eq('id', existingShp.id);
+                fallbackErr = idErr;
+              } else if (directShipmentRow.invoice_ref) {
+                const { error: refErr } = await supabase.from('shipments').update(basePayload).eq('invoice_ref', directShipmentRow.invoice_ref);
+                fallbackErr = refErr;
+              } else {
+                const { error: numErr } = await supabase.from('shipments').update(basePayload).eq('shipment_number', effectiveShipmentNumber);
+                fallbackErr = numErr;
+              }
+              if (!fallbackErr) {
                 shipmentSavedInDb = true;
               }
             }
           } catch (shpErr) {
             console.warn('Direct shipments table catch notice:', shpErr.message);
+          }
+
+          if (!shipmentSavedInDb && enqueueOfflineAction) {
+            enqueueOfflineAction('SHIPMENT_UPSERT', {
+              id: newShipment.id,
+              record_type: 'shipment',
+              period_label: newShipment.invoice_ref || newShipment.shipment_number,
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              period_week: newShipment.week_number || 1,
+              notes: newShipment.remarks || '',
+              saved_by_name: resolvedPreparedBy,
+              saved_by_user_id: safeUUID(currentUser?.id),
+              snapshot_data: newShipment,
+              created_at: newShipment.created_at || new Date().toISOString(),
+              updated_at: newShipment.updated_at || new Date().toISOString()
+            });
           }
         }
 
@@ -1339,67 +1371,87 @@ export function useShipments({
       const dbPromises = [];
 
       // A: Direct saved_records row for this single shipment
-      const savedRecordPromise = supabase.from('saved_records').upsert({
-        id: updatedShipment.id,
-        record_type: 'shipment',
-        period_label: updatedShipment.invoice_ref || updatedShipment.shipment_number,
-        period_year: new Date().getFullYear(),
-        period_month: new Date().getMonth() + 1,
-        period_week: updatedShipment.week_number || 1,
-        notes: updatedShipment.remarks || '',
-        saved_by_name: updatedShipment.prepared_by_name || resolvedDispatchedBy,
-        saved_by_user_id: safeUUID(currentUser?.id),
-        snapshot_data: updatedShipment,
-        created_at: updatedShipment.created_at || nowIso,
-        updated_at: nowIso
-      }, { onConflict: 'id' });
+      const savedRecordPromise = (async () => {
+        const { error: recErr } = await supabase.from('saved_records').upsert({
+          id: updatedShipment.id,
+          record_type: 'shipment',
+          period_label: updatedShipment.invoice_ref || updatedShipment.shipment_number,
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          period_week: updatedShipment.week_number || 1,
+          notes: updatedShipment.remarks || '',
+          saved_by_name: updatedShipment.prepared_by_name || resolvedDispatchedBy,
+          saved_by_user_id: safeUUID(currentUser?.id),
+          snapshot_data: updatedShipment,
+          created_at: updatedShipment.created_at || nowIso,
+          updated_at: nowIso
+        }, { onConflict: 'id' });
+        if (recErr) throw recErr;
+      })();
       dbPromises.push(savedRecordPromise);
 
-      // B: Direct shipments table row update
+      // B: Direct shipments table row update (strictly schema-valid public.shipments columns)
       if (directShipmentRow) {
-        const targetDbId = isUUID(updatedShipment.id) ? updatedShipment.id : directShipmentRow.id;
-        const shipmentUpdatePayload = {
-          ...directShipmentRow,
-          id: targetDbId,
-          status: 'shipped',
-          carrier: cleanCarrier,
-          shipping_mode: isLite ? shippingMode : (targetShipment.shipping_mode || ''),
-          tracking_number: cleanTrk,
-          courier_name: cleanRider,
-          pickup_date: cleanPickupDate,
-          shipment_date: cleanPickupDate,
-          dispatched_at: nowIso,
-          dispatched_by: resolvedDispatchedBy,
-          updated_at: nowIso,
-          ...(cleanTS ? { transfer_slip_number: cleanTS } : {}),
-          ...(cleanRiderPhone ? { rider_phone: cleanRiderPhone } : {}),
-          ...(cleanVehiclePlate ? { vehicle_plate: cleanVehiclePlate } : {}),
-          ...(cleanGuardOnDuty ? { guard_on_duty: cleanGuardOnDuty } : {})
-        };
-
         const shipmentUpdatePromise = (async () => {
-          try {
-            const { error: upsErr } = await supabase
+          let existingShp = null;
+          if (directShipmentRow.invoice_ref) {
+            const { data: shpByRef } = await supabase
               .from('shipments')
-              .upsert(shipmentUpdatePayload, { onConflict: 'shipment_number' });
+              .select('id, shipment_number, invoice_ref')
+              .eq('invoice_ref', directShipmentRow.invoice_ref)
+              .maybeSingle();
+            if (shpByRef) existingShp = shpByRef;
+          }
+          if (!existingShp && isUUID(updatedShipment.id)) {
+            const { data: shpById } = await supabase
+              .from('shipments')
+              .select('id, shipment_number, invoice_ref')
+              .eq('id', updatedShipment.id)
+              .maybeSingle();
+            if (shpById) existingShp = shpById;
+          }
 
-            if (upsErr && (upsErr.message?.includes('column') || upsErr.code === '42703')) {
-              const basePayload = {
-                ...directShipmentRow,
-                id: targetDbId,
-                status: 'shipped',
-                tracking_number: cleanTrk,
-                courier_name: cleanRider,
-                shipment_date: cleanPickupDate,
-                updated_at: nowIso
-              };
-              await supabase.from('shipments').upsert(basePayload, { onConflict: 'shipment_number' });
-            } else if (upsErr) {
-              console.warn('Shipment table dispatch upsert notice:', upsErr.message);
-              await supabase.from('shipments').update(shipmentUpdatePayload).eq('shipment_number', updatedShipment.shipment_number);
+          const targetDbId = existingShp?.id || (isUUID(updatedShipment.id) ? updatedShipment.id : directShipmentRow.id);
+          const effectiveShipmentNumber = existingShp?.shipment_number || directShipmentRow.shipment_number;
+
+          const basePayload = {
+            ...directShipmentRow,
+            id: targetDbId,
+            shipment_number: effectiveShipmentNumber,
+            status: 'shipped',
+            carrier: cleanCarrier,
+            tracking_number: cleanTrk,
+            shipment_date: cleanPickupDate,
+            updated_at: nowIso
+          };
+          const shipmentUpdatePayload = {
+            ...basePayload,
+            ...(cleanPickupDate ? { pickup_date: cleanPickupDate } : {})
+          };
+
+          const writeDispatchRow = async (payload) => {
+            if (existingShp?.id) {
+              return supabase.from('shipments').update(payload).eq('id', existingShp.id);
             }
-          } catch (err) {
-            console.warn('Shipment table dispatch notice:', err.message);
+            return supabase.from('shipments').upsert(payload, { onConflict: 'shipment_number' });
+          };
+
+          let { error: upsErr } = await writeDispatchRow(shipmentUpdatePayload);
+
+          if (upsErr && (upsErr.message?.includes('column') || upsErr.code === '42703' || upsErr.code === 'PGRST204')) {
+            const retryRes = await writeDispatchRow(basePayload);
+            upsErr = retryRes.error;
+          }
+
+          if (upsErr) {
+            console.warn('Shipment table dispatch upsert notice:', upsErr.message);
+            const fallbackQuery = existingShp?.id
+              ? supabase.from('shipments').update(basePayload).eq('id', existingShp.id)
+              : (directShipmentRow.invoice_ref
+                ? supabase.from('shipments').update(basePayload).eq('invoice_ref', directShipmentRow.invoice_ref)
+                : supabase.from('shipments').update(basePayload).eq('shipment_number', effectiveShipmentNumber));
+            const { error: fbErr } = await fallbackQuery;
+            if (fbErr) throw fbErr;
           }
         })();
         dbPromises.push(shipmentUpdatePromise);

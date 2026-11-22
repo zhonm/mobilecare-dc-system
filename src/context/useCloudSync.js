@@ -19,6 +19,7 @@ import {
   consolidateDcIntakeRecordsList,
   isExplicitlyCleared,
   formatAuditEntityDisplay,
+  formatShipmentForDb,
   reconcileShipmentsAndDrafts,
   resolveSite,
   saveInventoryToLocalStorage,
@@ -49,7 +50,7 @@ import {
   persistPartsCatalog,
   FULL_MERGED_CATALOG_MIN_PARTS
 } from '../utils/gsxCatalogImporter.js';
-import { buildSerialDictionary, healShipmentItem, isUnknownPn, isUnknownDesc, getShipmentRiderName, isShipmentReceived } from '../utils/shipmentHelpers';
+import { buildSerialDictionary, healShipmentItem, isUnknownPn, isUnknownDesc, getShipmentRiderName, isShipmentReceived, resolveMergedShipmentStatus } from '../utils/shipmentHelpers';
 import {
   ARCHIVE_CUTOFF_DAYS,
   getArchiveCutoffDate,
@@ -434,7 +435,48 @@ export function useCloudSync({
               try { await supabase.from('saved_records').delete().eq('id', cleanRecId); } catch (e) {}
             }
           } else if (item.actionType === 'SHIPMENT_UPSERT') {
-            await supabase.from('saved_records').upsert(item.payload, { onConflict: 'id' });
+            const { error: recErr } = await supabase.from('saved_records').upsert(item.payload, { onConflict: 'id' });
+            if (recErr) throw recErr;
+            const snap = item.payload?.snapshot_data;
+            if (snap) {
+              const directRow = formatShipmentForDb(snap, liveStateRef.current?.sites || []);
+              if (directRow && isUUID(directRow.site_id)) {
+                let existingShp = null;
+                if (directRow.invoice_ref) {
+                  const { data: shpByRef } = await supabase
+                    .from('shipments')
+                    .select('id, shipment_number')
+                    .eq('invoice_ref', directRow.invoice_ref)
+                    .maybeSingle();
+                  if (shpByRef) existingShp = shpByRef;
+                }
+                const targetDbId = existingShp?.id || directRow.id;
+                const effectiveShipmentNumber = existingShp?.shipment_number || directRow.shipment_number;
+                const basePayload = {
+                  ...directRow,
+                  id: targetDbId,
+                  shipment_number: effectiveShipmentNumber
+                };
+                const extendedPayload = {
+                  ...basePayload,
+                  ...(snap.pickup_date ? { pickup_date: snap.pickup_date } : {}),
+                  ...(snap.received_date ? { received_date: snap.received_date } : {}),
+                  ...(snap.received_at ? { received_at: snap.received_at } : {}),
+                  ...(snap.received_by_name ? { received_by_name: snap.received_by_name } : {}),
+                  ...(snap.receiving_condition ? { receiving_condition: snap.receiving_condition } : {}),
+                  ...(snap.receiving_notes ? { receiving_notes: snap.receiving_notes } : {})
+                };
+                const writeRow = (payload) => existingShp?.id
+                  ? supabase.from('shipments').update(payload).eq('id', existingShp.id)
+                  : supabase.from('shipments').upsert(payload, { onConflict: 'shipment_number' });
+                let { error: shpErr } = await writeRow(extendedPayload);
+                if (shpErr && (shpErr.message?.includes('column') || shpErr.code === '42703' || shpErr.code === 'PGRST204')) {
+                  const retryRes = await writeRow(basePayload);
+                  shpErr = retryRes.error;
+                }
+                if (shpErr) throw shpErr;
+              }
+            }
           } else if (item.actionType === 'SHIPMENT_DELETE') {
             await supabase.from('saved_records').delete().eq('id', item.payload.shipmentId);
           } else if (item.actionType === 'PARTS_REQUEST_CREATE') {
@@ -2355,6 +2397,8 @@ export function useCloudSync({
               const resolvedPlate = dbS.vehicle_plate || existing?.vehicle_plate || '';
               const resolvedGuard = dbS.guard_on_duty || existing?.guard_on_duty || '';
               const resolvedCarrier = dbS.carrier || dbS.courier || existing?.carrier || existing?.courier || '';
+              const resolvedTrackingNumber = (dbS.tracking_number && String(dbS.tracking_number).trim()) || existing?.tracking_number || '';
+              const resolvedBookingId = (dbS.booking_id && String(dbS.booking_id).trim()) || existing?.booking_id || resolvedTrackingNumber || '';
               const resolvedPickupDate = dbS.pickup_date || dbS.shipment_date || existing?.pickup_date || existing?.shipment_date || '';
               const resolvedReceivedDate = dbS.received_date || existing?.received_date || (dbS.received_at ? String(dbS.received_at).substring(0, 10) : (existing?.received_at ? String(existing.received_at).substring(0, 10) : ''));
               const resolvedReceivedAt = dbS.received_at || existing?.received_at || '';
@@ -2362,6 +2406,7 @@ export function useCloudSync({
               const resolvedReceivingSignature = dbS.receiving_signature || existing?.receiving_signature || resolvedReceivedByName || '';
               const resolvedReceivingCondition = dbS.receiving_condition || existing?.receiving_condition || '';
               const resolvedReceivingNotes = dbS.receiving_notes || existing?.receiving_notes || '';
+              const mergedLifecycle = resolveMergedShipmentStatus(existing, dbS);
 
               const hasValidFormatted = formattedItems.length > 0 && !formattedItems.every(it => isUnknownPn(it.part_number));
               const hasValidExisting = existingItems.length > 0 && !existingItems.every(it => isUnknownPn(it.part_number));
@@ -2370,6 +2415,8 @@ export function useCloudSync({
               shipmentMap.set(canonicalRef, {
                 ...(existing || {}),
                 ...dbS,
+                status: mergedLifecycle.status,
+                updated_at: mergedLifecycle.updated_at || dbS.updated_at || existing?.updated_at,
                 pickup_by_name: resolvedPickupByName,
                 courier_name: resolvedCourierName,
                 transfer_slip_number: resolvedTs,
@@ -2377,6 +2424,8 @@ export function useCloudSync({
                 vehicle_plate: resolvedPlate,
                 guard_on_duty: resolvedGuard,
                 carrier: resolvedCarrier,
+                tracking_number: resolvedTrackingNumber,
+                booking_id: resolvedBookingId,
                 destination_site_name: resolvedSiteName,
                 destination_site_code: resolvedSiteCode,
                 pickup_date: resolvedPickupDate,
@@ -2417,18 +2466,44 @@ export function useCloudSync({
           } catch (e) {}
         }
 
-        // The normalized shipments table is authoritative for lifecycle status.
-        // Saved-record snapshots and browser caches can legitimately lag after a
-        // status transition, so do not let them hide an active shipment.
+        // Preserve any unsynced local SHIPMENT_UPSERT mutations waiting in the offline queue
+        // so transient Supabase timeouts/522s do not visually roll back Pickup or Receive actions.
+        try {
+          const pendingQueue = JSON.parse(localStorage.getItem('mdc_offline_sync_queue') || '[]');
+          if (Array.isArray(pendingQueue) && pendingQueue.length > 0) {
+            pendingQueue
+              .filter(item => item?.actionType === 'SHIPMENT_UPSERT' && item?.payload?.snapshot_data)
+              .forEach(item => {
+                const snap = item.payload.snapshot_data;
+                const canonicalRef = String(snap.invoice_ref || snap.shipment_number || snap.id || '').trim().toUpperCase();
+                if (canonicalRef && !isDeletedOrCorruptedShipment(snap)) {
+                  const existing = shipmentMap.get(canonicalRef);
+                  const mergedLifecycle = resolveMergedShipmentStatus(snap, existing || {});
+                  const snapItems = (Array.isArray(snap.items) && snap.items.length > 0) ? snap.items : (existing?.items || []);
+                  shipmentMap.set(canonicalRef, {
+                    ...(existing || {}),
+                    ...snap,
+                    status: mergedLifecycle.status,
+                    updated_at: mergedLifecycle.updated_at || snap.updated_at || existing?.updated_at,
+                    items: snapItems.map(it => healShipmentItem(it, serialDict, partsMapByPn))
+                  });
+                }
+              });
+          }
+        } catch (e) {}
+
+        // Reconcile normalized public.shipments status without allowing stale DB rows
+        // to roll back newer Pickup / Receive transitions recorded in saved_records or offline queue.
         if (Array.isArray(dbShipments) && dbShipments.length > 0) {
           dbShipments.forEach(dbS => {
             const canonicalRef = String(dbS.invoice_ref || dbS.shipment_number || dbS.id || '').trim().toUpperCase();
             const existing = shipmentMap.get(canonicalRef);
             if (existing && dbS.status) {
+              const mergedLifecycle = resolveMergedShipmentStatus(existing, dbS);
               shipmentMap.set(canonicalRef, {
                 ...existing,
-                status: dbS.status,
-                updated_at: dbS.updated_at || existing.updated_at
+                status: mergedLifecycle.status,
+                updated_at: mergedLifecycle.updated_at || existing.updated_at
               });
             }
           });

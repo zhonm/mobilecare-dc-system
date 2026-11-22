@@ -121,14 +121,38 @@ export function useAuth({
               return;
             }
 
-            const { data: dbProf, error: profError } = await supabase
-              .from('profiles')
-              .select('id, email, full_name, role, role_position, site_id, has_set_password, is_active, is_deleted, created_at, updated_at')
-              .ilike('email', cleanAuthEmail)
-              .maybeSingle();
+            const { data: dbProf, error: profError } = await withAuthTimeout(
+              supabase
+                .from('profiles')
+                .select('id, email, full_name, role, role_position, site_id, has_set_password, is_active, is_deleted, created_at, updated_at')
+                .ilike('email', cleanAuthEmail)
+                .maybeSingle(),
+              5000,
+              'profiles.select'
+            );
 
             if (profError) {
-              console.warn('[useAuth] Failed to fetch profile for session:', profError.message);
+              const errMsg = String(profError?.message || '');
+              const errStatus = Number(profError?.status || 0);
+              const isTransientServerErr =
+                errStatus >= 500 ||
+                errStatus === 0 ||
+                /timed out|timeout|522|502|503|504|fetch failed|failed to fetch|network|<!doctype html/i.test(errMsg);
+
+              console.warn('[useAuth] Failed to fetch profile for session:', errMsg.slice(0, 200));
+
+              if (isTransientServerErr) {
+                // Do NOT log out an active user when Supabase is temporarily unreachable / 522.
+                if (currentUser) return;
+                const cachedMatch = matchUserByEmail(usersList, cleanAuthEmail);
+                if (isMounted && cachedMatch && cachedMatch.hasSetPassword && cachedMatch.isActive !== false && !cachedMatch.isDeleted) {
+                  persistUserSession(cachedMatch);
+                  dbStorage.setItem('mdc_current_user', cachedMatch);
+                  setCurrentUser(cachedMatch);
+                }
+                return;
+              }
+
               clearStoredUserSession();
               await dbStorage.removeItem('mdc_current_user');
               setCurrentUser(null);
@@ -1046,10 +1070,25 @@ export function useAuth({
     }
 
     if (!authPassed) {
-      loginRateLimiter.recordFailure(cleanEmail);
+      const rawErr = String(authErrorMessage || '');
+      const isTransientAuthErr = /timed out|timeout|522|502|503|504|fetch failed|failed to fetch|network|<!doctype html/i.test(rawErr);
+
       barcodeAudio.playError();
+
+      if (isTransientAuthErr) {
+        return {
+          success: false,
+          isTransientError: true,
+          error: 'Authentication server is temporarily unreachable (connection timed out). Please wait a moment and try again.'
+        };
+      }
+
+      const failState = loginRateLimiter.recordFailure(cleanEmail);
       return {
         success: false,
+        rateLimitRecorded: true,
+        remainingAttempts: failState.remainingAttempts,
+        locked: failState.locked,
         error: authErrorMessage && !authErrorMessage.includes('schema') && !authErrorMessage.includes('credentials')
           ? authErrorMessage
           : 'Incorrect password. Please try again or contact DC if you need a password reset.'

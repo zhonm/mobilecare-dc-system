@@ -152,10 +152,14 @@ export default function Login() {
         if (TURNSTILE_SITE_KEY && turnstileToken !== 'dev-bypass-token') {
           handleResetTurnstile();
         }
-        if (res.error?.includes('lockout active') || res.error?.includes('Too many failed')) {
+        if (res.isTransientError) {
+          setErrorMessage(res.error);
+        } else if (res.error?.includes('lockout active') || res.error?.includes('Too many failed')) {
           setErrorMessage(res.error);
         } else {
-          const failState = loginRateLimiter.recordFailure(emailInput.trim().toLowerCase());
+          const failState = res.rateLimitRecorded
+            ? { locked: Boolean(res.locked), remainingAttempts: res.remainingAttempts }
+            : loginRateLimiter.recordFailure(emailInput.trim().toLowerCase());
           if (failState.locked) {
             setErrorMessage(`Too many failed attempts. Security lockout active for 60 seconds.`);
           } else {

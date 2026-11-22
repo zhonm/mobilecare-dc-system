@@ -31,6 +31,79 @@ export const isShipmentReceived = (sh) => {
 };
 
 /**
+ * Returns the lifecycle progression rank of a shipment status.
+ * draft (0) < packing (1) < pending_pickup (2) < shipped (3) < received_confirmed (4)
+ */
+export const getShipmentStatusRank = (status) => {
+  const norm = String(status || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (norm === 'received_confirmed' || norm === 'delivered' || norm === 'received' || norm === 'completed') return 4;
+  if (norm === 'shipped' || norm === 'in_transit') return 3;
+  if (norm === 'pending_pickup' || norm === 'ready_for_pickup' || norm === 'ready_for_dispatch' || norm === 'ready') return 2;
+  if (norm === 'packing' || norm === 'in_progress') return 1;
+  return 0;
+};
+
+/**
+ * Resolves the authoritative status and updated_at when merging a normalized
+ * public.shipments row (dbRow) with an existing snapshot from saved_records
+ * or local/offline state (existing).
+ *
+ * Prevents a stale public.shipments row (e.g. still pending_pickup after a
+ * failed/lagging DB write) from rolling back a newer shipped or
+ * received_confirmed transition, while still allowing intentional reverts
+ * (e.g. "Set Draft") whose DB updated_at is strictly newer than the snapshot.
+ */
+export const resolveMergedShipmentStatus = (existing, dbRow) => {
+  const existingStatus = existing?.status || '';
+  const dbStatus = dbRow?.status || '';
+
+  if (!existingStatus) {
+    return {
+      status: dbStatus || 'pending_pickup',
+      updated_at: dbRow?.updated_at || existing?.updated_at
+    };
+  }
+  if (!dbStatus) {
+    return {
+      status: existingStatus,
+      updated_at: existing?.updated_at || dbRow?.updated_at
+    };
+  }
+
+  const existingTs = new Date(existing?.updated_at || 0).getTime() || 0;
+  const dbTs = new Date(dbRow?.updated_at || 0).getTime() || 0;
+
+  if (isShipmentReceived(existing) || isShipmentReceived(dbRow)) {
+    return {
+      status: 'received_confirmed',
+      updated_at: dbTs >= existingTs ? (dbRow?.updated_at || existing?.updated_at) : existing?.updated_at
+    };
+  }
+
+  const existingRank = getShipmentStatusRank(existingStatus);
+  const dbRank = getShipmentStatusRank(dbStatus);
+
+  if (existingRank > dbRank && existingTs > dbTs) {
+    return {
+      status: existingStatus,
+      updated_at: existing?.updated_at
+    };
+  }
+
+  if (existingRank > dbRank && existingTs === dbTs && existingRank >= 3) {
+    return {
+      status: existingStatus,
+      updated_at: existing?.updated_at || dbRow?.updated_at
+    };
+  }
+
+  return {
+    status: dbStatus,
+    updated_at: dbTs >= existingTs ? (dbRow?.updated_at || existing?.updated_at) : (existing?.updated_at || dbRow?.updated_at)
+  };
+};
+
+/**
  * Checks if a shipment is active in the outbound pipeline (Shipped or Pending).
  * Excludes Received, Delivered, and Cancelled shipments.
  */
