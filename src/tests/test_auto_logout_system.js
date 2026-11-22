@@ -241,6 +241,33 @@ runTest('AuditTrail.jsx includes Session & Auto-Logout activity tab and Excel ex
   );
 });
 
+runTest('Post-auto-logout re-login clears stale Supabase auth tokens and bounds network calls', () => {
+  const clientFile = fs.readFileSync(path.join(projectRoot, 'src/supabase/client.js'), 'utf8');
+  const authFile = fs.readFileSync(path.join(projectRoot, 'src/context/useAuth.js'), 'utf8');
+  const autoLogoutFile = fs.readFileSync(path.join(projectRoot, 'src/hooks/useAutoLogout.js'), 'utf8');
+
+  assert.ok(
+    clientFile.includes('export const clearStaleSupabaseAuthStorage'),
+    'client.js must export clearStaleSupabaseAuthStorage'
+  );
+  assert.ok(
+    authFile.includes("supabase.auth.signOut({ scope: 'local' })"),
+    'useAuth.js signOut must use local scope to avoid refresh-token 400 stalls'
+  );
+  assert.ok(
+    authFile.includes('clearStaleSupabaseAuthStorage()'),
+    'useAuth.js must clear stale Supabase auth tokens on signOut and pre-login'
+  );
+  assert.ok(
+    authFile.includes('withAuthTimeout('),
+    'useAuth.js must bound pre-login RPC and auth queries with withAuthTimeout'
+  );
+  assert.ok(
+    autoLogoutFile.includes('raceWithTimeout('),
+    'useAutoLogout.js must bound audit logging and signOut during executeAutoLogout'
+  );
+});
+
 console.log('====================================================');
 console.log(`RESULTS: ${passedTests} PASSED, ${failedTests} FAILED`);
 console.log('====================================================');

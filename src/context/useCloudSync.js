@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, startTransition } from 'react';
 import seedData from '../data/seedData.json';
-import { supabase } from '../supabase/client';
+import { supabase, clearStaleSupabaseAuthStorage } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { normalizeInventoryUnits, isProvincialSite } from '../utils/partResolver';
 import { resolveSafeRegion } from '../constants/config';
@@ -1693,9 +1693,10 @@ export function useCloudSync({
               });
 
               clearStoredUserSession();
+              clearStaleSupabaseAuthStorage();
               try { dbStorage.removeItem('mdc_current_user'); } catch (e) {}
               if (supabase?.auth?.signOut) {
-                supabase.auth.signOut().catch(() => {});
+                supabase.auth.signOut({ scope: 'local' }).catch(() => {});
               }
               if (setCurrentUser) {
                 setCurrentUser(null);
@@ -4850,9 +4851,10 @@ export function useCloudSync({
               if (isMatch) {
                 console.warn('[Security Guard] Active session forcefully terminated via Realtime broadcast.');
                 clearStoredUserSession();
+                clearStaleSupabaseAuthStorage();
                 try { dbStorage.removeItem('mdc_current_user'); } catch (e) {}
                 if (supabase?.auth?.signOut) {
-                  supabase.auth.signOut().catch(() => {});
+                  supabase.auth.signOut({ scope: 'local' }).catch(() => {});
                 }
                 if (setCurrentUser) {
                   setCurrentUser(null);

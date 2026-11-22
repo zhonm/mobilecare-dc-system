@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../supabase/client';
+import { supabase, clearStaleSupabaseAuthStorage } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import {
   hashPassword,
@@ -22,8 +22,22 @@ import { isUUID } from '../utils/appContextHelpers';
 import {
   getSessionAuthTimestamp,
   setSessionAuthTimestamp,
-  clearSessionAuthTimestamp
+  clearSessionAuthTimestamp,
+  getStoredLogoutNotice,
+  clearStoredLogoutNotice
 } from '../utils/autoLogoutManager';
+
+const withAuthTimeout = (promise, ms, label = 'auth request') => {
+  let timerId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timerId = setTimeout(() => {
+      const err = new Error(`${label} timed out after ${ms}ms`);
+      err.isAuthTimeout = true;
+      reject(err);
+    }, ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timerId));
+};
 
 export function useAuth({
   usersList,
@@ -82,10 +96,23 @@ export function useAuth({
         if (!supabase) return;
       }
 
+      // If the user was just auto-logged out, do NOT attempt to recover a stale Supabase session
+      if (!currentUser && getStoredLogoutNotice()) {
+        clearStaleSupabaseAuthStorage();
+        return;
+      }
+
       // 1. Recover from Supabase Auth active cloud session if available
       if (supabase) {
         try {
-          const { data: sessionData } = await supabase.auth.getSession();
+          const { data: sessionData, error: sessionErr } = await withAuthTimeout(
+            supabase.auth.getSession(),
+            4000,
+            'auth.getSession'
+          );
+          if (sessionErr) {
+            clearStaleSupabaseAuthStorage();
+          }
           const authEmail = sessionData?.session?.user?.email;
           if (isMounted && authEmail) {
             const cleanAuthEmail = authEmail.trim().toLowerCase();
@@ -465,15 +492,27 @@ export function useAuth({
     } catch (e) {}
 
     let user = null;
+    let rpcTimedOut = false;
+
+    // Clear any leftover/expired Supabase auth tokens before pre-login queries so
+    // supabase.rpc / supabase.from never stall waiting on a dead refresh token (400 Invalid Refresh Token).
+    if (!currentUser) {
+      clearStaleSupabaseAuthStorage();
+    }
+
     // 1. Direct PostgreSQL query / RPC as PRIMARY authority
     if (supabase) {
       try {
         let rpcResolved = false;
         try {
-          const { data: creds, error: rpcErr } = await supabase.rpc('verify_login_credentials', {
-            p_email: email,
-            p_password: ''
-          });
+          const { data: creds, error: rpcErr } = await withAuthTimeout(
+            supabase.rpc('verify_login_credentials', {
+              p_email: email,
+              p_password: ''
+            }),
+            6000,
+            'verify_login_credentials'
+          );
 
           if (!rpcErr && creds && (creds.exists === true || creds.success === true)) {
             rpcResolved = true;
@@ -521,15 +560,23 @@ export function useAuth({
             };
           }
         } catch (rpcEx) {
+          if (rpcEx?.isAuthTimeout) {
+            rpcTimedOut = true;
+            console.warn('[useAuth] verify_login_credentials timed out; falling back to local cache');
+          }
           // RPC may not be deployed yet; fallback to direct table query
         }
 
-        if (!rpcResolved) {
-          const { data: dbProf } = await supabase
-            .from('profiles')
-            .select('id, email, full_name, role, role_position, site_id, has_set_password, is_active, is_deleted')
-            .ilike('email', email)
-            .maybeSingle();
+        if (!rpcResolved && !rpcTimedOut) {
+          const { data: dbProf } = await withAuthTimeout(
+            supabase
+              .from('profiles')
+              .select('id, email, full_name, role, role_position, site_id, has_set_password, is_active, is_deleted')
+              .ilike('email', email)
+              .maybeSingle(),
+            5000,
+            'profiles lookup'
+          );
 
           if (dbProf) {
             if (dbProf.is_deleted) {
@@ -550,10 +597,14 @@ export function useAuth({
               };
             }
 
-            const { data: dbPerms } = await supabase
-              .from('user_page_permissions')
-              .select('page_id')
-              .eq('user_id', dbProf.id);
+            const { data: dbPerms } = await withAuthTimeout(
+              supabase
+                .from('user_page_permissions')
+                .select('page_id')
+                .eq('user_id', dbProf.id),
+              4000,
+              'user_page_permissions lookup'
+            );
 
             const resolvedRole = dbProf.role || 'user';
             const resolvedPosition = dbProf.role_position || getDefaultRolePosition(resolvedRole);
@@ -584,13 +635,17 @@ export function useAuth({
     }
 
     // 2. Check saved_records registry if profiles table query did not resolve a user
-    if (!user && supabase) {
+    if (!user && supabase && !rpcTimedOut) {
       try {
-        const { data: regDoc, error: regErr } = await supabase
-          .from('saved_records')
-          .select('snapshot_data')
-          .eq('id', 'master_users_registry')
-          .maybeSingle();
+        const { data: regDoc, error: regErr } = await withAuthTimeout(
+          supabase
+            .from('saved_records')
+            .select('snapshot_data')
+            .eq('id', 'master_users_registry')
+            .maybeSingle(),
+          5000,
+          'master_users_registry lookup'
+        );
 
         if (!regErr && regDoc) {
           const regUsers = regDoc.snapshot_data?.users || [];
@@ -742,16 +797,25 @@ export function useAuth({
 
     let user = null;
     let rpcPasswordVerified = false;
+    let rpcTimedOut = false;
+
+    if (!currentUser) {
+      clearStaleSupabaseAuthStorage();
+    }
 
     // 1. Direct PostgreSQL query / RPC as PRIMARY authority
     if (supabase) {
       try {
         let rpcResolved = false;
         try {
-          const { data: creds, error: rpcErr } = await supabase.rpc('verify_login_credentials', {
-            p_email: cleanEmail,
-            p_password: cleanPassword
-          });
+          const { data: creds, error: rpcErr } = await withAuthTimeout(
+            supabase.rpc('verify_login_credentials', {
+              p_email: cleanEmail,
+              p_password: cleanPassword
+            }),
+            6000,
+            'verify_login_credentials'
+          );
 
           if (!rpcErr && creds && (creds.exists === true || creds.success === true)) {
             rpcResolved = true;
@@ -803,15 +867,23 @@ export function useAuth({
             }
           }
         } catch (rpcEx) {
+          if (rpcEx?.isAuthTimeout) {
+            rpcTimedOut = true;
+            console.warn('[useAuth] signIn verify_login_credentials timed out; continuing with fallback');
+          }
           // RPC may not be deployed yet; fallback to direct table query
         }
 
-        if (!rpcResolved) {
-          const { data: dbProf } = await supabase
-            .from('profiles')
-            .select('id, email, full_name, role, role_position, site_id, has_set_password, is_active, is_deleted')
-            .ilike('email', cleanEmail)
-            .maybeSingle();
+        if (!rpcResolved && !rpcTimedOut) {
+          const { data: dbProf } = await withAuthTimeout(
+            supabase
+              .from('profiles')
+              .select('id, email, full_name, role, role_position, site_id, has_set_password, is_active, is_deleted')
+              .ilike('email', cleanEmail)
+              .maybeSingle(),
+            5000,
+            'profiles lookup'
+          );
 
           if (dbProf) {
             if (dbProf.is_deleted) {
@@ -832,10 +904,14 @@ export function useAuth({
               };
             }
 
-            const { data: dbPerms } = await supabase
-              .from('user_page_permissions')
-              .select('page_id')
-              .eq('user_id', dbProf.id);
+            const { data: dbPerms } = await withAuthTimeout(
+              supabase
+                .from('user_page_permissions')
+                .select('page_id')
+                .eq('user_id', dbProf.id),
+              4000,
+              'user_page_permissions lookup'
+            );
 
             const resolvedRole = dbProf.role || 'user';
             const resolvedPosition = dbProf.role_position || getDefaultRolePosition(resolvedRole);
@@ -864,13 +940,17 @@ export function useAuth({
     }
 
     // 2. Check saved_records registry if profiles query did not resolve a user
-    if (!user && supabase) {
+    if (!user && supabase && !rpcTimedOut) {
       try {
-        const { data: regDoc, error: regErr } = await supabase
-          .from('saved_records')
-          .select('snapshot_data')
-          .eq('id', 'master_users_registry')
-          .maybeSingle();
+        const { data: regDoc, error: regErr } = await withAuthTimeout(
+          supabase
+            .from('saved_records')
+            .select('snapshot_data')
+            .eq('id', 'master_users_registry')
+            .maybeSingle(),
+          5000,
+          'master_users_registry lookup'
+        );
 
         if (!regErr && regDoc) {
           const regUsers = regDoc.snapshot_data?.users || [];
@@ -939,7 +1019,11 @@ export function useAuth({
           email: user.email,
           password: cleanPassword
         };
-        const { data: authData, error: authError } = await supabase.auth.signInWithPassword(authPayload);
+        const { data: authData, error: authError } = await withAuthTimeout(
+          supabase.auth.signInWithPassword(authPayload),
+          8000,
+          'auth.signInWithPassword'
+        );
         if (!authError && authData?.session) {
           authPassed = true;
           hasNativeSession = true;
@@ -977,19 +1061,27 @@ export function useAuth({
     // Seamlessly promote authenticated user into native Supabase Auth session if not already acquired
     if (supabase && !hasNativeSession) {
       try {
-        await supabase.rpc('register_or_update_auth_user', {
-          p_email: cleanEmail,
-          p_password: cleanPassword,
-          p_full_name: user.fullName || cleanEmail.split('@')[0],
-          p_role: user.role || 'parts_management',
-          p_site_id: (user.siteId && isUUID(user.siteId)) ? user.siteId : null,
-          p_role_position: user.rolePosition || null,
-          p_is_active: user.isActive !== false
-        });
-        const { error: nativeSignInErr } = await supabase.auth.signInWithPassword({
-          email: cleanEmail,
-          password: cleanPassword
-        });
+        await withAuthTimeout(
+          supabase.rpc('register_or_update_auth_user', {
+            p_email: cleanEmail,
+            p_password: cleanPassword,
+            p_full_name: user.fullName || cleanEmail.split('@')[0],
+            p_role: user.role || 'parts_management',
+            p_site_id: (user.siteId && isUUID(user.siteId)) ? user.siteId : null,
+            p_role_position: user.rolePosition || null,
+            p_is_active: user.isActive !== false
+          }),
+          5000,
+          'register_or_update_auth_user'
+        );
+        const { error: nativeSignInErr } = await withAuthTimeout(
+          supabase.auth.signInWithPassword({
+            email: cleanEmail,
+            password: cleanPassword
+          }),
+          6000,
+          'native auth.signInWithPassword'
+        );
         if (!nativeSignInErr) {
           hasNativeSession = true;
         }
@@ -1013,6 +1105,7 @@ export function useAuth({
     persistUserSession(user);
     dbStorage.setItem('mdc_current_user', user);
     setSessionAuthTimestamp(Date.now());
+    clearStoredLogoutNotice();
 
     // Check data ownership marker against the logging-in user
     const localDataOwner = localStorage.getItem('mdc_local_data_owner');
@@ -1362,13 +1455,21 @@ export function useAuth({
   // 4. Sign Out
   const signOut = async () => {
     try {
-      if (supabase) await supabase.auth.signOut();
-    } catch (e) {}
-    try {
       clearStoredUserSession();
       clearSessionAuthTimestamp();
+      clearStaleSupabaseAuthStorage();
       await dbStorage.removeItem('mdc_current_user');
     } catch (e) {}
+    try {
+      if (supabase) {
+        await withAuthTimeout(
+          supabase.auth.signOut({ scope: 'local' }),
+          2000,
+          'auth.signOut'
+        );
+      }
+    } catch (e) {}
+    clearStaleSupabaseAuthStorage();
     // Do NOT wipe operational business data (forecasting, allocations, inventory snapshots) on sign out.
     // Business data must persist securely in dbStorage and LocalStorage across sessions.
     setCurrentUser(null);

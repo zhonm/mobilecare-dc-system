@@ -16,6 +16,33 @@ export const supabase = isSupabaseConfigured
     })
   : null;
 
+/**
+ * Purges any stale Supabase Auth token entries (e.g. sb-*-auth-token) from
+ * browser storage so expired/revoked refresh tokens cannot stall pre-login
+ * requests or trigger repeated 400 Invalid Refresh Token loops after auto-logout.
+ */
+export const clearStaleSupabaseAuthStorage = () => {
+  if (typeof window === 'undefined') return;
+  const isSupabaseAuthKey = (key) =>
+    typeof key === 'string' && (/^sb-.*-auth-token/.test(key) || key === 'supabase.auth.token');
+
+  for (const storage of [window.localStorage, window.sessionStorage]) {
+    try {
+      if (!storage) continue;
+      const keysToRemove = [];
+      for (let i = 0; i < storage.length; i++) {
+        const key = storage.key(i);
+        if (isSupabaseAuthKey(key)) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach((key) => storage.removeItem(key));
+    } catch {
+      // Ignore storage access restrictions
+    }
+  }
+};
+
 export const checkSupabaseConnection = async () => {
   if (!supabase) {
     return {

@@ -95,21 +95,32 @@ export function useAutoLogout({
       message: `Your session ended at ${localTimeStr} pursuant to the daily ${scheduledTimeStr} session refresh policy. Re-authenticate to access updated system records.`
     });
 
-    // Write audit log entry before clearing credentials
+    const raceWithTimeout = (promise, ms) => {
+      let timerId;
+      const timeout = new Promise((resolve) => {
+        timerId = setTimeout(resolve, ms);
+      });
+      return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timerId));
+    };
+
+    // Write audit log entry before clearing credentials (bounded so expired tokens cannot stall logout)
     if (typeof logSessionAuditRef.current === 'function' && user) {
       try {
-        await logSessionAuditRef.current({
-          action: 'AUTO_LOGOUT',
-          reason: reason === 'SCHEDULED_DAILY_RESET_ON_WAKE'
-            ? 'Scheduled Daily Reset (Device Wake from Inactivity/Sleep)'
-            : 'Scheduled Daily Reset (12:00 AM Local Device Policy)',
-          details: {
-            scheduledTime: scheduledTimeStr,
-            deviceLocalTime: localTimeStr,
-            policyLogoutTime: currentConfig.logout_time,
-            clearedCache: currentConfig.clear_cache_on_logout
-          }
-        });
+        await raceWithTimeout(
+          logSessionAuditRef.current({
+            action: 'AUTO_LOGOUT',
+            reason: reason === 'SCHEDULED_DAILY_RESET_ON_WAKE'
+              ? 'Scheduled Daily Reset (Device Wake from Inactivity/Sleep)'
+              : 'Scheduled Daily Reset (12:00 AM Local Device Policy)',
+            details: {
+              scheduledTime: scheduledTimeStr,
+              deviceLocalTime: localTimeStr,
+              policyLogoutTime: currentConfig.logout_time,
+              clearedCache: currentConfig.clear_cache_on_logout
+            }
+          }),
+          2500
+        );
       } catch (err) {
         console.warn('Could not log auto-logout audit:', err);
       }
@@ -122,10 +133,10 @@ export function useAutoLogout({
     // Note: Do NOT purge calculated operational storage on auto-logout.
     // Business data (forecasting, allocations, Fixably multi-site snapshots) persists across sessions.
 
-    // Invoke sign out
+    // Invoke sign out (bounded so stale network connections cannot block returning to Login)
     try {
       if (typeof signOutRef.current === 'function') {
-        await signOutRef.current();
+        await raceWithTimeout(signOutRef.current(), 3000);
       }
     } catch (e) {
       console.warn('Error during auto-logout signOut:', e);
