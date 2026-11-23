@@ -20,12 +20,30 @@ import {
 import { barcodeAudio } from '../utils/barcodeAudio';
 import { isUUID } from '../utils/appContextHelpers';
 import {
+  getStoredAutoLogoutConfig,
   getSessionAuthTimestamp,
   setSessionAuthTimestamp,
   clearSessionAuthTimestamp,
   getStoredLogoutNotice,
-  clearStoredLogoutNotice
+  setStoredLogoutNotice,
+  clearStoredLogoutNotice,
+  isSessionExpiredBySchedule,
+  formatConfigTimeTo12Hour,
+  formatLocalTime
 } from '../utils/autoLogoutManager';
+
+const isTransientAuthError = (errOrMsg) => {
+  if (!errOrMsg) return false;
+  if (typeof errOrMsg === 'object') {
+    if (errOrMsg.isAuthTimeout) return true;
+    const status = Number(errOrMsg.status || errOrMsg.code || 0);
+    if (status >= 500 || status === 408 || status === 522) return true;
+  }
+  const msg = typeof errOrMsg === 'string'
+    ? errOrMsg
+    : String(errOrMsg.message || errOrMsg.error_description || errOrMsg.code || '');
+  return /timed out|timeout|statement timeout|57014|522|502|503|504|fetch failed|failed to fetch|network|<!doctype html/i.test(msg);
+};
 
 const withAuthTimeout = (promise, ms, label = 'auth request') => {
   let timerId;
@@ -38,6 +56,8 @@ const withAuthTimeout = (promise, ms, label = 'auth request') => {
   });
   return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timerId));
 };
+
+const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function useAuth({
   usersList,
@@ -53,6 +73,30 @@ export function useAuth({
     try {
       const savedUser = getStoredUserSession();
       if (savedUser && typeof savedUser === 'object' && savedUser.email) {
+        // Guard: If the stored session already crossed the daily 12:00 AM reset boundary
+        // overnight, expire it synchronously BEFORE render so useCloudSync never fires
+        // a heavy full hydration storm against a cold Supabase instance prior to logout.
+        const autoLogoutCfg = getStoredAutoLogoutConfig();
+        const authTs = getSessionAuthTimestamp();
+        if (autoLogoutCfg?.enabled && authTs && isSessionExpiredBySchedule(authTs, autoLogoutCfg.logout_time)) {
+          const localTimeStr = formatLocalTime(new Date());
+          const scheduledTimeStr = formatConfigTimeTo12Hour(autoLogoutCfg.logout_time);
+          if (!getStoredLogoutNotice()) {
+            setStoredLogoutNotice({
+              reason: 'SCHEDULED_DAILY_RESET_ON_WAKE',
+              scheduledTime: scheduledTimeStr,
+              deviceLocalTime: localTimeStr,
+              timestamp: new Date().toISOString(),
+              message: `Your session ended at ${localTimeStr} pursuant to the daily ${scheduledTimeStr} session refresh policy. Re-authenticate to access updated system records.`
+            });
+          }
+          clearStoredUserSession();
+          clearSessionAuthTimestamp();
+          clearStaleSupabaseAuthStorage();
+          dbStorage.removeItem('mdc_current_user').catch(() => {});
+          return null;
+        }
+
         if (savedUser.role === 'parts_management') {
           savedUser.permittedPages = ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'multi-site', 'feedback'];
         } else if (savedUser.role === 'admin') {
@@ -534,11 +578,14 @@ export function useAuth({
               p_email: email,
               p_password: ''
             }),
-            6000,
+            10000,
             'verify_login_credentials'
           );
 
-          if (!rpcErr && creds && (creds.exists === true || creds.success === true)) {
+          if (rpcErr && isTransientAuthError(rpcErr)) {
+            rpcTimedOut = true;
+            console.warn('[useAuth] verify_login_credentials transient error; falling back to local cache:', rpcErr.message);
+          } else if (!rpcErr && creds && (creds.exists === true || creds.success === true)) {
             rpcResolved = true;
 
             if (creds.is_deleted) {
@@ -584,7 +631,7 @@ export function useAuth({
             };
           }
         } catch (rpcEx) {
-          if (rpcEx?.isAuthTimeout) {
+          if (isTransientAuthError(rpcEx)) {
             rpcTimedOut = true;
             console.warn('[useAuth] verify_login_credentials timed out; falling back to local cache');
           }
@@ -754,7 +801,8 @@ export function useAuth({
   };
 
   // 2. Authenticate Returning User with Password (Authoritative Database First)
-  const signInWithPassword = async (rawEmail, password, captchaToken = null) => {
+  const signInWithPassword = async (rawEmail, password, captchaToken = null, options = {}) => {
+    const onStatusChange = typeof options?.onStatusChange === 'function' ? options.onStatusChange : null;
     const cleanEmail = (rawEmail || '').trim().toLowerCase();
     const cleanPassword = (password || '').trim();
 
@@ -837,11 +885,14 @@ export function useAuth({
               p_email: cleanEmail,
               p_password: cleanPassword
             }),
-            6000,
+            12000,
             'verify_login_credentials'
           );
 
-          if (!rpcErr && creds && (creds.exists === true || creds.success === true)) {
+          if (rpcErr && isTransientAuthError(rpcErr)) {
+            rpcTimedOut = true;
+            console.warn('[useAuth] signIn verify_login_credentials transient error; continuing to auth fallback:', rpcErr.message);
+          } else if (!rpcErr && creds && (creds.exists === true || creds.success === true)) {
             rpcResolved = true;
 
             if (creds.is_deleted) {
@@ -891,7 +942,7 @@ export function useAuth({
             }
           }
         } catch (rpcEx) {
-          if (rpcEx?.isAuthTimeout) {
+          if (isTransientAuthError(rpcEx)) {
             rpcTimedOut = true;
             console.warn('[useAuth] signIn verify_login_credentials timed out; continuing with fallback');
           }
@@ -1038,24 +1089,39 @@ export function useAuth({
     let hasNativeSession = false;
 
     if (!authPassed && supabase) {
-      try {
-        const authPayload = {
-          email: user.email,
-          password: cleanPassword
-        };
-        const { data: authData, error: authError } = await withAuthTimeout(
-          supabase.auth.signInWithPassword(authPayload),
-          8000,
-          'auth.signInWithPassword'
-        );
-        if (!authError && authData?.session) {
-          authPassed = true;
-          hasNativeSession = true;
-        } else if (authError) {
-          authErrorMessage = authError.message;
+      const authPayload = {
+        email: user.email,
+        password: cleanPassword
+      };
+      const attemptTimeouts = [12000, 15000];
+      for (let attempt = 0; attempt < attemptTimeouts.length; attempt++) {
+        if (attempt > 0) {
+          onStatusChange?.('Waking authentication server — retrying automatically...');
+          await sleepMs(1500);
         }
-      } catch (e) {
-        authErrorMessage = e?.message;
+        try {
+          const { data: authData, error: authError } = await withAuthTimeout(
+            supabase.auth.signInWithPassword(authPayload),
+            attemptTimeouts[attempt],
+            `auth.signInWithPassword (attempt ${attempt + 1})`
+          );
+          if (!authError && authData?.session) {
+            authPassed = true;
+            hasNativeSession = true;
+            authErrorMessage = null;
+            break;
+          } else if (authError) {
+            authErrorMessage = authError.message;
+            if (!isTransientAuthError(authError)) {
+              break;
+            }
+          }
+        } catch (e) {
+          authErrorMessage = e?.message;
+          if (!isTransientAuthError(e)) {
+            break;
+          }
+        }
       }
     }
 
@@ -1071,7 +1137,7 @@ export function useAuth({
 
     if (!authPassed) {
       const rawErr = String(authErrorMessage || '');
-      const isTransientAuthErr = /timed out|timeout|522|502|503|504|fetch failed|failed to fetch|network|<!doctype html/i.test(rawErr);
+      const isTransientAuthErr = isTransientAuthError(rawErr);
 
       barcodeAudio.playError();
 

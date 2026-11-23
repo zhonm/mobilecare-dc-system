@@ -61,6 +61,11 @@ import {
   fetchArchivedIntakesFromCloud
 } from '../utils/archiveManager';
 import { compactFixablySnapshot, hydrateFixablySnapshot } from '../utils/fixablyInventoryEngine.js';
+import {
+  getStoredAutoLogoutConfig,
+  getSessionAuthTimestamp,
+  isSessionExpiredBySchedule
+} from '../utils/autoLogoutManager';
 
 
 export function useCloudSync({
@@ -534,6 +539,17 @@ export function useCloudSync({
     const executeHydration = async () => {
     const liveState = liveStateRef.current || {};
     const curUser = liveState.currentUser || currentUser;
+
+    // Guard: Skip cloud hydration if the current session already crossed the daily reset boundary
+    // (e.g., browser tab waking up overnight) so we don't flood cold Postgres right before auto-logout.
+    try {
+      const autoLogoutCfg = getStoredAutoLogoutConfig();
+      const authTs = getSessionAuthTimestamp();
+      if (autoLogoutCfg?.enabled && authTs && isSessionExpiredBySchedule(authTs, autoLogoutCfg.logout_time)) {
+        console.debug('[CloudSync] Session expired by daily reset schedule; skipping cloud hydration');
+        return false;
+      }
+    } catch (e) {}
 
     // Guard: Only hydrate cloud operational tables if an active authenticated session exists
     let session = null;

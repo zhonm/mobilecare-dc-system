@@ -1,10 +1,11 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { Lock, ArrowRight, Eye, EyeOff, AlertCircle, RefreshCw, Mail, ShieldCheck, ArrowUp, Phone, Copy, Check, X, Clock, Smartphone } from 'lucide-react';
 import { Turnstile } from '@marsidev/react-turnstile';
 import mobileCareLogo from '../assets/mdc logo-noBG.png';
 import { loginRateLimiter } from '../utils/security';
 import { getStoredLogoutNotice, clearStoredLogoutNotice } from '../utils/autoLogoutManager';
+import { warmSupabaseConnection } from '../supabase/client';
 import MobileNoticeModal from './MobileNoticeModal';
 
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_CLOUDFLARE_TURNSTILE_SITE_KEY || '';
@@ -19,6 +20,7 @@ export default function Login() {
   const [step, setStep] = useState('email'); // 'email' | 'password'
   const [verifiedUser, setVerifiedUser] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [authStatusText, setAuthStatusText] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [showReportModal, setShowReportModal] = useState(false);
   const [showMobileNoticeModal, setShowMobileNoticeModal] = useState(false);
@@ -28,6 +30,11 @@ export default function Login() {
   const [isRetryingTurnstile, setIsRetryingTurnstile] = useState(false);
   const [turnstileKey, setTurnstileKey] = useState(0);
   const [logoutNotice, setLogoutNotice] = useState(() => getStoredLogoutNotice());
+
+  // Pre-warm Supabase Auth & PostgREST while the user types credentials on first morning login
+  useEffect(() => {
+    warmSupabaseConnection();
+  }, []);
 
   // Cloudflare Turnstile Configuration & Stable Handlers
   const turnstileOptions = useMemo(() => ({
@@ -144,10 +151,19 @@ export default function Login() {
     }
 
     setErrorMessage('');
+    setAuthStatusText('Authenticating...');
     setIsLoading(true);
 
+    const slowTimer = setTimeout(() => {
+      setAuthStatusText((prev) =>
+        prev === 'Authenticating...' ? 'Waking authentication server...' : prev
+      );
+    }, 4000);
+
     try {
-      const res = await signInWithPassword(emailInput, passwordInput, turnstileToken);
+      const res = await signInWithPassword(emailInput, passwordInput, turnstileToken, {
+        onStatusChange: (statusText) => setAuthStatusText(statusText)
+      });
       if (!res.success) {
         if (TURNSTILE_SITE_KEY && turnstileToken !== 'dev-bypass-token') {
           handleResetTurnstile();
@@ -172,6 +188,8 @@ export default function Login() {
     } catch (err) {
       setErrorMessage(err.message || 'Authentication failed');
     } finally {
+      clearTimeout(slowTimer);
+      setAuthStatusText('');
       setIsLoading(false);
     }
   };
@@ -591,7 +609,7 @@ export default function Login() {
               {isLoading ? (
                 <>
                   <RefreshCw className="spin" size={17} />
-                  <span>Authenticating...</span>
+                  <span>{authStatusText || 'Authenticating...'}</span>
                 </>
               ) : (
                 <>

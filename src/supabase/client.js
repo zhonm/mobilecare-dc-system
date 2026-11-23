@@ -43,6 +43,44 @@ export const clearStaleSupabaseAuthStorage = () => {
   }
 };
 
+let lastWarmupAt = 0;
+
+/**
+ * Sends lightweight, zero-egress health/HEAD pings to Supabase Auth and PostgREST
+ * so a cold-starting Free-tier project wakes up while the user is typing their
+ * credentials on the Login screen instead of timing out on Sign In.
+ */
+export const warmSupabaseConnection = () => {
+  if (!isSupabaseConfigured || typeof fetch !== 'function') return;
+  const now = Date.now();
+  if (now - lastWarmupAt < 30000) return;
+  lastWarmupAt = now;
+
+  const base = supabaseUrl.replace(/\/+$/, '');
+  const headers = { apikey: supabaseAnonKey };
+
+  const ping = (url, method = 'GET') => {
+    try {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), 10000) : null;
+      fetch(url, {
+        method,
+        headers,
+        signal: controller?.signal
+      })
+        .catch(() => {})
+        .finally(() => {
+          if (timer) clearTimeout(timer);
+        });
+    } catch {
+      // Non-blocking best-effort warmup
+    }
+  };
+
+  ping(`${base}/auth/v1/health`, 'GET');
+  ping(`${base}/rest/v1/`, 'HEAD');
+};
+
 export const checkSupabaseConnection = async () => {
   if (!supabase) {
     return {

@@ -268,6 +268,38 @@ runTest('Post-auto-logout re-login clears stale Supabase auth tokens and bounds 
   );
 });
 
+runTest('Morning expired session guard prevents pre-logout hydration storm and enables cold-start auth retry', () => {
+  const clientFile = fs.readFileSync(path.join(projectRoot, 'src/supabase/client.js'), 'utf8');
+  const authFile = fs.readFileSync(path.join(projectRoot, 'src/context/useAuth.js'), 'utf8');
+  const syncFile = fs.readFileSync(path.join(projectRoot, 'src/context/useCloudSync.js'), 'utf8');
+  const loginFile = fs.readFileSync(path.join(projectRoot, 'src/components/Login.jsx'), 'utf8');
+
+  assert.ok(
+    authFile.includes('isSessionExpiredBySchedule(authTs, autoLogoutCfg.logout_time)'),
+    'useAuth.js must synchronously expire overnight sessions before initial render'
+  );
+  assert.ok(
+    syncFile.includes('isSessionExpiredBySchedule(authTs, autoLogoutCfg.logout_time)'),
+    'useCloudSync.js must skip cloud hydration when session is expired by daily reset schedule'
+  );
+  assert.ok(
+    authFile.includes('57014') && authFile.includes('statement timeout'),
+    'useAuth.js must treat Postgres 57014 statement timeout as a transient error'
+  );
+  assert.ok(
+    authFile.includes('attemptTimeouts = [12000, 15000]'),
+    'useAuth.js must retry auth.signInWithPassword automatically on cold-start timeouts'
+  );
+  assert.ok(
+    clientFile.includes('export const warmSupabaseConnection'),
+    'client.js must export warmSupabaseConnection for login pre-warming'
+  );
+  assert.ok(
+    loginFile.includes('warmSupabaseConnection()'),
+    'Login.jsx must pre-warm Supabase on mount'
+  );
+});
+
 console.log('====================================================');
 console.log(`RESULTS: ${passedTests} PASSED, ${failedTests} FAILED`);
 console.log('====================================================');
