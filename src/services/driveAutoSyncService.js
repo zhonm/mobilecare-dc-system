@@ -564,6 +564,75 @@ export async function uploadCtPackingListToDrive({
 }
 
 /**
+ * Archive an imported Apple Tools & Consumables Scanned PDF Report to Google Drive
+ * under "Consumables & Tools Receiving Packing Lists / <SITE_CODE> / Apple_PDF_Reports".
+ */
+export async function uploadCtApplePdfReportToDrive({
+  file,
+  siteCode = 'DC-MDC',
+  reportRef = '',
+  importId = '',
+  originalFilename = ''
+}) {
+  try {
+    const configured = await isGoogleDriveConfigured();
+    if (!configured) {
+      return { success: false, error: 'Google Drive not configured' };
+    }
+
+    const rootFolderId = await resolveNamedRootFolderId('ct_packing_lists');
+    const rawSite = String(siteCode || 'DC-MDC').trim().toUpperCase();
+    const siteFolderName = rawSite.replace(/[/\\:*?"<>|]/g, '_') || 'DC-MDC';
+    const siteFolderId = await getOrCreateFolder(rootFolderId, siteFolderName);
+    const reportsSubFolderId = await getOrCreateFolder(siteFolderId, 'Apple_PDF_Reports');
+
+    const timestampStr = getFormattedSaveTimestamp();
+    const cleanRef = String(reportRef || 'APPLE-CT').replace(/[/\\:*?"<>|]/g, '_');
+    const baseOriginal = String(originalFilename || file?.name || '')
+      .replace(/\.pdf$/i, '')
+      .replace(/[/\\:*?"<>|]/g, '_')
+      .trim();
+    const filename = baseOriginal
+      ? `${baseOriginal}_${timestampStr}.pdf`
+      : `Apple_CT_Report_${cleanRef}_${timestampStr}.pdf`;
+
+    const result = await uploadToGoogleDrive({
+      name: filename,
+      mimeType: 'application/pdf',
+      data: file,
+      folderId: reportsSubFolderId,
+      useDateFolder: false,
+      appProperties: {
+        system: 'MDC-DC',
+        docType: 'ct_apple_pdf_report',
+        reportRef: cleanRef,
+        siteFolder: siteFolderName,
+        importId: String(importId || '')
+      }
+    });
+
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to upload Apple Tools PDF report to Google Drive');
+    }
+
+    return {
+      success: true,
+      fileId: result.fileId,
+      webViewLink: result.webViewLink,
+      filename,
+      siteFolder: `${siteFolderName} / Apple_PDF_Reports`,
+      folderName: DRIVE_FOLDER_NAMES.ct_packing_lists
+    };
+  } catch (err) {
+    console.error('[Google Drive] uploadCtApplePdfReportToDrive error:', err);
+    return {
+      success: false,
+      error: err.message
+    };
+  }
+}
+
+/**
  * Offload Heavy Monthly Snapshots to Google Drive (Feature B)
  * Archives complete forecasting, allocation matrices, and masterlist states
  * directly to the Google Drive "snapshots" folder, keeping Supabase free-tier database lean.

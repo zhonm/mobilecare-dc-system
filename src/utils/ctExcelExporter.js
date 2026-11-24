@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import { getSiteColorTheme, isCanonicalToolKind } from './ctSpreadsheetImporter.js';
 import { formatTo12HourTime } from './dateUtils.js';
 
 const HEADER_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
@@ -174,7 +175,7 @@ export async function buildCtCenterExcelBuffer({
     if (qty <= 0) return false;
     if (!isAllSites && String(row.site_code || '').trim().toUpperCase() !== cleanSite) return false;
     const cat = catalogDescMap.get(String(row.part_number || '').trim().toUpperCase());
-    if (cat && cat.item_kind === 'tool') return false;
+    if (isCanonicalToolKind(row.part_number, row.description, row.item_kind || cat?.item_kind)) return false;
     if (q) {
       const desc = resolveDesc(row.part_number, row.description);
       const hay = `${row.part_number || ''} ${desc} ${row.site_code || ''}`.toLowerCase();
@@ -191,23 +192,24 @@ export async function buildCtCenterExcelBuffer({
   const summaryWs = workbook.addWorksheet('Summary');
   summaryWs.columns = [
     { key: 'c1', width: 22 },
-    { key: 'c2', width: 22 },
-    { key: 'c3', width: 22 },
-    { key: 'c4', width: 42 },
-    { key: 'c5', width: 12 },
+    { key: 'c2', width: 18 },
+    { key: 'c3', width: 18 },
+    { key: 'c4', width: 20 },
+    { key: 'c5', width: 42 },
     { key: 'c6', width: 12 },
     { key: 'c7', width: 12 },
     { key: 'c8', width: 12 },
     { key: 'c9', width: 12 },
     { key: 'c10', width: 12 },
-    { key: 'c11', width: 26 },
-    { key: 'c12', width: 32 }
+    { key: 'c11', width: 12 },
+    { key: 'c12', width: 24 },
+    { key: 'c13', width: 32 }
   ];
 
   const titleRow = summaryWs.addRow(['Consumables & Service Tools Center — Inventory Report']);
   titleRow.font = { bold: true, size: 14, color: { argb: 'FF0F172A' } };
   titleRow.height = 28;
-  summaryWs.mergeCells('A1:L1');
+  summaryWs.mergeCells('A1:M1');
 
   const metaRows = [
     ['Site Scope', isAllSites ? 'All Sites' : cleanSite, 'Status Filter', cleanStatus === 'all' ? 'All Statuses' : cleanStatus.toUpperCase()],
@@ -219,10 +221,11 @@ export async function buildCtCenterExcelBuffer({
   summaryWs.addRow([]);
 
   // 1A. Detailed Breakdown by Part Number & Description (Primary view on Summary)
-  styleSectionBanner(summaryWs, summaryWs.addRow(['Detailed Inventory Breakdown by Part Number & Description']), 12);
+  styleSectionBanner(summaryWs, summaryWs.addRow(['Detailed Inventory Breakdown by Part Number & Description']), 13);
   const partHeader = summaryWs.addRow([
     'Site Code',
     'Item Kind',
+    'Ownership Tag',
     'Part Number',
     'Description',
     'Total Qty',
@@ -232,12 +235,12 @@ export async function buildCtCenterExcelBuffer({
     'Missing',
     'Retired',
     'Assigned To',
-    'System / Admin Asset Tags'
+    'System / Asset Tags'
   ]);
   styleTableHeader(partHeader);
 
   const partGroups = new Map();
-  const getPartGroup = (site, kind, pn, desc) => {
+  const getPartGroup = (site, kind, pn, desc, ownershipTag = 'Apple-Owned') => {
     const sCode = String(site || 'UNASSIGNED').trim().toUpperCase();
     const pCode = String(pn || '').trim().toUpperCase();
     const key = `${sCode}::${kind}::${pCode}`;
@@ -245,6 +248,7 @@ export async function buildCtCenterExcelBuffer({
       partGroups.set(key, {
         site: sCode,
         kind,
+        ownershipTag: ownershipTag || 'Apple-Owned',
         partNumber: pCode,
         description: desc || '—',
         totalQty: 0,
@@ -262,7 +266,7 @@ export async function buildCtCenterExcelBuffer({
 
   scopedTools.forEach(a => {
     const desc = resolveDesc(a.part_number, a.description);
-    const g = getPartGroup(a.site_code, 'TOOL', a.part_number, desc);
+    const g = getPartGroup(a.site_code, 'TOOL', a.part_number, desc, a.ownership_tag || 'Apple-Owned');
     g.totalQty += 1;
     const st = String(a.status || '').toLowerCase();
     if (st === 'available') g.available += 1;
@@ -279,7 +283,7 @@ export async function buildCtCenterExcelBuffer({
   scopedConsumables.forEach(c => {
     const desc = resolveDesc(c.part_number, c.description);
     const qty = Number(c.qty_on_hand || 0);
-    const g = getPartGroup(c.site_code, 'CONSUMABLE', c.part_number, desc);
+    const g = getPartGroup(c.site_code, 'CONSUMABLE', c.part_number, desc, c.ownership_tag || 'Apple-Owned');
     g.totalQty += qty;
     g.available += qty;
   });
@@ -296,10 +300,12 @@ export async function buildCtCenterExcelBuffer({
     const emptyRow = summaryWs.addRow(['No tools or consumables match the selected filter.']);
     emptyRow.getCell(1).font = { italic: true, color: { argb: 'FF64748B' } };
   } else {
+    const partFirstRow = summaryWs.rowCount + 1;
     sortedPartGroups.forEach((g, idx) => {
       const r = summaryWs.addRow([
         g.site,
         g.kind,
+        g.ownershipTag,
         g.partNumber,
         g.description,
         g.totalQty,
@@ -311,24 +317,32 @@ export async function buildCtCenterExcelBuffer({
         g.assignees.size > 0 ? Array.from(g.assignees).join(', ') : '—',
         g.tags.length > 0 ? g.tags.join(', ') : '—'
       ]);
-      styleDataRow(r, idx % 2 === 1, { wrapCols: [4, 11, 12] });
+      styleDataRow(r, idx % 2 === 1, { wrapCols: [5, 12, 13] });
+      const theme = getSiteColorTheme(g.site);
+      r.eachCell((cell) => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excelFill } };
+      });
+      for (let c = 6; c <= 11; c++) r.getCell(c).numFmt = '#,##0';
     });
+    const partLastRow = summaryWs.rowCount;
 
     const partTotals = summaryWs.addRow([
       'TOTAL',
       `${sortedPartGroups.length} SKU(s)`,
       '',
       '',
-      sortedPartGroups.reduce((a, b) => a + b.totalQty, 0),
-      sortedPartGroups.reduce((a, b) => a + b.available, 0),
-      sortedPartGroups.reduce((a, b) => a + b.inUse, 0),
-      sortedPartGroups.reduce((a, b) => a + b.shipped, 0),
-      sortedPartGroups.reduce((a, b) => a + b.missing, 0),
-      sortedPartGroups.reduce((a, b) => a + b.retired, 0),
+      '',
+      { formula: `SUM(F${partFirstRow}:F${partLastRow})`, result: sortedPartGroups.reduce((a, b) => a + b.totalQty, 0) },
+      { formula: `SUM(G${partFirstRow}:G${partLastRow})`, result: sortedPartGroups.reduce((a, b) => a + b.available, 0) },
+      { formula: `SUM(H${partFirstRow}:H${partLastRow})`, result: sortedPartGroups.reduce((a, b) => a + b.inUse, 0) },
+      { formula: `SUM(I${partFirstRow}:I${partLastRow})`, result: sortedPartGroups.reduce((a, b) => a + b.shipped, 0) },
+      { formula: `SUM(J${partFirstRow}:J${partLastRow})`, result: sortedPartGroups.reduce((a, b) => a + b.missing, 0) },
+      { formula: `SUM(K${partFirstRow}:K${partLastRow})`, result: sortedPartGroups.reduce((a, b) => a + b.retired, 0) },
       '',
       ''
     ]);
     styleTotalsRow(partTotals);
+    for (let c = 6; c <= 11; c++) partTotals.getCell(c).numFmt = '#,##0';
   }
 
   summaryWs.addRow([]);
@@ -388,6 +402,7 @@ export async function buildCtCenterExcelBuffer({
   });
 
   const sortedSites = Array.from(siteMap.values()).sort((a, b) => a.site.localeCompare(b.site));
+  const siteFirstRow = summaryWs.rowCount + 1;
   sortedSites.forEach((s, idx) => {
     const r = summaryWs.addRow([
       s.site,
@@ -402,23 +417,32 @@ export async function buildCtCenterExcelBuffer({
       s.consQty
     ]);
     styleDataRow(r, idx % 2 === 1);
+    const theme = getSiteColorTheme(s.site);
+    r.eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excelFill } };
+    });
+    for (let c = 2; c <= 10; c++) r.getCell(c).numFmt = '#,##0';
   });
+  const siteLastRow = summaryWs.rowCount;
 
   if (sortedSites.length > 0) {
     const totalsRow = summaryWs.addRow([
       'TOTAL',
-      sortedSites.reduce((a, b) => a + b.totalTools, 0),
-      sortedSites.reduce((a, b) => a + b.available, 0),
-      sortedSites.reduce((a, b) => a + b.inUse, 0),
-      sortedSites.reduce((a, b) => a + b.shipped, 0),
-      sortedSites.reduce((a, b) => a + b.missing, 0),
-      sortedSites.reduce((a, b) => a + b.retired, 0),
-      sortedSites.reduce((a, b) => a + b.taggedAdmin, 0),
-      sortedSites.reduce((a, b) => a + b.consSkus, 0),
-      sortedSites.reduce((a, b) => a + b.consQty, 0)
+      { formula: `SUM(B${siteFirstRow}:B${siteLastRow})`, result: sortedSites.reduce((a, b) => a + b.totalTools, 0) },
+      { formula: `SUM(C${siteFirstRow}:C${siteLastRow})`, result: sortedSites.reduce((a, b) => a + b.available, 0) },
+      { formula: `SUM(D${siteFirstRow}:D${siteLastRow})`, result: sortedSites.reduce((a, b) => a + b.inUse, 0) },
+      { formula: `SUM(E${siteFirstRow}:E${siteLastRow})`, result: sortedSites.reduce((a, b) => a + b.shipped, 0) },
+      { formula: `SUM(F${siteFirstRow}:F${siteLastRow})`, result: sortedSites.reduce((a, b) => a + b.missing, 0) },
+      { formula: `SUM(G${siteFirstRow}:G${siteLastRow})`, result: sortedSites.reduce((a, b) => a + b.retired, 0) },
+      { formula: `SUM(H${siteFirstRow}:H${siteLastRow})`, result: sortedSites.reduce((a, b) => a + b.taggedAdmin, 0) },
+      { formula: `SUM(I${siteFirstRow}:I${siteLastRow})`, result: sortedSites.reduce((a, b) => a + b.consSkus, 0) },
+      { formula: `SUM(J${siteFirstRow}:J${siteLastRow})`, result: sortedSites.reduce((a, b) => a + b.consQty, 0) }
     ]);
     styleTotalsRow(totalsRow);
+    for (let c = 2; c <= 10; c++) totalsRow.getCell(c).numFmt = '#,##0';
   }
+
+  summaryWs.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
 
   // ── Sheet 2: Tracked Tool Units ────────────────────────────────────────
   const toolsWs = workbook.addWorksheet('Tracked Tool Units', { views: [{ state: 'frozen', ySplit: 1 }] });
@@ -431,13 +455,14 @@ export async function buildCtCenterExcelBuffer({
     { header: 'Site', key: 'site_code', width: 14 },
     { header: 'Status', key: 'status', width: 14 },
     { header: 'Assigned To', key: 'assigned_to', width: 22 },
+    { header: 'Ownership Tag', key: 'ownership_tag', width: 18 },
     { header: 'Assigned Date', key: 'assigned_at', width: 14 },
     { header: 'PO Reference', key: 'po_number', width: 18 },
     { header: 'Last Updated', key: 'updated_at', width: 16 },
     { header: 'Notes', key: 'notes', width: 32 }
   ];
   styleTableHeader(toolsWs.getRow(1));
-  toolsWs.autoFilter = 'A1:L1';
+  toolsWs.autoFilter = 'A1:M1';
 
   scopedTools.forEach((a, idx) => {
     const r = toolsWs.addRow({
@@ -449,12 +474,13 @@ export async function buildCtCenterExcelBuffer({
       site_code: a.site_code || '',
       status: String(a.status || '').toUpperCase(),
       assigned_to: a.assigned_to || '',
+      ownership_tag: a.ownership_tag || 'Apple-Owned',
       assigned_at: formatIsoDate(a.assigned_at),
       po_number: a.po_number || a.order_po_number || '',
       updated_at: formatIsoDate(a.updated_at || a.created_at),
       notes: a.notes || ''
     });
-    styleDataRow(r, idx % 2 === 1, { wrapCols: [5, 12] });
+    styleDataRow(r, idx % 2 === 1, { wrapCols: [5, 13] });
     applyStatusCellStyle(r.getCell('status'), a.status);
   });
 
@@ -462,6 +488,7 @@ export async function buildCtCenterExcelBuffer({
   const consWs = workbook.addWorksheet('Consumables Stock', { views: [{ state: 'frozen', ySplit: 1 }] });
   consWs.columns = [
     { header: 'Site', key: 'site_code', width: 16 },
+    { header: 'Ownership Tag', key: 'ownership_tag', width: 18 },
     { header: 'Part Number', key: 'part_number', width: 18 },
     { header: 'Description', key: 'description', width: 44 },
     { header: 'Qty On Hand', key: 'qty_on_hand', width: 14 },
@@ -470,7 +497,7 @@ export async function buildCtCenterExcelBuffer({
     { header: 'Last Updated', key: 'updated_at', width: 16 }
   ];
   styleTableHeader(consWs.getRow(1));
-  consWs.autoFilter = 'A1:G1';
+  consWs.autoFilter = 'A1:H1';
 
   scopedConsumables.forEach((row, idx) => {
     const cat = catalogDescMap.get(String(row.part_number || '').trim().toUpperCase());
@@ -479,6 +506,7 @@ export async function buildCtCenterExcelBuffer({
     const stockStatus = reorder > 0 && qty <= reorder ? 'Low Stock' : 'OK';
     const r = consWs.addRow({
       site_code: row.site_code || '',
+      ownership_tag: row.ownership_tag || 'Apple-Owned',
       part_number: row.part_number || '',
       description: resolveDesc(row.part_number, row.description),
       qty_on_hand: qty,
@@ -486,7 +514,7 @@ export async function buildCtCenterExcelBuffer({
       stock_status: stockStatus,
       updated_at: formatIsoDate(row.updated_at || row.last_received_at)
     });
-    styleDataRow(r, idx % 2 === 1, { wrapCols: [3] });
+    styleDataRow(r, idx % 2 === 1, { wrapCols: [4] });
     applyStatusCellStyle(r.getCell('stock_status'), stockStatus);
   });
 
@@ -765,6 +793,370 @@ export async function exportCtMovementsToExcel(options = {}) {
     : cleanSite.replace(/[^A-Z0-9_-]+/g, '_');
   const dateStr = new Date().toISOString().slice(0, 10);
   const fileName = `MDC_CT_Movement_Archive_${siteSlug}_${dateStr}.xlsx`;
+  triggerExcelDownload(buffer, fileName);
+  return fileName;
+}
+
+/**
+ * Builds the 3-tab Consolidated Multi-Site Audit Excel Workbook:
+ *  - Tab 1: "Summary by Site" (KPI header, pastel site colors, dynamic =SUM() totals)
+ *  - Tab 2: "Summary by Part Number" (Sorted by Type -> Part Number, dynamic =SUM() totals)
+ *  - Tab 3: "All Line Items" (Pastel site colors, amber #FFF3CD on blank Report Ref, =Qty*USD Price formulas)
+ */
+export async function buildCtConsolidatedAuditExcelBuffer({
+  items = [],
+  sites = [],
+  generatedBy = 'System',
+  reportTitle = 'Consumables & Service Tools — Consolidated All-Sites Audit Report'
+} = {}) {
+  const siteNameByCode = new Map();
+  (sites || []).forEach(s => {
+    const c = String(s.site_code || s.code || '').trim().toUpperCase();
+    if (c) siteNameByCode.set(c, s.site_name || s.name || c);
+  });
+
+  const normalizedRows = (items || [])
+    .filter(it => it && it.selected !== false)
+    .map(it => {
+      const siteCode = String(it.site_code || 'UNMAPPED').trim().toUpperCase() || 'UNMAPPED';
+      const isTool = isCanonicalToolKind(it.part_number, it.description, it.item_kind || it.type);
+      const qty = Math.max(1, parseInt(it.quantity ?? it.qty, 10) || 1);
+      const unitCost = Math.max(0, Number(it.unit_cost ?? it.usd_price ?? 0) || 0);
+      return {
+        site_code: siteCode,
+        receiving_site: it.raw_site_label || siteNameByCode.get(siteCode) || siteCode,
+        ship_to_id: it.ship_to_id || '',
+        report_ref: String(it.report_ref || '').trim(),
+        hawb_number: String(it.hawb_number || '').trim(),
+        delivery_number: String(it.delivery_number || '').trim(),
+        box_number: String(it.box_number || '').trim(),
+        document_date: String(it.document_date || '').trim(),
+        po_number: String(it.po_number || '').trim(),
+        supplier: String(it.supplier || 'Apple South Asia Pte Ltd').trim(),
+        part_number: String(it.part_number || '').trim().toUpperCase(),
+        description: String(it.description || '').trim(),
+        isTool,
+        typeLabel: isTool ? 'Tool (Asset)' : 'Consumable',
+        ownership_tag: String(it.ownership_tag || 'Apple-Owned').trim() || 'Apple-Owned',
+        quantity: qty,
+        unit_cost: unitCost,
+        line_total: Math.round(qty * unitCost * 100) / 100,
+        serial_numbers: Array.isArray(it.serial_numbers)
+          ? it.serial_numbers.join(', ')
+          : String(it.serial_numbers || '').trim(),
+        notes: String(it.notes || '').trim()
+      };
+    });
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = generatedBy;
+  workbook.created = new Date();
+
+  // ── TAB 1: Summary by Site ──────────────────────────────────────────────
+  const siteWs = workbook.addWorksheet('Summary by Site', {
+    views: [{ state: 'frozen', ySplit: 6 }]
+  });
+  siteWs.columns = [
+    { key: 'site_code', width: 22 },
+    { key: 'site_name', width: 38 },
+    { key: 'tools_qty', width: 14 },
+    { key: 'consumables_qty', width: 17 },
+    { key: 'total_units', width: 14 },
+    { key: 'tools_share', width: 13 },
+    { key: 'unique_docs', width: 15 },
+    { key: 'missing_refs', width: 16 },
+    { key: 'total_usd', width: 18 }
+  ];
+
+  const t1 = siteWs.addRow([reportTitle]);
+  t1.font = { bold: true, size: 14, color: { argb: 'FF0F172A' } };
+  t1.height = 28;
+  siteWs.mergeCells('A1:I1');
+
+  const totalToolsAll = normalizedRows.filter(r => r.isTool).reduce((s, r) => s + r.quantity, 0);
+  const totalConsAll = normalizedRows.filter(r => !r.isTool).reduce((s, r) => s + r.quantity, 0);
+  const totalUsdAll = normalizedRows.reduce((s, r) => s + r.line_total, 0);
+  const uniqueSitesAll = new Set(normalizedRows.map(r => r.site_code)).size;
+
+  const kpiRow1 = siteWs.addRow([
+    'Total Sites', uniqueSitesAll, 'Tools (Assets)', totalToolsAll,
+    'Consumables', totalConsAll, 'Total Units', totalToolsAll + totalConsAll, ''
+  ]);
+  styleMetaRow(kpiRow1);
+  const kpiRow2 = siteWs.addRow([
+    'Generated By', generatedBy, 'Generated At', new Date().toLocaleString(),
+    'Total Customs Value (USD)', totalUsdAll, '', '', ''
+  ]);
+  styleMetaRow(kpiRow2);
+  kpiRow2.getCell(6).numFmt = '$#,##0.00';
+  siteWs.addRow([]);
+
+  styleSectionBanner(siteWs, siteWs.addRow(['Site-by-Site Breakdown (Dynamic =SUM Totals)']), 9);
+  const siteHeader = siteWs.addRow([
+    'Site Code',
+    'Receiving Site',
+    'Tools Qty',
+    'Consumables Qty',
+    'Total Units',
+    'Tools Share',
+    'Docs / HAWBs',
+    'Missing Inv. Ref',
+    'Total Value (USD)'
+  ]);
+  styleTableHeader(siteHeader);
+
+  const siteBuckets = new Map();
+  normalizedRows.forEach(r => {
+    if (!siteBuckets.has(r.site_code)) {
+      siteBuckets.set(r.site_code, {
+        site_code: r.site_code,
+        site_name: r.receiving_site,
+        toolsQty: 0,
+        consQty: 0,
+        docs: new Set(),
+        missingRefs: 0,
+        totalUsd: 0
+      });
+    }
+    const b = siteBuckets.get(r.site_code);
+    if (r.isTool) b.toolsQty += r.quantity;
+    else b.consQty += r.quantity;
+    if (r.report_ref) b.docs.add(r.report_ref);
+    else if (r.hawb_number) b.docs.add(`HAWB-${r.hawb_number}`);
+    if (!r.report_ref) b.missingRefs += 1;
+    b.totalUsd = Math.round((b.totalUsd + r.line_total) * 100) / 100;
+  });
+
+  const sortedSiteBuckets = Array.from(siteBuckets.values()).sort((a, b) => a.site_code.localeCompare(b.site_code));
+  const siteStartRow = siteWs.rowCount + 1;
+  sortedSiteBuckets.forEach((b, idx) => {
+    const rowNum = siteStartRow + idx;
+    const totalU = b.toolsQty + b.consQty;
+    const r = siteWs.addRow([
+      b.site_code,
+      b.site_name,
+      b.toolsQty,
+      b.consQty,
+      { formula: `C${rowNum}+D${rowNum}`, result: totalU },
+      { formula: `IF(E${rowNum}>0,C${rowNum}/E${rowNum},0)`, result: totalU > 0 ? b.toolsQty / totalU : 0 },
+      b.docs.size,
+      b.missingRefs,
+      b.totalUsd
+    ]);
+    styleDataRow(r, idx % 2 === 1);
+    const theme = getSiteColorTheme(b.site_code);
+    r.eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excelFill } };
+    });
+    r.getCell(1).font = { bold: true, size: 10, color: { argb: theme.text.replace('#', 'FF') } };
+    r.getCell(3).numFmt = '#,##0';
+    r.getCell(4).numFmt = '#,##0';
+    r.getCell(5).numFmt = '#,##0';
+    r.getCell(6).numFmt = '0.0%';
+    r.getCell(7).numFmt = '#,##0';
+    r.getCell(8).numFmt = '#,##0';
+    r.getCell(9).numFmt = '$#,##0.00';
+    if (b.missingRefs > 0) {
+      r.getCell(8).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3CD' } };
+      r.getCell(8).font = { bold: true, size: 10, color: { argb: 'FF92400E' } };
+    }
+  });
+  const siteEndRow = siteWs.rowCount;
+
+  if (sortedSiteBuckets.length > 0) {
+    const totRowNum = siteEndRow + 1;
+    const totRow = siteWs.addRow([
+      'TOTAL',
+      `${sortedSiteBuckets.length} Site(s)`,
+      { formula: `SUM(C${siteStartRow}:C${siteEndRow})`, result: totalToolsAll },
+      { formula: `SUM(D${siteStartRow}:D${siteEndRow})`, result: totalConsAll },
+      { formula: `SUM(E${siteStartRow}:E${siteEndRow})`, result: totalToolsAll + totalConsAll },
+      { formula: `IF(E${totRowNum}>0,C${totRowNum}/E${totRowNum},0)`, result: (totalToolsAll + totalConsAll) > 0 ? totalToolsAll / (totalToolsAll + totalConsAll) : 0 },
+      { formula: `SUM(G${siteStartRow}:G${siteEndRow})`, result: sortedSiteBuckets.reduce((s, b) => s + b.docs.size, 0) },
+      { formula: `SUM(H${siteStartRow}:H${siteEndRow})`, result: sortedSiteBuckets.reduce((s, b) => s + b.missingRefs, 0) },
+      { formula: `SUM(I${siteStartRow}:I${siteEndRow})`, result: Math.round(totalUsdAll * 100) / 100 }
+    ]);
+    styleTotalsRow(totRow);
+    totRow.getCell(3).numFmt = '#,##0';
+    totRow.getCell(4).numFmt = '#,##0';
+    totRow.getCell(5).numFmt = '#,##0';
+    totRow.getCell(6).numFmt = '0.0%';
+    totRow.getCell(7).numFmt = '#,##0';
+    totRow.getCell(8).numFmt = '#,##0';
+    totRow.getCell(9).numFmt = '$#,##0.00';
+  }
+  siteWs.autoFilter = { from: 'A6', to: 'I6' };
+  siteWs.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+
+  // ── TAB 2: Summary by Part Number ───────────────────────────────────────
+  const partWs = workbook.addWorksheet('Summary by Part Number', {
+    views: [{ state: 'frozen', ySplit: 1 }]
+  });
+  partWs.columns = [
+    { header: 'Type', key: 'type', width: 16 },
+    { header: 'Ownership Tag', key: 'ownership_tag', width: 18 },
+    { header: 'Part Number', key: 'pn', width: 18 },
+    { header: 'Description', key: 'desc', width: 46 },
+    { header: 'Sites Count', key: 'sites_count', width: 14 },
+    { header: 'Total Qty', key: 'total_qty', width: 14 },
+    { header: 'USD Unit Price', key: 'unit_price', width: 16 },
+    { header: 'Total Value (USD)', key: 'total_usd', width: 18 }
+  ];
+  styleTableHeader(partWs.getRow(1));
+
+  const partBuckets = new Map();
+  normalizedRows.forEach(r => {
+    const key = `${r.typeLabel}::${r.part_number}`;
+    if (!partBuckets.has(key)) {
+      partBuckets.set(key, {
+        type: r.typeLabel,
+        ownership_tag: r.ownership_tag || 'Apple-Owned',
+        isTool: r.isTool,
+        pn: r.part_number,
+        desc: r.description,
+        sites: new Set(),
+        qty: 0,
+        unitPrice: r.unit_cost,
+        totalUsd: 0
+      });
+    }
+    const b = partBuckets.get(key);
+    b.sites.add(r.site_code);
+    b.qty += r.quantity;
+    if (r.unit_cost > 0 && b.unitPrice === 0) b.unitPrice = r.unit_cost;
+    b.totalUsd = Math.round((b.totalUsd + r.line_total) * 100) / 100;
+  });
+
+  const sortedPartBuckets = Array.from(partBuckets.values()).sort((a, b) => {
+    if (a.isTool !== b.isTool) return a.isTool ? -1 : 1;
+    return a.pn.localeCompare(b.pn);
+  });
+
+  const pStart = 2;
+  sortedPartBuckets.forEach((b, idx) => {
+    const rowNum = pStart + idx;
+    const r = partWs.addRow([
+      b.type,
+      b.ownership_tag,
+      b.pn,
+      b.desc,
+      b.sites.size,
+      b.qty,
+      b.unitPrice,
+      { formula: `F${rowNum}*G${rowNum}`, result: b.totalUsd }
+    ]);
+    styleDataRow(r, idx % 2 === 1, { wrapCols: [4] });
+    r.getCell(5).numFmt = '#,##0';
+    r.getCell(6).numFmt = '#,##0';
+    r.getCell(7).numFmt = '$#,##0.00';
+    r.getCell(8).numFmt = '$#,##0.00';
+  });
+  const pEnd = partWs.rowCount;
+  if (sortedPartBuckets.length > 0) {
+    const pTot = partWs.addRow([
+      'TOTAL',
+      '',
+      `${sortedPartBuckets.length} SKU(s)`,
+      '',
+      '',
+      { formula: `SUM(F${pStart}:F${pEnd})`, result: sortedPartBuckets.reduce((s, b) => s + b.qty, 0) },
+      '',
+      { formula: `SUM(H${pStart}:H${pEnd})`, result: Math.round(totalUsdAll * 100) / 100 }
+    ]);
+    styleTotalsRow(pTot);
+    pTot.getCell(6).numFmt = '#,##0';
+    pTot.getCell(8).numFmt = '$#,##0.00';
+  }
+  partWs.autoFilter = { from: 'A1', to: 'H1' };
+  partWs.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+
+  // ── TAB 3: All Line Items ───────────────────────────────────────────────
+  const allWs = workbook.addWorksheet('All Line Items', {
+    views: [{ state: 'frozen', ySplit: 1 }]
+  });
+  allWs.columns = [
+    { header: 'Site Code', key: 'site_code', width: 16 },
+    { header: 'Receiving Site', key: 'receiving_site', width: 34 },
+    { header: 'Ship-To ID', key: 'ship_to_id', width: 15 },
+    { header: 'Report Ref / Doc #', key: 'report_ref', width: 18 },
+    { header: 'HAWB #', key: 'hawb_number', width: 16 },
+    { header: 'Delivery #', key: 'delivery_number', width: 16 },
+    { header: 'Box #', key: 'box_number', width: 15 },
+    { header: 'Document Date', key: 'document_date', width: 14 },
+    { header: 'Linked PO #', key: 'po_number', width: 16 },
+    { header: 'Supplier', key: 'supplier', width: 24 },
+    { header: 'Part Number', key: 'part_number', width: 15 },
+    { header: 'Description', key: 'description', width: 42 },
+    { header: 'Type', key: 'type', width: 15 },
+    { header: 'Ownership Tag', key: 'ownership_tag', width: 18 },
+    { header: 'Qty', key: 'qty', width: 10 },
+    { header: 'USD Price', key: 'unit_cost', width: 14 },
+    { header: 'Line Total USD', key: 'line_total', width: 16 },
+    { header: 'Serial #(s)', key: 'serials', width: 22 },
+    { header: 'Notes', key: 'notes', width: 34 }
+  ];
+  styleTableHeader(allWs.getRow(1));
+
+  const aStart = 2;
+  normalizedRows.forEach((row, idx) => {
+    const rowNum = aStart + idx;
+    const r = allWs.addRow({
+      site_code: row.site_code,
+      receiving_site: row.receiving_site,
+      ship_to_id: row.ship_to_id,
+      report_ref: row.report_ref,
+      hawb_number: row.hawb_number,
+      delivery_number: row.delivery_number,
+      box_number: row.box_number,
+      document_date: row.document_date,
+      po_number: row.po_number,
+      supplier: row.supplier,
+      part_number: row.part_number,
+      description: row.description,
+      type: row.typeLabel,
+      ownership_tag: row.ownership_tag || 'Apple-Owned',
+      qty: row.quantity,
+      unit_cost: row.unit_cost,
+      line_total: { formula: `O${rowNum}*P${rowNum}`, result: row.line_total },
+      serials: row.serial_numbers,
+      notes: row.notes
+    });
+    styleDataRow(r, idx % 2 === 1, { wrapCols: [12, 19] });
+    const theme = getSiteColorTheme(row.site_code);
+    r.eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excelFill } };
+    });
+    r.getCell(1).font = { bold: true, size: 10, color: { argb: theme.text.replace('#', 'FF') } };
+    // Highlight blank Report Ref / Doc # cells in soft amber (#FFF3CD)
+    if (!row.report_ref) {
+      r.getCell(4).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3CD' } };
+    }
+    r.getCell(15).numFmt = '#,##0';
+    r.getCell(16).numFmt = '$#,##0.00';
+    r.getCell(17).numFmt = '$#,##0.00';
+  });
+  const aEnd = allWs.rowCount;
+  if (normalizedRows.length > 0) {
+    const aTot = allWs.addRow({
+      site_code: 'TOTAL',
+      receiving_site: `${normalizedRows.length} Line Item(s)`,
+      qty: { formula: `SUM(O${aStart}:O${aEnd})`, result: totalToolsAll + totalConsAll },
+      line_total: { formula: `SUM(Q${aStart}:Q${aEnd})`, result: Math.round(totalUsdAll * 100) / 100 }
+    });
+    styleTotalsRow(aTot);
+    aTot.getCell(15).numFmt = '#,##0';
+    aTot.getCell(17).numFmt = '$#,##0.00';
+  }
+  allWs.autoFilter = { from: 'A1', to: 'S1' };
+  allWs.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+
+  return workbook.xlsx.writeBuffer();
+}
+
+export async function exportCtConsolidatedAuditToExcel(options = {}) {
+  const buffer = await buildCtConsolidatedAuditExcelBuffer(options);
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const fileName = `MDC_Consumables_Tools_All_Sites_${dateStr}.xlsx`;
   triggerExcelDownload(buffer, fileName);
   return fileName;
 }

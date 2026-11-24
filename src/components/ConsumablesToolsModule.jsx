@@ -9,7 +9,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   QrCode,
-  UploadCloud,
   ScanLine,
   ArrowRightLeft,
   Pencil,
@@ -18,8 +17,11 @@ import {
   Plus,
   X,
   FileSpreadsheet,
-  Check
+  Check,
+  Building2,
+  MapPin
 } from 'lucide-react';
+import { getSiteColorTheme } from '../utils/ctSpreadsheetImporter';
 import { useApp } from '../context/AppContext';
 import {
   getSitePackingCandidates,
@@ -42,24 +44,32 @@ import {
 import { uploadCtPackingListToDrive } from '../services/driveAutoSyncService';
 import { formatTo12HourTime } from '../utils/dateUtils';
 import ToolLabelPrintModal from './ToolLabelPrintModal';
+import CtSpreadsheetImportModal from './CtSpreadsheetImportModal';
 
 export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
   const {
     ctCatalog = [],
+    rawCtCatalog = [],
     ctOrders = [],
     ctStock = [],
     ctToolAssets = [],
     ctMovements = [],
     ctShipments = [],
+    ctPdfImports = [],
     sites = [],
     currentUser,
     canEdit,
     showToast,
+    saveCtCatalogItem,
+    deleteCtCatalogItem,
+    clearCtCatalog,
+    updateCtStockRecord,
     addCtOrder,
     updateCtOrder,
     deleteCtOrder,
     receiveCtOrderLine,
-    bulkReceiveCtCsv,
+    commitCtPdfImport,
+    openCtSourcePdf,
     checkoutTool,
     checkinTool,
     updateToolStatus,
@@ -73,6 +83,22 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
 
   const normalizeSection = (sec) => (sec === 'catalog' ? 'assets' : sec || 'assets');
   const [section, setSection] = useState(() => normalizeSection(initialSection));
+  const [pdfImportModalOpen, setPdfImportModalOpen] = useState(false);
+
+  // Sub-tabs inside main Consumables & Tools page (Combined Multi-Site, Tool Assets, Consumables Stock, Complete Catalog)
+  const [assetsSubTab, setAssetsSubTab] = useState('combined'); // 'combined' | 'assets' | 'consumables' | 'catalog'
+  const [centerRegionFilter, setCenterRegionFilter] = useState('ALL'); // 'ALL' | 'Metro Manila' | 'Province'
+  const [catalogKindFilter, setCatalogKindFilter] = useState('all'); // 'all' | 'tool' | 'consumable'
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const [editingCatalogId, setEditingCatalogId] = useState(null);
+  const [editCatForm, setEditCatForm] = useState({ part_number: '', description: '', item_kind: 'tool', unit_cost: 0 });
+  const [addingCatalogItem, setAddingCatalogItem] = useState(false);
+  const [newCatForm, setNewCatForm] = useState({ part_number: '', description: '', item_kind: 'tool', unit_cost: 0 });
+
+  // Consumables stock inline editing
+  const [consumableSearch, setConsumableSearch] = useState('');
+  const [editingStockId, setEditingStockId] = useState(null);
+  const [editStockForm, setEditStockForm] = useState({ description: '', qty_on_hand: 0, min_stock_threshold: 2 });
   useEffect(() => {
     if (initialSection) setSection(normalizeSection(initialSection));
   }, [initialSection]);
@@ -116,7 +142,6 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
   const [recvSiteCode, setRecvSiteCode] = useState('DC-MDC');
   const [recvNotes, setRecvNotes] = useState('');
   const [recvFeedback, setRecvFeedback] = useState(null);
-  const [bulkCsvSummary, setBulkCsvSummary] = useState(null);
   const [showCreatePoModal, setShowCreatePoModal] = useState(false);
   const [editingPoId, setEditingPoId] = useState(null);
   const [poPartSearch, setPoPartSearch] = useState('');
@@ -186,7 +211,98 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
   const [historySearch, setHistorySearch] = useState('');
   const [historyDateFrom, setHistoryDateFrom] = useState('');
   const [historyDateTo, setHistoryDateTo] = useState('');
-  const [historyDisplayLimit, setHistoryDisplayLimit] = useState(200);
+  const [historyDisplayLimit, setHistoryDisplayLimit] = useState(50);
+
+  // --- Center Table Pagination (Hard limit: max 50 records per page to prevent endless scrolling) ---
+  const MAX_RECORDS_PER_PAGE = 50;
+  const centerFilterKey = `${assetsSubTab}|${siteFilter}|${centerRegionFilter}|${assetStatusFilter}|${assetSearch}|${consumableSearch}|${catalogSearch}|${catalogKindFilter}`;
+  const [centerPagination, setCenterPagination] = useState({ key: '', page: 1 });
+  const activeCenterPage = centerPagination.key === centerFilterKey ? centerPagination.page : 1;
+  const setCenterPage = (nextPage) => setCenterPagination({ key: centerFilterKey, page: Math.max(1, nextPage) });
+
+  const paginateCenterRows = (rows) => {
+    const total = rows.length;
+    const totalPages = Math.max(1, Math.ceil(total / MAX_RECORDS_PER_PAGE));
+    const safePage = Math.min(activeCenterPage, totalPages);
+    const startIdx = (safePage - 1) * MAX_RECORDS_PER_PAGE;
+    const endIdx = Math.min(startIdx + MAX_RECORDS_PER_PAGE, total);
+    return {
+      pageRows: rows.slice(startIdx, endIdx),
+      total,
+      totalPages,
+      safePage,
+      startIdx,
+      endIdx
+    };
+  };
+
+  const renderCenterPaginationBar = ({ total, totalPages, safePage, startIdx, endIdx }) => {
+    if (total === 0) return null;
+    return (
+      <div
+        style={{
+          padding: '12px 18px',
+          borderTop: '1px solid #e2e8f0',
+          background: '#f8fafc',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '10px',
+          fontSize: '12px',
+          color: '#475569'
+        }}
+      >
+        <div>
+          Showing <strong>{startIdx + 1}–{endIdx}</strong> of <strong>{total}</strong> records{' '}
+          <span style={{ color: '#64748b' }}>(max {MAX_RECORDS_PER_PAGE} per page)</span>
+        </div>
+        {totalPages > 1 && (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={safePage <= 1}
+              onClick={() => setCenterPage(1)}
+              style={{ padding: '4px 9px', fontSize: '11.5px' }}
+            >
+              First
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={safePage <= 1}
+              onClick={() => setCenterPage(safePage - 1)}
+              style={{ padding: '4px 10px', fontSize: '11.5px' }}
+            >
+              Prev
+            </button>
+            <span style={{ padding: '0 8px', fontWeight: 700, color: '#0f172a' }}>
+              Page {safePage} of {totalPages}
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={safePage >= totalPages}
+              onClick={() => setCenterPage(safePage + 1)}
+              style={{ padding: '4px 10px', fontSize: '11.5px' }}
+            >
+              Next
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={safePage >= totalPages}
+              onClick={() => setCenterPage(totalPages)}
+              style={{ padding: '4px 9px', fontSize: '11.5px' }}
+            >
+              Last
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // --- Derived Metrics ---
   const kpis = useMemo(() => {
@@ -194,7 +310,9 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
     const totalAssets = ctToolAssets.length;
     const availableAssets = ctToolAssets.filter(a => a.status === 'available').length;
     const inUseAssets = ctToolAssets.filter(a => a.status === 'in_use').length;
-    const consumablesOnHand = (ctStock || []).reduce((sum, r) => sum + (Number(r.qty_on_hand) || 0), 0);
+    const consumablesOnHand = (ctStock || [])
+      .filter(r => r.item_kind !== 'tool')
+      .reduce((sum, r) => sum + (Number(r.qty_on_hand) || 0), 0);
     return {
       openOrdersCount,
       totalAssets,
@@ -274,27 +392,153 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
 
   const parsedRecvSerialPreview = useMemo(() => parseSerialTokens(recvSerials), [recvSerials]);
 
-  const filteredAssets = useMemo(() => {
-    const q = assetSearch.trim().toLowerCase();
-    return (ctToolAssets || []).filter(a => {
-      if (assetStatusFilter !== 'ALL' && a.status !== assetStatusFilter) return false;
-      if (siteFilter !== 'ALL' && String(a.site_code || '').toUpperCase() !== siteFilter.toUpperCase()) return false;
-      if (q) {
-        const hay = `${a.asset_tag} ${a.admin_asset_tag || ''} ${a.serial_number || ''} ${a.part_number} ${a.description} ${a.assigned_to || ''} ${a.site_code}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      return true;
-    });
-  }, [ctToolAssets, assetStatusFilter, siteFilter, assetSearch]);
-
   const siteRegionMap = useMemo(() => {
     const map = new Map();
     (sites || []).forEach(s => {
-      if (s.code) map.set(String(s.code).toUpperCase(), s.region || 'Province');
+      const code = s.site_code || s.code;
+      if (code) map.set(String(code).toUpperCase(), s.region || 'Province');
     });
     map.set('DC-MDC', 'Metro Manila');
     return map;
   }, [sites]);
+
+  const filteredAssets = useMemo(() => {
+    const q = assetSearch.trim().toLowerCase();
+    return (ctToolAssets || [])
+      .filter(a => {
+        if (assetStatusFilter !== 'ALL' && a.status !== assetStatusFilter) return false;
+        const code = String(a.site_code || 'UNASSIGNED').trim().toUpperCase();
+        const reg = siteRegionMap.get(code) === 'Metro Manila' ? 'Metro Manila' : 'Province';
+        if (centerRegionFilter !== 'ALL' && reg !== centerRegionFilter) return false;
+        if (siteFilter !== 'ALL' && code !== siteFilter.toUpperCase()) return false;
+        if (q) {
+          const ownership = a.ownership_tag || 'Apple-Owned';
+          const hay = `${a.asset_tag} ${ownership} ${a.serial_number || ''} ${a.part_number} ${a.description} ${a.assigned_to || ''} ${code}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const siteCmp = String(a.site_code || '').localeCompare(String(b.site_code || ''));
+        if (siteCmp !== 0) return siteCmp;
+        const pnCmp = String(a.part_number || '').localeCompare(String(b.part_number || ''));
+        if (pnCmp !== 0) return pnCmp;
+        return String(a.asset_tag || '').localeCompare(String(b.asset_tag || ''));
+      });
+  }, [ctToolAssets, assetStatusFilter, centerRegionFilter, siteFilter, assetSearch, siteRegionMap]);
+
+  // Multi-Site Dashboard Rollup (sorted A -> Z by Site Code, split by Metro Manila vs Provincial)
+  const multiSiteOverview = useMemo(() => {
+    const map = new Map();
+    const ensure = (rawCode) => {
+      const code = String(rawCode || 'UNASSIGNED').trim().toUpperCase();
+      if (!map.has(code)) {
+        const reg = siteRegionMap.get(code) || 'Province';
+        map.set(code, {
+          code,
+          region: reg === 'Metro Manila' ? 'Metro Manila' : 'Province',
+          toolsCount: 0,
+          consumablesQty: 0,
+          totalUnits: 0
+        });
+      }
+      return map.get(code);
+    };
+
+    (ctToolAssets || []).forEach(a => {
+      const b = ensure(a.site_code);
+      b.toolsCount += 1;
+      b.totalUnits += 1;
+    });
+    (ctStock || []).forEach(s => {
+      if (s.item_kind === 'tool') return;
+      const qty = Number(s.qty_on_hand) || 0;
+      if (qty <= 0) return;
+      const b = ensure(s.site_code);
+      b.consumablesQty += qty;
+      b.totalUnits += qty;
+    });
+
+    const allSorted = Array.from(map.values()).sort((a, b) => a.code.localeCompare(b.code));
+    const metroManila = allSorted.filter(s => s.region === 'Metro Manila');
+    const provincial = allSorted.filter(s => s.region !== 'Metro Manila');
+    return {
+      allSorted,
+      metroManila,
+      provincial,
+      metroUnits: metroManila.reduce((sum, s) => sum + s.totalUnits, 0),
+      provincialUnits: provincial.reduce((sum, s) => sum + s.totalUnits, 0),
+      totalUnits: allSorted.reduce((sum, s) => sum + s.totalUnits, 0)
+    };
+  }, [ctToolAssets, ctStock, siteRegionMap]);
+
+  // Unified Combined Single-View rows (Tools + Consumables sorted by Site A->Z, Tools first, then Part #)
+  const combinedInventoryRows = useMemo(() => {
+    const q = assetSearch.trim().toLowerCase();
+    const rows = [];
+
+    (ctToolAssets || []).forEach(a => {
+      const code = String(a.site_code || 'UNASSIGNED').trim().toUpperCase();
+      const reg = siteRegionMap.get(code) === 'Metro Manila' ? 'Metro Manila' : 'Province';
+      if (centerRegionFilter !== 'ALL' && reg !== centerRegionFilter) return;
+      if (siteFilter !== 'ALL' && code !== siteFilter.toUpperCase()) return;
+      const ownership = a.ownership_tag || 'Apple-Owned';
+      if (q) {
+        const hay = `${code} ${a.part_number || ''} ${a.description || ''} ${a.asset_tag || ''} ${a.serial_number || ''} ${ownership} ${a.source_pdf_ref || ''}`.toLowerCase();
+        if (!hay.includes(q)) return;
+      }
+      rows.push({
+        id: `tool-${a.id}`,
+        site_code: code,
+        item_kind: 'tool',
+        part_number: a.part_number,
+        description: a.description,
+        asset_tag: a.asset_tag,
+        ownership_tag: ownership,
+        serial_number: a.serial_number || '—',
+        qty: 1,
+        status: a.status || 'available',
+        source_ref: a.source_pdf_ref || null,
+        source_import_id: a.source_pdf_import_id || null
+      });
+    });
+
+    (ctStock || []).forEach(s => {
+      if (s.item_kind === 'tool') return;
+      const qty = Number(s.qty_on_hand) || 0;
+      if (qty <= 0) return;
+      const code = String(s.site_code || 'UNASSIGNED').trim().toUpperCase();
+      const reg = siteRegionMap.get(code) === 'Metro Manila' ? 'Metro Manila' : 'Province';
+      if (centerRegionFilter !== 'ALL' && reg !== centerRegionFilter) return;
+      if (siteFilter !== 'ALL' && code !== siteFilter.toUpperCase()) return;
+      const ownership = s.ownership_tag || 'Apple-Owned';
+      if (q) {
+        const hay = `${code} ${s.part_number || ''} ${s.description || ''} consumable ${ownership} ${s.last_source_pdf_ref || ''}`.toLowerCase();
+        if (!hay.includes(q)) return;
+      }
+      rows.push({
+        id: `cons-${s.id}`,
+        site_code: code,
+        item_kind: 'consumable',
+        part_number: s.part_number,
+        description: s.description,
+        asset_tag: null,
+        ownership_tag: ownership,
+        serial_number: '—',
+        qty,
+        status: 'in_stock',
+        source_ref: s.last_source_pdf_ref || null,
+        source_import_id: s.last_source_pdf_import_id || null
+      });
+    });
+
+    return rows.sort((a, b) => {
+      const siteCmp = a.site_code.localeCompare(b.site_code);
+      if (siteCmp !== 0) return siteCmp;
+      if (a.item_kind !== b.item_kind) return a.item_kind === 'tool' ? -1 : 1;
+      return String(a.part_number || '').localeCompare(String(b.part_number || ''));
+    });
+  }, [ctToolAssets, ctStock, siteRegionMap, centerRegionFilter, siteFilter, assetSearch]);
 
   const formatMovementDate = (iso) => {
     if (!iso) return '—';
@@ -432,24 +676,6 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
     if (res.ok) {
       setRecvSerials('');
       setRecvNotes('');
-    }
-  };
-
-  const handleBulkCsvUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const text = await file.text();
-      const summary = bulkReceiveCtCsv(text, recvSiteCode || 'DC-MDC');
-      setBulkCsvSummary(summary);
-      showToast?.(
-        `Bulk Receive complete: ${summary.processedCount} line(s) received, ${summary.errorCount} error(s).`,
-        summary.errorCount > 0 ? 'warning' : 'success'
-      );
-    } catch (err) {
-      showToast?.(`Failed to read receiving CSV: ${err.message}`, 'error');
-    } finally {
-      e.target.value = '';
     }
   };
 
@@ -658,7 +884,8 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
   const startEditAsset = (asset) => {
     if (!userCanEdit) return;
     setEditingAssetId(asset.id);
-    setEditAdminTag(asset.admin_asset_tag || '');
+    // Admin Asset Tag reserved for future Cables category; Tools default to Apple-Owned Ownership Tag
+    setEditAdminTag(asset.ownership_tag || 'Apple-Owned');
     setEditAssignedTo(asset.assigned_to || '');
   };
 
@@ -672,7 +899,7 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
     if (!updateToolMetadata) return;
     const res = updateToolMetadata({
       assetId: asset.id,
-      adminAssetTag: editAdminTag,
+      ownershipTag: editAdminTag || 'Apple-Owned',
       assignedTo: editAssignedTo
     });
     if (res?.ok) {
@@ -1128,8 +1355,385 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
         </div>
       </div>
 
-      {/* SECTION 1: TOOL ASSETS (INDIVIDUALLY TRACKED) */}
+      {/* SECTION 1: CONSUMABLES & TOOLS MULTI-SITE DASHBOARD (ALL SITES COMBINED · TOOLS · CONSUMABLES · CATALOG) */}
       {section === 'assets' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {/* Multi-Site Dashboard Region & Sorted Site Selector (matches Multi-Site Inventory Dashboard UX) */}
+          <div className="card" style={{ borderRadius: '12px', border: '1px solid #e2e8f0', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {/* Cross-Site Instant Search */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+              <div>
+                <div style={{ fontSize: '13.5px', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Search size={15} color="#0284c7" />
+                  <span>Search Tools &amp; Consumables Across All Sites</span>
+                </div>
+                <div style={{ fontSize: '11.5px', color: '#64748b' }}>
+                  Filter by Part Number, Description, Asset Tag, Serial #, Ownership Tag (Apple-Owned), or Site
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => setPdfImportModalOpen(true)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', height: '34px' }}
+                >
+                  <FileSpreadsheet size={14} />
+                  <span>Import CSV / Excel</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={isExportingExcel}
+                  onClick={handleExportCenterExcel}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', height: '34px' }}
+                >
+                  <FileSpreadsheet size={14} color="#059669" />
+                  <span>{isExportingExcel ? 'Exporting...' : `Export Excel (${siteFilter === 'ALL' ? 'All Sites' : siteFilter})`}</span>
+                </button>
+              </div>
+            </div>
+
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <Search size={15} color="#94a3b8" style={{ position: 'absolute', left: '12px', pointerEvents: 'none' }} />
+              <input
+                type="text"
+                className="form-input"
+                placeholder="Type or scan Part # (e.g. 077-01158), Description, Asset Tag, or Site..."
+                value={assetSearch}
+                onChange={(e) => setAssetSearch(e.target.value)}
+                style={{ width: '100%', height: '38px', paddingLeft: '36px', fontSize: '13px', borderRadius: '9px' }}
+              />
+              {assetSearch && (
+                <button
+                  type="button"
+                  onClick={() => setAssetSearch('')}
+                  style={{ position: 'absolute', right: '10px', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+                >
+                  <X size={15} />
+                </button>
+              )}
+            </div>
+
+            {/* Region Selector Cards (Metro Manila vs Provincial) */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setCenterRegionFilter('ALL');
+                  setSiteFilter('ALL');
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '10px 14px',
+                  borderRadius: '10px',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  border: centerRegionFilter === 'ALL' && siteFilter === 'ALL' ? '2px solid #0f172a' : '1px solid #e2e8f0',
+                  background: centerRegionFilter === 'ALL' && siteFilter === 'ALL' ? '#0f172a' : '#f8fafc',
+                  color: centerRegionFilter === 'ALL' && siteFilter === 'ALL' ? '#ffffff' : '#0f172a'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Building2 size={16} />
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 800 }}>All Combined Sites</div>
+                    <div style={{ fontSize: '11px', opacity: 0.8 }}>{multiSiteOverview.allSorted.length} Active Service Points</div>
+                  </div>
+                </div>
+                <span style={{ padding: '2px 8px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 800, background: centerRegionFilter === 'ALL' && siteFilter === 'ALL' ? 'rgba(255,255,255,0.2)' : '#e2e8f0' }}>
+                  {multiSiteOverview.totalUnits} units
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setCenterRegionFilter('Metro Manila');
+                  setSiteFilter('ALL');
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '10px 14px',
+                  borderRadius: '10px',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  border: centerRegionFilter === 'Metro Manila' ? '2px solid #0284c7' : '1px solid #e2e8f0',
+                  background: centerRegionFilter === 'Metro Manila' ? '#0284c7' : '#f8fafc',
+                  color: centerRegionFilter === 'Metro Manila' ? '#ffffff' : '#0f172a'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Building2 size={16} color={centerRegionFilter === 'Metro Manila' ? '#fff' : '#0284c7'} />
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 800 }}>Metro Manila Sites</div>
+                    <div style={{ fontSize: '11px', opacity: 0.8 }}>{multiSiteOverview.metroManila.length} Authorized Service Points</div>
+                  </div>
+                </div>
+                <span style={{ padding: '2px 8px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 800, background: centerRegionFilter === 'Metro Manila' ? 'rgba(255,255,255,0.2)' : '#e0f2fe', color: centerRegionFilter === 'Metro Manila' ? '#fff' : '#0369a1' }}>
+                  {multiSiteOverview.metroUnits} units
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setCenterRegionFilter('Province');
+                  setSiteFilter('ALL');
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '10px 14px',
+                  borderRadius: '10px',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  border: centerRegionFilter === 'Province' ? '2px solid #d97706' : '1px solid #e2e8f0',
+                  background: centerRegionFilter === 'Province' ? '#d97706' : '#f8fafc',
+                  color: centerRegionFilter === 'Province' ? '#ffffff' : '#0f172a'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <MapPin size={16} color={centerRegionFilter === 'Province' ? '#fff' : '#d97706'} />
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 800 }}>Provincial Sites</div>
+                    <div style={{ fontSize: '11px', opacity: 0.8 }}>{multiSiteOverview.provincial.length} Regional Service Points</div>
+                  </div>
+                </div>
+                <span style={{ padding: '2px 8px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 800, background: centerRegionFilter === 'Province' ? 'rgba(255,255,255,0.2)' : '#fef3c7', color: centerRegionFilter === 'Province' ? '#fff' : '#92400e' }}>
+                  {multiSiteOverview.provincialUnits} units
+                </span>
+              </button>
+            </div>
+
+            {/* Alphabetically Sorted Site Chips (A -> Z) */}
+            {(() => {
+              const visibleSites =
+                centerRegionFilter === 'Metro Manila'
+                  ? multiSiteOverview.metroManila
+                  : centerRegionFilter === 'Province'
+                    ? multiSiteOverview.provincial
+                    : multiSiteOverview.allSorted;
+              if (visibleSites.length === 0) return null;
+              return (
+                <div>
+                  <div style={{ fontSize: '10.5px', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '7px' }}>
+                    Select Site to Filter (Sorted A–Z):
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '7px' }}>
+                    {visibleSites.map(s => {
+                      const active = siteFilter.toUpperCase() === s.code;
+                      const theme = getSiteColorTheme(s.code);
+                      return (
+                        <button
+                          key={s.code}
+                          type="button"
+                          onClick={() => setSiteFilter(active ? 'ALL' : s.code)}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            padding: '5px 10px',
+                            borderRadius: '8px',
+                            cursor: 'pointer',
+                            background: active ? theme.text : theme.bg,
+                            color: active ? '#ffffff' : theme.text,
+                            border: active ? `2px solid ${theme.text}` : `1px solid ${theme.border}`,
+                            fontSize: '12px',
+                            fontWeight: 800
+                          }}
+                        >
+                          <span>{s.code}</span>
+                          <span style={{ padding: '1px 6px', borderRadius: '999px', fontSize: '10.5px', background: active ? 'rgba(255,255,255,0.22)' : '#dbeafe', color: active ? '#fff' : '#1e40af' }}>
+                            {s.toolsCount}T
+                          </span>
+                          <span style={{ padding: '1px 6px', borderRadius: '999px', fontSize: '10.5px', background: active ? 'rgba(255,255,255,0.22)' : '#d1fae5', color: active ? '#fff' : '#065f46' }}>
+                            {s.consumablesQty}C
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Sub-Tab Switcher */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+            <div style={{ display: 'inline-flex', gap: '6px', background: '#f1f5f9', padding: '4px', borderRadius: '10px', border: '1px solid #e2e8f0', flexWrap: 'wrap' }}>
+              {[
+                { key: 'combined', label: `All Sites Combined (${combinedInventoryRows.length})` },
+                { key: 'assets', label: `Tracked Tool Units (${ctToolAssets.length})` },
+                { key: 'consumables', label: `Consumables Stock (${ctStock.filter(s => s.item_kind !== 'tool' && (Number(s.qty_on_hand) || 0) > 0).length})` },
+                { key: 'catalog', label: `Complete Catalog (${rawCtCatalog.length})` }
+              ].map(tab => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setAssetsSubTab(tab.key)}
+                  style={{
+                    border: 'none',
+                    borderRadius: '8px',
+                    padding: '7px 14px',
+                    fontSize: '12.5px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    background: assetsSubTab === tab.key ? '#0f172a' : 'transparent',
+                    color: assetsSubTab === tab.key ? '#ffffff' : '#475569'
+                  }}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* SUB-TAB 0: ALL SITES COMBINED SINGLE VIEW (SORTED A->Z BY SITE) */}
+          {assetsSubTab === 'combined' && (
+            <div className="card" style={{ borderRadius: '12px', border: '1px solid #e2e8f0', padding: 0, overflow: 'hidden' }}>
+              <div style={{ padding: '12px 18px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 800 }}>
+                    Combined Multi-Site Tools &amp; Consumables ({combinedInventoryRows.length} rows)
+                  </h3>
+                  <div style={{ fontSize: '12px', color: '#64748b' }}>
+                    Sorted A–Z by Site · All Service Tools &amp; Consumables tagged <strong>Apple-Owned</strong>
+                  </div>
+                </div>
+                {siteFilter !== 'ALL' && (
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSiteFilter('ALL')}>
+                    Show All Sites
+                  </button>
+                )}
+              </div>
+
+              {combinedInventoryRows.length === 0 ? (
+                <div style={{ padding: '40px 20px', textAlign: 'center', color: '#64748b' }}>
+                  No tools or consumables match the current site/search filter.
+                </div>
+              ) : (
+                <>
+                <div className="table-container" style={{ overflowX: 'auto' }}>
+                  <table className="data-table" style={{ width: '100%', fontSize: '12.5px', minWidth: '880px' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ width: '115px' }}>Site</th>
+                        <th style={{ width: '115px' }}>Type</th>
+                        <th style={{ width: '155px' }}>Ownership / Tag</th>
+                        <th style={{ width: '125px' }}>Part Number</th>
+                        <th>Description</th>
+                        <th style={{ width: '75px', textAlign: 'center' }}>Qty</th>
+                        <th style={{ width: '130px' }}>Serial / Asset</th>
+                        <th style={{ width: '140px' }}>Source Ref</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginateCenterRows(combinedInventoryRows).pageRows.map(row => {
+                        const siteTheme = getSiteColorTheme(row.site_code);
+                        const isTool = row.item_kind === 'tool';
+                        return (
+                          <tr key={row.id}>
+                            <td>
+                              <span
+                                className="font-mono"
+                                style={{
+                                  display: 'inline-block',
+                                  padding: '2px 8px',
+                                  borderRadius: '6px',
+                                  fontSize: '11px',
+                                  fontWeight: 800,
+                                  background: siteTheme.bg,
+                                  color: siteTheme.text,
+                                  border: `1px solid ${siteTheme.border}`
+                                }}
+                              >
+                                {row.site_code}
+                              </span>
+                            </td>
+                            <td>
+                              <span
+                                style={{
+                                  display: 'inline-block',
+                                  padding: '2px 8px',
+                                  borderRadius: '999px',
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  background: isTool ? '#eff6ff' : '#ecfdf5',
+                                  color: isTool ? '#1d4ed8' : '#047857'
+                                }}
+                              >
+                                {isTool ? 'Tool' : 'Consumable'}
+                              </span>
+                            </td>
+                            <td>
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  padding: '2px 8px',
+                                  borderRadius: '999px',
+                                  fontSize: '11px',
+                                  fontWeight: 800,
+                                  background: (row.ownership_tag || 'Apple-Owned') === 'Apple-Owned' ? '#0f172a' : '#f0f9ff',
+                                  color: (row.ownership_tag || 'Apple-Owned') === 'Apple-Owned' ? '#ffffff' : '#0369a1',
+                                  border: (row.ownership_tag || 'Apple-Owned') === 'Apple-Owned' ? '1px solid #0f172a' : '1px solid #bae6fd',
+                                  whiteSpace: 'nowrap'
+                                }}
+                              >
+                                {row.ownership_tag || 'Apple-Owned'}
+                              </span>
+                            </td>
+                            <td className="font-mono" style={{ fontWeight: 700 }}>{row.part_number}</td>
+                            <td>{row.description}</td>
+                            <td className="font-mono" style={{ textAlign: 'center', fontWeight: 800 }}>{row.qty}</td>
+                            <td className="font-mono" style={{ fontSize: '11.5px', color: '#475569' }}>
+                              {isTool ? (row.serial_number !== '—' ? row.serial_number : row.asset_tag) : '—'}
+                            </td>
+                            <td>
+                              {row.source_ref ? (
+                                <button
+                                  type="button"
+                                  onClick={() => openCtSourcePdf?.(row.source_import_id || row.source_ref)}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                    padding: '2px 7px',
+                                    borderRadius: '999px',
+                                    background: '#eff6ff',
+                                    border: '1px solid #bfdbfe',
+                                    color: '#1d4ed8',
+                                    fontSize: '10.5px',
+                                    fontWeight: 700,
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  <FileText size={10} />
+                                  <span>{row.source_ref}</span>
+                                </button>
+                              ) : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {renderCenterPaginationBar(paginateCenterRows(combinedInventoryRows))}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* SUB-TAB A: TRACKED TOOL ASSETS */}
+          {assetsSubTab === 'assets' && (
         <div className="card" style={{ borderRadius: '12px', border: '1px solid #e2e8f0', padding: 0, overflow: 'hidden' }}>
           <div style={{ padding: '14px 18px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
@@ -1179,10 +1783,10 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
               <input
                 type="text"
                 className="form-input"
-                placeholder="Search sys/admin tag, serial, PN, assignee..."
+                placeholder="Search asset tag, ownership, serial, PN, assignee..."
                 value={assetSearch}
                 onChange={(e) => setAssetSearch(e.target.value)}
-                style={{ height: '36px', fontSize: '12.5px', width: '215px' }}
+                style={{ height: '36px', fontSize: '12.5px', width: '230px' }}
               />
               <button
                 type="button"
@@ -1209,12 +1813,13 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
               No individual tool assets match the current filter. Receive tool units under <strong>Orders & Receiving</strong> to mint tracked asset tags and serials.
             </div>
           ) : (
+            <>
             <div className="table-container" style={{ overflowX: 'auto' }}>
               <table className="data-table" style={{ width: '100%', fontSize: '12.5px', minWidth: '940px' }}>
                 <thead>
                   <tr>
                     <th>System Asset Tag</th>
-                    <th>Admin Asset Tag</th>
+                    <th>Ownership Tag</th>
                     <th>Serial Number</th>
                     <th>Part Number</th>
                     <th>Description</th>
@@ -1225,59 +1830,97 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredAssets.map(asset => {
+                  {paginateCenterRows(filteredAssets).pageRows.map(asset => {
                     const isEditingRow = editingAssetId === asset.id;
+                    const ownershipLabel = asset.ownership_tag || 'Apple-Owned';
+                    const isAppleOwned = ownershipLabel === 'Apple-Owned';
+                    const siteTheme = getSiteColorTheme(asset.site_code);
                     return (
                     <tr key={asset.id}>
-                      <td className="font-mono" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{asset.asset_tag}</td>
-                      <td style={{ minWidth: '150px' }}>
-                        {isEditingRow ? (
-                          <input
-                            type="text"
-                            className="form-input font-mono"
-                            value={editAdminTag}
-                            onChange={(e) => setEditAdminTag(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') { e.preventDefault(); saveEditAsset(asset); }
-                              if (e.key === 'Escape') { e.preventDefault(); cancelEditAsset(); }
-                            }}
-                            placeholder="Enter Admin Tag..."
-                            autoFocus
-                            style={{ height: '28px', fontSize: '12px', padding: '2px 7px', width: '145px' }}
-                          />
-                        ) : userCanEdit ? (
+                      <td className="font-mono" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
+                        <div>{asset.asset_tag}</div>
+                        {asset.source_pdf_ref && (
                           <button
                             type="button"
-                            onClick={() => startEditAsset(asset)}
-                            title="Click to edit Admin Asset Tag & Assigned Person"
+                            onClick={() => openCtSourcePdf?.(asset.source_pdf_import_id || asset.source_pdf_ref)}
+                            title={`Imported from ${asset.source_pdf_filename || asset.source_pdf_ref}`}
                             style={{
-                              background: asset.admin_asset_tag ? '#f0f9ff' : 'transparent',
-                              border: asset.admin_asset_tag ? '1px solid #bae6fd' : '1px dashed #cbd5e1',
-                              borderRadius: '6px',
-                              padding: '3px 8px',
-                              fontSize: '12px',
-                              fontFamily: asset.admin_asset_tag ? 'var(--font-mono, monospace)' : 'inherit',
-                              fontWeight: asset.admin_asset_tag ? 700 : 500,
-                              color: asset.admin_asset_tag ? '#0369a1' : '#94a3b8',
-                              cursor: 'pointer',
+                              marginTop: '3px',
                               display: 'inline-flex',
                               alignItems: 'center',
-                              gap: '4px'
+                              gap: '3px',
+                              padding: '1px 6px',
+                              borderRadius: '999px',
+                              background: '#eff6ff',
+                              border: '1px solid #bfdbfe',
+                              color: '#1d4ed8',
+                              fontSize: '10px',
+                              fontWeight: 700,
+                              cursor: 'pointer'
                             }}
                           >
-                            <span>{asset.admin_asset_tag || '+ Add Tag'}</span>
-                            <Pencil size={11} style={{ opacity: 0.7 }} />
+                            <FileText size={10} />
+                            <span>Ref: {asset.source_pdf_ref}</span>
                           </button>
+                        )}
+                      </td>
+                      <td style={{ minWidth: '145px' }}>
+                        {isEditingRow ? (
+                          <select
+                            className="form-select"
+                            value={editAdminTag || 'Apple-Owned'}
+                            onChange={(e) => setEditAdminTag(e.target.value)}
+                            autoFocus
+                            style={{ height: '28px', fontSize: '12px', padding: '2px 7px', width: '150px' }}
+                          >
+                            <option value="Apple-Owned">Apple-Owned</option>
+                            <option value="MobileCare-Owned">MobileCare-Owned</option>
+                            <option value="Cable / Admin-Tagged">Cable / Admin-Tagged</option>
+                          </select>
                         ) : (
-                          <span className="font-mono" style={{ fontWeight: 600, color: asset.admin_asset_tag ? '#0369a1' : '#94a3b8' }}>
-                            {asset.admin_asset_tag || '—'}
+                          <span
+                            onClick={() => userCanEdit && startEditAsset(asset)}
+                            title={userCanEdit ? 'Click to update Ownership Tag or Assigned Person' : ownershipLabel}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '3px 9px',
+                              borderRadius: '999px',
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              background: isAppleOwned ? '#0f172a' : '#f0f9ff',
+                              color: isAppleOwned ? '#ffffff' : '#0369a1',
+                              border: isAppleOwned ? '1px solid #0f172a' : '1px solid #bae6fd',
+                              cursor: userCanEdit ? 'pointer' : 'default',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            <span>{ownershipLabel}</span>
+                            {userCanEdit && <Pencil size={10} style={{ opacity: 0.7 }} />}
                           </span>
                         )}
                       </td>
                       <td className="font-mono">{asset.serial_number || '—'}</td>
                       <td className="font-mono">{asset.part_number}</td>
                       <td>{asset.description}</td>
-                      <td>{asset.site_code}</td>
+                      <td>
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            padding: '2px 8px',
+                            borderRadius: '999px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            background: siteTheme.bg,
+                            color: siteTheme.text,
+                            border: `1px solid ${siteTheme.border}`,
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          {asset.site_code}
+                        </span>
+                      </td>
                       <td>
                         <span style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', padding: '2px 7px', borderRadius: '6px', background: asset.status === 'available' ? '#dcfce7' : asset.status === 'in_use' ? '#dbeafe' : asset.status === 'missing' ? '#fee2e2' : '#f1f5f9', color: asset.status === 'available' ? '#166534' : asset.status === 'in_use' ? '#1d4ed8' : asset.status === 'missing' ? '#b91c1c' : '#475569' }}>
                           {asset.status}
@@ -1385,7 +2028,566 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                 </tbody>
               </table>
             </div>
+            {renderCenterPaginationBar(paginateCenterRows(filteredAssets))}
+            </>
           )}
+        </div>
+          )}
+
+          {/* SUB-TAB B: CONSUMABLES STOCK (EDITABLE) */}
+          {assetsSubTab === 'consumables' && (() => {
+            const q = consumableSearch.trim().toLowerCase();
+            const consumableRows = (ctStock || []).filter(s => {
+              if (s.item_kind === 'tool') return false;
+              if (siteFilter !== 'ALL' && String(s.site_code || '').toUpperCase() !== siteFilter.toUpperCase()) return false;
+              if (q) {
+                const hay = `${s.part_number || ''} ${s.description || ''} ${s.site_code || ''} ${s.last_source_pdf_ref || ''}`.toLowerCase();
+                if (!hay.includes(q)) return false;
+              }
+              return true;
+            });
+
+            return (
+              <div className="card" style={{ borderRadius: '12px', border: '1px solid #e2e8f0', padding: 0, overflow: 'hidden' }}>
+                <div style={{ padding: '14px 18px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 800 }}>Consumables Stock ({consumableRows.length})</h3>
+                    <div style={{ fontSize: '12px', color: '#64748b' }}>Quantity-tracked consumables by site — click Edit to correct description, stock qty, or threshold</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <select
+                      className="form-select"
+                      value={siteFilter}
+                      onChange={(e) => setSiteFilter(e.target.value)}
+                      style={{ height: '36px', fontSize: '12.5px', minWidth: '175px' }}
+                    >
+                      <option value="ALL">All Sites ({siteChoices.length})</option>
+                      {siteChoices.map(s => (
+                        <option key={s.code} value={s.code}>{s.code} — {s.name}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="Search PN, description, site, PDF ref..."
+                      value={consumableSearch}
+                      onChange={(e) => setConsumableSearch(e.target.value)}
+                      style={{ height: '36px', fontSize: '12.5px', width: '230px' }}
+                    />
+                  </div>
+                </div>
+
+                {consumableRows.length === 0 ? (
+                  <div style={{ padding: '40px 20px', textAlign: 'center', color: '#64748b' }}>
+                    No consumable stock records found. Import a scanned Apple PDF or receive consumables under <strong>CT Receiving &amp; Scan-In</strong>.
+                  </div>
+                ) : (
+                  <>
+                  <div className="table-container" style={{ overflowX: 'auto' }}>
+                    <table className="data-table" style={{ width: '100%', fontSize: '12.5px' }}>
+                      <thead>
+                        <tr>
+                          <th>Part Number</th>
+                          <th>Ownership Tag</th>
+                          <th>Description</th>
+                          <th>Site</th>
+                          <th style={{ textAlign: 'center' }}>On Hand</th>
+                          <th style={{ textAlign: 'center' }}>Min Threshold</th>
+                          <th>Source Ref</th>
+                          <th style={{ textAlign: 'right' }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {paginateCenterRows(consumableRows).pageRows.map(row => {
+                          const isEditing = editingStockId === row.id;
+                          const ownershipLabel = row.ownership_tag || 'Apple-Owned';
+                          const isAppleOwned = ownershipLabel === 'Apple-Owned';
+                          return (
+                            <tr key={row.id}>
+                              <td className="font-mono" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{row.part_number}</td>
+                              <td>
+                                <span
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    padding: '2px 8px',
+                                    borderRadius: '999px',
+                                    fontSize: '11px',
+                                    fontWeight: 800,
+                                    background: isAppleOwned ? '#0f172a' : '#f0f9ff',
+                                    color: isAppleOwned ? '#ffffff' : '#0369a1',
+                                    border: isAppleOwned ? '1px solid #0f172a' : '1px solid #bae6fd',
+                                    whiteSpace: 'nowrap'
+                                  }}
+                                >
+                                  {ownershipLabel}
+                                </span>
+                              </td>
+                              <td>
+                                {isEditing ? (
+                                  <input
+                                    type="text"
+                                    className="form-input"
+                                    value={editStockForm.description}
+                                    onChange={(e) => setEditStockForm(f => ({ ...f, description: e.target.value }))}
+                                    style={{ height: '30px', fontSize: '12.5px', width: '100%', minWidth: '220px' }}
+                                  />
+                                ) : (
+                                  row.description || '—'
+                                )}
+                              </td>
+                              <td style={{ fontWeight: 700 }}>{row.site_code}</td>
+                              <td className="font-mono" style={{ textAlign: 'center', fontWeight: 800 }}>
+                                {isEditing ? (
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    className="form-input"
+                                    value={editStockForm.qty_on_hand}
+                                    onChange={(e) => setEditStockForm(f => ({ ...f, qty_on_hand: Math.max(0, parseInt(e.target.value, 10) || 0) }))}
+                                    style={{ height: '30px', fontSize: '12.5px', width: '72px', textAlign: 'center' }}
+                                  />
+                                ) : (
+                                  row.qty_on_hand
+                                )}
+                              </td>
+                              <td className="font-mono" style={{ textAlign: 'center' }}>
+                                {isEditing ? (
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    className="form-input"
+                                    value={editStockForm.min_stock_threshold}
+                                    onChange={(e) => setEditStockForm(f => ({ ...f, min_stock_threshold: Math.max(0, parseInt(e.target.value, 10) || 0) }))}
+                                    style={{ height: '30px', fontSize: '12.5px', width: '72px', textAlign: 'center' }}
+                                  />
+                                ) : (
+                                  row.min_stock_threshold ?? 2
+                                )}
+                              </td>
+                              <td>
+                                {row.last_source_pdf_ref ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => openCtSourcePdf?.(row.last_source_pdf_import_id || row.last_source_pdf_ref)}
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      padding: '2px 7px',
+                                      borderRadius: '999px',
+                                      background: '#eff6ff',
+                                      border: '1px solid #bfdbfe',
+                                      color: '#1d4ed8',
+                                      fontSize: '11px',
+                                      fontWeight: 700,
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    <FileText size={11} />
+                                    <span>PDF: {row.last_source_pdf_ref}</span>
+                                  </button>
+                                ) : '—'}
+                              </td>
+                              <td style={{ textAlign: 'right' }}>
+                                <div style={{ display: 'inline-flex', gap: '6px' }}>
+                                  {isEditing ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="btn btn-primary btn-sm"
+                                        onClick={() => {
+                                          updateCtStockRecord?.(row.id, editStockForm);
+                                          setEditingStockId(null);
+                                        }}
+                                      >
+                                        <Check size={13} /> Save
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() => setEditingStockId(null)}
+                                      >
+                                        Cancel
+                                      </button>
+                                    </>
+                                  ) : userCanEdit ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary btn-sm"
+                                      onClick={() => {
+                                        setEditingStockId(row.id);
+                                        setEditStockForm({
+                                          description: row.description || '',
+                                          qty_on_hand: Number(row.qty_on_hand) || 0,
+                                          min_stock_threshold: Number(row.min_stock_threshold ?? 2)
+                                        });
+                                      }}
+                                      style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                    >
+                                      <Pencil size={12} /> Edit
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  {renderCenterPaginationBar(paginateCenterRows(consumableRows))}
+                  </>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* SUB-TAB C: COMPLETE TOOLS & CONSUMABLES CATALOG (EDITABLE, PDF-SOURCED) */}
+          {assetsSubTab === 'catalog' && (() => {
+            const q = catalogSearch.trim().toLowerCase();
+            const filteredCatalog = (rawCtCatalog || []).filter(item => {
+              if (catalogKindFilter !== 'all' && item.item_kind !== catalogKindFilter) return false;
+              if (q) {
+                const hay = `${item.part_number || ''} ${item.description || ''} ${item.category || ''} ${item.source_pdf_ref || ''}`.toLowerCase();
+                if (!hay.includes(q)) return false;
+              }
+              return true;
+            });
+            const toolsCount = (rawCtCatalog || []).filter(i => i.item_kind === 'tool').length;
+            const consCount = (rawCtCatalog || []).filter(i => i.item_kind !== 'tool').length;
+
+            return (
+              <div className="card" style={{ borderRadius: '12px', border: '1px solid #e2e8f0', padding: 0, overflow: 'hidden' }}>
+                <div style={{ padding: '14px 18px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 800 }}>
+                      Complete Tools &amp; Consumables Catalog ({rawCtCatalog.length})
+                    </h3>
+                    <div style={{ fontSize: '12px', color: '#64748b' }}>
+                      Sourced directly from scanned Apple PDFs · Fully editable so you can update or correct any record
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'inline-flex', gap: '4px', background: '#f1f5f9', padding: '3px', borderRadius: '8px' }}>
+                      {[
+                        { key: 'all', label: `All (${rawCtCatalog.length})` },
+                        { key: 'tool', label: `Tools (${toolsCount})` },
+                        { key: 'consumable', label: `Consumables (${consCount})` }
+                      ].map(f => (
+                        <button
+                          key={f.key}
+                          type="button"
+                          onClick={() => setCatalogKindFilter(f.key)}
+                          style={{
+                            border: 'none',
+                            borderRadius: '6px',
+                            padding: '4px 10px',
+                            fontSize: '11.5px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            background: catalogKindFilter === f.key ? '#0f172a' : 'transparent',
+                            color: catalogKindFilter === f.key ? '#fff' : '#475569'
+                          }}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="Search catalog PN or description..."
+                      value={catalogSearch}
+                      onChange={(e) => setCatalogSearch(e.target.value)}
+                      style={{ height: '34px', fontSize: '12.5px', width: '215px' }}
+                    />
+                    {userCanEdit && (
+                      <>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          onClick={() => setAddingCatalogItem(v => !v)}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', height: '34px' }}
+                        >
+                          <Plus size={14} /> Add Item
+                        </button>
+                        {rawCtCatalog.length > 0 && (
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => {
+                              if (window.confirm(`Clear all ${rawCtCatalog.length} items from the Tools & Consumables Catalog so you can rebuild cleanly from scanned Apple PDFs?`)) {
+                                clearCtCatalog?.();
+                              }
+                            }}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', height: '34px', color: '#dc2626', borderColor: '#fecaca' }}
+                          >
+                            <Trash2 size={13} /> Clear Catalog
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {addingCatalogItem && (
+                  <div style={{ padding: '12px 18px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'grid', gridTemplateColumns: '150px 1fr 140px 110px auto', gap: '8px', alignItems: 'end' }}>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '11px', marginBottom: '3px' }}>Part Number *</label>
+                      <input
+                        type="text"
+                        className="form-input font-mono"
+                        placeholder="e.g. 077-01158"
+                        value={newCatForm.part_number}
+                        onChange={(e) => setNewCatForm(f => ({ ...f, part_number: e.target.value }))}
+                        style={{ height: '34px', width: '100%' }}
+                      />
+                    </div>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '11px', marginBottom: '3px' }}>Description *</label>
+                      <input
+                        type="text"
+                        className="form-input"
+                        placeholder="Exact Apple description..."
+                        value={newCatForm.description}
+                        onChange={(e) => setNewCatForm(f => ({ ...f, description: e.target.value }))}
+                        style={{ height: '34px', width: '100%' }}
+                      />
+                    </div>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '11px', marginBottom: '3px' }}>Type</label>
+                      <select
+                        className="form-select"
+                        value={newCatForm.item_kind}
+                        onChange={(e) => setNewCatForm(f => ({ ...f, item_kind: e.target.value }))}
+                        style={{ height: '34px', width: '100%' }}
+                      >
+                        <option value="tool">Tool</option>
+                        <option value="consumable">Consumable</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '11px', marginBottom: '3px' }}>USD Price</label>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        className="form-input font-mono"
+                        value={newCatForm.unit_cost}
+                        onChange={(e) => setNewCatForm(f => ({ ...f, unit_cost: Math.max(0, parseFloat(e.target.value) || 0) }))}
+                        style={{ height: '34px', width: '100%', textAlign: 'right' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        style={{ height: '34px' }}
+                        onClick={() => {
+                          const res = saveCtCatalogItem?.(newCatForm);
+                          if (res?.ok) {
+                            setNewCatForm({ part_number: '', description: '', item_kind: 'tool', unit_cost: 0 });
+                            setAddingCatalogItem(false);
+                          }
+                        }}
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        style={{ height: '34px' }}
+                        onClick={() => setAddingCatalogItem(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {filteredCatalog.length === 0 ? (
+                  <div style={{ padding: '40px 20px', textAlign: 'center', color: '#64748b' }}>
+                    No catalog items yet. Click <strong>Import CSV / Excel</strong> to populate the catalog directly from your Gemini-extracted CSV/XLSX files, or click <strong>+ Add Item</strong>.
+                  </div>
+                ) : (
+                  <>
+                  <div className="table-container" style={{ overflowX: 'auto' }}>
+                    <table className="data-table" style={{ width: '100%', fontSize: '12.5px' }}>
+                      <thead>
+                        <tr>
+                          <th style={{ width: '140px' }}>Part Number</th>
+                          <th>Description</th>
+                          <th style={{ width: '125px' }}>Type</th>
+                          <th style={{ width: '110px', textAlign: 'right' }}>USD Price</th>
+                          <th style={{ width: '150px' }}>Source Ref</th>
+                          <th style={{ width: '130px', textAlign: 'right' }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {paginateCenterRows(filteredCatalog).pageRows.map(item => {
+                          const isEditing = editingCatalogId === item.id;
+                          return (
+                            <tr key={item.id}>
+                              <td className="font-mono" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
+                                {isEditing ? (
+                                  <input
+                                    type="text"
+                                    className="form-input font-mono"
+                                    value={editCatForm.part_number}
+                                    onChange={(e) => setEditCatForm(f => ({ ...f, part_number: e.target.value }))}
+                                    style={{ height: '30px', width: '125px', fontSize: '12px' }}
+                                  />
+                                ) : (
+                                  item.part_number
+                                )}
+                              </td>
+                              <td>
+                                {isEditing ? (
+                                  <input
+                                    type="text"
+                                    className="form-input"
+                                    value={editCatForm.description}
+                                    onChange={(e) => setEditCatForm(f => ({ ...f, description: e.target.value }))}
+                                    style={{ height: '30px', width: '100%', minWidth: '220px', fontSize: '12px' }}
+                                  />
+                                ) : (
+                                  item.description
+                                )}
+                              </td>
+                              <td>
+                                {isEditing ? (
+                                  <select
+                                    className="form-select"
+                                    value={editCatForm.item_kind}
+                                    onChange={(e) => setEditCatForm(f => ({ ...f, item_kind: e.target.value }))}
+                                    style={{ height: '30px', width: '115px', fontSize: '12px' }}
+                                  >
+                                    <option value="tool">Tool</option>
+                                    <option value="consumable">Consumable</option>
+                                  </select>
+                                ) : (
+                                  <span
+                                    style={{
+                                      display: 'inline-block',
+                                      padding: '2px 8px',
+                                      borderRadius: '999px',
+                                      fontSize: '11px',
+                                      fontWeight: 700,
+                                      background: item.item_kind === 'tool' ? '#eff6ff' : '#ecfdf5',
+                                      color: item.item_kind === 'tool' ? '#1d4ed8' : '#047857'
+                                    }}
+                                  >
+                                    {item.item_kind === 'tool' ? 'Tool' : 'Consumable'}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="font-mono" style={{ textAlign: 'right', fontWeight: 700 }}>
+                                {isEditing ? (
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    step="0.01"
+                                    className="form-input font-mono"
+                                    value={editCatForm.unit_cost}
+                                    onChange={(e) => setEditCatForm(f => ({ ...f, unit_cost: Math.max(0, parseFloat(e.target.value) || 0) }))}
+                                    style={{ height: '30px', width: '90px', textAlign: 'right', fontSize: '12px' }}
+                                  />
+                                ) : (
+                                  `$${(Number(item.unit_cost) || 0).toFixed(2)}`
+                                )}
+                              </td>
+                              <td>
+                                {item.source_pdf_ref ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => openCtSourcePdf?.(item.source_pdf_import_id || item.source_pdf_ref)}
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      padding: '2px 7px',
+                                      borderRadius: '999px',
+                                      background: '#eff6ff',
+                                      border: '1px solid #bfdbfe',
+                                      color: '#1d4ed8',
+                                      fontSize: '11px',
+                                      fontWeight: 700,
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    <FileText size={11} />
+                                    <span>{item.source_pdf_ref}</span>
+                                  </button>
+                                ) : (
+                                  <span style={{ fontSize: '11px', color: '#94a3b8' }}>Manual / Legacy</span>
+                                )}
+                              </td>
+                              <td style={{ textAlign: 'right' }}>
+                                <div style={{ display: 'inline-flex', gap: '5px' }}>
+                                  {isEditing ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="btn btn-primary btn-sm"
+                                        onClick={() => {
+                                          const res = saveCtCatalogItem?.({ id: item.id, ...editCatForm });
+                                          if (res?.ok) setEditingCatalogId(null);
+                                        }}
+                                      >
+                                        <Check size={12} /> Save
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() => setEditingCatalogId(null)}
+                                      >
+                                        Cancel
+                                      </button>
+                                    </>
+                                  ) : userCanEdit ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() => {
+                                          setEditingCatalogId(item.id);
+                                          setEditCatForm({
+                                            part_number: item.part_number,
+                                            description: item.description,
+                                            item_kind: item.item_kind === 'tool' ? 'tool' : 'consumable',
+                                            unit_cost: Number(item.unit_cost) || 0
+                                          });
+                                        }}
+                                        title="Edit catalog item"
+                                      >
+                                        <Pencil size={12} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() => deleteCtCatalogItem?.(item.id)}
+                                        style={{ color: '#dc2626' }}
+                                        title="Remove from catalog"
+                                      >
+                                        <Trash2 size={12} />
+                                      </button>
+                                    </>
+                                  ) : null}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  {renderCenterPaginationBar(paginateCenterRows(filteredCatalog))}
+                  </>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -1399,11 +2601,17 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                 <ScanLine size={18} color="#0284c7" />
                 <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Receive Consumables & Tools</h3>
               </div>
-              <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '5px', marginBottom: 0 }}>
-                <UploadCloud size={14} />
-                <span>Bulk Receiving CSV</span>
-                <input type="file" accept=".csv" onChange={handleBulkCsvUpload} style={{ display: 'none' }} />
-              </label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => setPdfImportModalOpen(true)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                >
+                  <FileSpreadsheet size={14} />
+                  <span>Import CSV / Excel (XLSX)</span>
+                </button>
+              </div>
             </div>
 
             {recvFeedback && (
@@ -1431,19 +2639,6 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                   </span>
                 </div>
                 {!recvFeedback.ok && <div style={{ marginTop: '4px' }}>{recvFeedback.message}</div>}
-              </div>
-            )}
-
-            {bulkCsvSummary && (
-              <div style={{ padding: '10px 12px', borderRadius: '8px', marginBottom: '12px', background: '#f8fafc', border: '1px solid #cbd5e1', fontSize: '12px' }}>
-                <strong>Bulk CSV Summary:</strong> {bulkCsvSummary.processedCount} processed, {bulkCsvSummary.errorCount} rejected.
-                {bulkCsvSummary.errors?.length > 0 && (
-                  <ul style={{ margin: '6px 0 0 16px', padding: 0, color: '#b91c1c' }}>
-                    {bulkCsvSummary.errors.slice(0, 6).map((err, i) => (
-                      <li key={i}>Row {err.rowNumber} ({err.partNumber || 'N/A'}): {err.message}</li>
-                    ))}
-                  </ul>
-                )}
               </div>
             )}
 
@@ -1825,6 +3020,125 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                 );
               })}
             </div>
+          </div>
+
+          {/* CSV / Excel Import History Log */}
+          <div className="card" style={{ gridColumn: '1 / -1', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <FileSpreadsheet size={18} color="#059669" />
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 800 }}>
+                    CSV / Excel Import History Log ({ctPdfImports.length})
+                  </h3>
+                  <div style={{ fontSize: '12px', color: '#64748b' }}>
+                    Audit trail of all structured CSV &amp; Excel (XLSX) reports imported into Consumables &amp; Tools
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => setPdfImportModalOpen(true)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+              >
+                <FileSpreadsheet size={14} />
+                <span>Import CSV / Excel</span>
+              </button>
+            </div>
+
+            {ctPdfImports.length === 0 ? (
+              <div style={{ padding: '20px', textAlign: 'center', color: '#64748b', fontSize: '13px', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
+                No CSV or Excel reports imported yet. Click <strong>Import CSV / Excel (XLSX)</strong> to upload structured reports generated by Gemini.
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table className="data-table" style={{ width: '100%', fontSize: '12.5px' }}>
+                  <thead>
+                    <tr>
+                      <th>Imported At</th>
+                      <th>Report Ref / File</th>
+                      <th>Site</th>
+                      <th>Format</th>
+                      <th>Items Added</th>
+                      <th>Status</th>
+                      <th>Imported By</th>
+                      <th style={{ textAlign: 'right' }}>Source File</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ctPdfImports.map(imp => {
+                      const statusColors =
+                        imp.status === 'completed'
+                          ? { bg: '#dcfce7', fg: '#166534', label: 'COMPLETED' }
+                          : imp.status === 'partial'
+                            ? { bg: '#fef3c7', fg: '#92400e', label: 'PARTIAL' }
+                            : imp.status === 'duplicate_blocked'
+                              ? { bg: '#fee2e2', fg: '#991b1b', label: 'DUPLICATE BLOCKED' }
+                              : { bg: '#fee2e2', fg: '#991b1b', label: 'FAILED' };
+                      return (
+                        <tr key={imp.id}>
+                          <td style={{ whiteSpace: 'nowrap', fontSize: '12px' }}>
+                            <div>{imp.imported_at ? new Date(imp.imported_at).toLocaleDateString() : '—'}</div>
+                            <div style={{ fontSize: '11px', color: '#64748b' }}>
+                              {imp.imported_at ? formatTo12HourTime(imp.imported_at) : ''}
+                            </div>
+                          </td>
+                          <td>
+                            <div className="font-mono" style={{ fontWeight: 700, color: '#0f172a' }}>
+                              {imp.report_ref || '—'}
+                            </div>
+                            <div style={{ fontSize: '11.5px', color: '#64748b' }}>{imp.filename}</div>
+                          </td>
+                          <td style={{ fontWeight: 700 }}>{imp.site_code || '—'}</td>
+                          <td style={{ fontSize: '11.5px', color: '#475569', textTransform: 'uppercase', fontWeight: 700 }}>
+                            {imp.extraction_method || 'XLSX'}
+                          </td>
+                          <td>
+                            <div style={{ fontWeight: 700 }}>
+                              {imp.tools_created_count || 0} tool(s) · {imp.consumables_qty_added || 0} consumable(s)
+                            </div>
+                            <div style={{ fontSize: '11px', color: '#64748b' }}>
+                              {imp.items_imported_count || 0} line(s)
+                              {imp.drive_file_id ? ' · Drive Archived' : ''}
+                            </div>
+                          </td>
+                          <td>
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                padding: '2px 8px',
+                                borderRadius: '999px',
+                                fontSize: '10.5px',
+                                fontWeight: 800,
+                                background: statusColors.bg,
+                                color: statusColors.fg
+                              }}
+                            >
+                              {statusColors.label}
+                            </span>
+                          </td>
+                          <td>{imp.imported_by_name || '—'}</td>
+                          <td style={{ textAlign: 'right' }}>
+                            {imp.status !== 'duplicate_blocked' && (
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => openCtSourcePdf?.(imp)}
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                              >
+                                <Download size={13} />
+                                <span>File</span>
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2819,7 +4133,33 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                         <td className="font-mono" style={{ textAlign: 'center', fontWeight: 700 }}>{m.quantity}</td>
                         <td>{m.from_site_code || '—'} → {m.to_site_code || '—'}</td>
                         <td className="font-mono">{[...(m.serial_numbers || []), ...(m.asset_tags || [])].join(', ') || '—'}</td>
-                        <td className="font-mono">{m.reference_number || '—'}</td>
+                        <td className="font-mono">
+                          {m.source_pdf_import_id || m.source_pdf_ref ? (
+                            <button
+                              type="button"
+                              onClick={() => openCtSourcePdf?.(m.source_pdf_import_id || m.source_pdf_ref)}
+                              title={`Open source PDF: ${m.source_pdf_filename || m.source_pdf_ref || m.reference_number}`}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                padding: '2px 7px',
+                                borderRadius: '999px',
+                                background: '#eff6ff',
+                                border: '1px solid #bfdbfe',
+                                color: '#1d4ed8',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <FileText size={11} />
+                              <span>{m.reference_number || m.source_pdf_ref}</span>
+                            </button>
+                          ) : (
+                            m.reference_number || '—'
+                          )}
+                        </td>
                         <td>{m.performed_by_name}</td>
                       </tr>
                     ))}
@@ -3475,6 +4815,17 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
           </div>
         </div>
       )}
+      {/* CSV / Excel (XLSX) Tools & Consumables Import Modal */}
+      <CtSpreadsheetImportModal
+        isOpen={pdfImportModalOpen}
+        onClose={() => setPdfImportModalOpen(false)}
+        ctCatalog={ctCatalog}
+        ctToolAssets={ctToolAssets}
+        ctPdfImports={ctPdfImports}
+        sites={sites}
+        onCommitImport={commitCtPdfImport}
+        onOpenSourceFile={openCtSourcePdf}
+      />
     </div>
   );
 }

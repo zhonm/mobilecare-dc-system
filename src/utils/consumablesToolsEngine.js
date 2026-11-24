@@ -254,6 +254,8 @@ export function validateAndReceiveOrderLine({
   actorId = null,
   allowOverDelivery = true,
   allowAdHoc = false,
+  allowMissingSerials = false,
+  sourcePdfMeta = null,
   notes = '',
   timestamp = new Date().toISOString()
 }) {
@@ -327,7 +329,7 @@ export function validateAndReceiveOrderLine({
   }
 
   if (catalogItem.item_kind === 'tool') {
-    if (catalogItem.is_serialized && parsedSerials.serials.length !== qty) {
+    if (!allowMissingSerials && catalogItem.is_serialized && parsedSerials.serials.length !== qty) {
       return {
         ok: false,
         errorCode: 'QUANTITY_MISMATCH',
@@ -337,7 +339,17 @@ export function validateAndReceiveOrderLine({
         message: `Quantity mismatch for serialized tool ${cleanPn}: received qty is ${qty} but ${parsedSerials.serials.length} serial number(s) were scanned.`
       };
     }
-    if (!catalogItem.is_serialized && parsedSerials.serials.length > 0 && parsedSerials.serials.length !== qty) {
+    if (!allowMissingSerials && !catalogItem.is_serialized && parsedSerials.serials.length > 0 && parsedSerials.serials.length !== qty) {
+      return {
+        ok: false,
+        errorCode: 'QUANTITY_MISMATCH',
+        partNumber: cleanPn,
+        expectedQty: qty,
+        actualSerialCount: parsedSerials.serials.length,
+        message: `Quantity mismatch for tool ${cleanPn}: ${qty} unit(s) specified, but ${parsedSerials.serials.length} serial number(s) supplied.`
+      };
+    }
+    if (allowMissingSerials && parsedSerials.serials.length > qty) {
       return {
         ok: false,
         errorCode: 'QUANTITY_MISMATCH',
@@ -452,6 +464,7 @@ export function validateAndReceiveOrderLine({
         part_number: cleanPn,
         description: catalogItem.description,
         asset_tag: assetTag,
+        ownership_tag: catalogItem.ownership_tag || 'Apple-Owned',
         serial_number: serial,
         site_code: targetSite,
         order_id: updatedOrder?.id || null,
@@ -464,6 +477,12 @@ export function validateAndReceiveOrderLine({
         received_by_name: actorName,
         shipped_at: null,
         shipped_by_name: null,
+        ...(sourcePdfMeta ? {
+          source_pdf_import_id: sourcePdfMeta.importId || null,
+          source_pdf_ref: sourcePdfMeta.reportRef || null,
+          source_pdf_filename: sourcePdfMeta.filename || null,
+          source_pdf_url: sourcePdfMeta.driveUrl || null
+        } : {}),
         notes: notes || null,
         created_at: timestamp,
         updated_at: timestamp
@@ -485,10 +504,32 @@ export function validateAndReceiveOrderLine({
     const mergedSerials = Array.from(
       new Set([...(prev.serial_numbers || []), ...parsedSerials.serials])
     );
+    const prevPdfRefs = Array.isArray(prev.source_pdf_imports) ? prev.source_pdf_imports : [];
+    const nextPdfRefs = sourcePdfMeta?.importId
+      ? [
+          {
+            import_id: sourcePdfMeta.importId,
+            report_ref: sourcePdfMeta.reportRef || null,
+            filename: sourcePdfMeta.filename || null,
+            drive_url: sourcePdfMeta.driveUrl || null,
+            qty,
+            imported_at: timestamp
+          },
+          ...prevPdfRefs.filter(p => p.import_id !== sourcePdfMeta.importId)
+        ]
+      : prevPdfRefs;
     updatedStockRow = {
       ...prev,
+      ownership_tag: prev.ownership_tag || catalogItem.ownership_tag || 'Apple-Owned',
       qty_on_hand: (Number(prev.qty_on_hand) || 0) + qty,
       serial_numbers: mergedSerials,
+      ...(sourcePdfMeta ? {
+        last_source_pdf_import_id: sourcePdfMeta.importId || null,
+        last_source_pdf_ref: sourcePdfMeta.reportRef || null,
+        last_source_pdf_filename: sourcePdfMeta.filename || null,
+        last_source_pdf_url: sourcePdfMeta.driveUrl || null,
+        source_pdf_imports: nextPdfRefs
+      } : {}),
       last_received_at: timestamp,
       last_updated_by: actorId,
       last_updated_by_name: actorName,
@@ -502,6 +543,7 @@ export function validateAndReceiveOrderLine({
       part_number: cleanPn,
       description: catalogItem.description,
       item_kind: catalogItem.item_kind,
+      ownership_tag: catalogItem.ownership_tag || 'Apple-Owned',
       site_code: targetSite,
       qty_on_hand: qty,
       serial_numbers: [...parsedSerials.serials],
@@ -510,6 +552,20 @@ export function validateAndReceiveOrderLine({
       qty_shipped: 0,
       min_stock_threshold: Number(catalogItem.min_stock_threshold) || 2,
       reorder_qty: Number(catalogItem.reorder_qty) || 5,
+      ...(sourcePdfMeta ? {
+        last_source_pdf_import_id: sourcePdfMeta.importId || null,
+        last_source_pdf_ref: sourcePdfMeta.reportRef || null,
+        last_source_pdf_filename: sourcePdfMeta.filename || null,
+        last_source_pdf_url: sourcePdfMeta.driveUrl || null,
+        source_pdf_imports: [{
+          import_id: sourcePdfMeta.importId,
+          report_ref: sourcePdfMeta.reportRef || null,
+          filename: sourcePdfMeta.filename || null,
+          drive_url: sourcePdfMeta.driveUrl || null,
+          qty,
+          imported_at: timestamp
+        }]
+      } : {}),
       last_received_at: timestamp,
       last_updated_by: actorId,
       last_updated_by_name: actorName,
@@ -538,11 +594,17 @@ export function validateAndReceiveOrderLine({
     quantity: qty,
     serial_numbers: parsedSerials.serials,
     asset_tags: newAssetTags,
-    from_site_code: updatedOrder?.supplier || 'APPLE',
+    from_site_code: updatedOrder?.supplier || sourcePdfMeta?.supplier || 'APPLE',
     to_site_code: targetSite,
-    reference_type: updatedOrder ? 'order' : 'ad_hoc_receipt',
-    reference_id: updatedOrder?.id || null,
-    reference_number: updatedOrder?.po_number || 'DIRECT-SCAN',
+    reference_type: sourcePdfMeta ? 'pdf_import' : (updatedOrder ? 'order' : 'ad_hoc_receipt'),
+    reference_id: sourcePdfMeta?.importId || updatedOrder?.id || null,
+    reference_number: sourcePdfMeta?.reportRef || updatedOrder?.po_number || 'DIRECT-SCAN',
+    ...(sourcePdfMeta ? {
+      source_pdf_import_id: sourcePdfMeta.importId || null,
+      source_pdf_ref: sourcePdfMeta.reportRef || null,
+      source_pdf_filename: sourcePdfMeta.filename || null,
+      source_pdf_url: sourcePdfMeta.driveUrl || null
+    } : {}),
     performed_by: actorId,
     performed_by_name: actorName,
     notes: combinedNotes,
@@ -561,12 +623,20 @@ export function validateAndReceiveOrderLine({
     asset_tags: newAssetTags,
     from_site_code: 'RECEIVING_DOCK',
     to_site_code: targetSite,
-    reference_type: 'stock',
-    reference_id: updatedStockRow.id,
-    reference_number: `${targetSite}-STOCK`,
+    reference_type: sourcePdfMeta ? 'pdf_import' : 'stock',
+    reference_id: sourcePdfMeta?.importId || updatedStockRow.id,
+    reference_number: sourcePdfMeta?.reportRef || `${targetSite}-STOCK`,
+    ...(sourcePdfMeta ? {
+      source_pdf_import_id: sourcePdfMeta.importId || null,
+      source_pdf_ref: sourcePdfMeta.reportRef || null,
+      source_pdf_filename: sourcePdfMeta.filename || null,
+      source_pdf_url: sourcePdfMeta.driveUrl || null
+    } : {}),
     performed_by: actorId,
     performed_by_name: actorName,
-    notes: `Placed ${qty} ${catalogItem.item_kind === 'tool' ? 'tool(s)' : 'unit(s)'} into ${targetSite} available inventory`,
+    notes: sourcePdfMeta
+      ? `Imported from Apple PDF (${sourcePdfMeta.filename || sourcePdfMeta.reportRef}) into ${targetSite} inventory`
+      : `Placed ${qty} ${catalogItem.item_kind === 'tool' ? 'tool(s)' : 'unit(s)'} into ${targetSite} available inventory`,
     created_at: timestamp
   };
 
@@ -740,6 +810,7 @@ export function updateToolAssetMetadata({
   toolAssets = [],
   assetId,
   adminAssetTag,
+  ownershipTag,
   assignedTo,
   actorName = 'Admin',
   actorId = null,
@@ -755,6 +826,9 @@ export function updateToolAssetMetadata({
   const nextAdminTag = adminAssetTag !== undefined
     ? (String(adminAssetTag || '').trim() || null)
     : (current.admin_asset_tag || null);
+  const nextOwnershipTag = ownershipTag !== undefined
+    ? (String(ownershipTag || '').trim() || 'Apple-Owned')
+    : (current.ownership_tag || 'Apple-Owned');
   const nextAssignedTo = assignedTo !== undefined
     ? (String(assignedTo || '').trim() || null)
     : (current.assigned_to || null);
@@ -774,17 +848,20 @@ export function updateToolAssetMetadata({
   }
 
   const prevAdminTag = current.admin_asset_tag || null;
+  const prevOwnershipTag = current.ownership_tag || 'Apple-Owned';
   const prevAssignedTo = current.assigned_to || null;
   const tagChanged = prevAdminTag !== nextAdminTag;
+  const ownershipChanged = prevOwnershipTag !== nextOwnershipTag;
   const assigneeChanged = prevAssignedTo !== nextAssignedTo;
 
-  if (!tagChanged && !assigneeChanged) {
+  if (!tagChanged && !ownershipChanged && !assigneeChanged) {
     return { ok: true, changed: false, updatedAsset: current, nextToolAssets: toolAssets, movement: null };
   }
 
   const updated = {
     ...current,
     admin_asset_tag: nextAdminTag,
+    ownership_tag: nextOwnershipTag,
     assigned_to: nextAssignedTo,
     assigned_at: assigneeChanged ? (nextAssignedTo ? timestamp : null) : current.assigned_at,
     updated_at: timestamp
@@ -796,6 +873,9 @@ export function updateToolAssetMetadata({
   const changeParts = [];
   if (tagChanged) {
     changeParts.push(`Admin Tag: ${prevAdminTag || '—'} → ${nextAdminTag || '—'}`);
+  }
+  if (ownershipChanged) {
+    changeParts.push(`Ownership Tag: ${prevOwnershipTag} → ${nextOwnershipTag}`);
   }
   if (assigneeChanged) {
     changeParts.push(`Assigned To: ${prevAssignedTo || '—'} → ${nextAssignedTo || '—'}`);

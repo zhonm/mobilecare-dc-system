@@ -32,7 +32,8 @@ export function buildCtSnapshotPayload(state = {}, meta = {}) {
     stock: Array.isArray(state.stock) ? state.stock : [],
     toolAssets: Array.isArray(state.toolAssets) ? state.toolAssets : [],
     movements: Array.isArray(state.movements) ? state.movements : [],
-    shipments: Array.isArray(state.shipments) ? state.shipments : []
+    shipments: Array.isArray(state.shipments) ? state.shipments : [],
+    pdfImports: Array.isArray(state.pdfImports) ? state.pdfImports : []
   };
 }
 
@@ -52,7 +53,8 @@ export function extractCtStateFromSnapshot(snapshotData) {
     Array.isArray(snapshotData.stock) ||
     Array.isArray(snapshotData.toolAssets) ||
     Array.isArray(snapshotData.movements) ||
-    Array.isArray(snapshotData.shipments);
+    Array.isArray(snapshotData.shipments) ||
+    Array.isArray(snapshotData.pdfImports);
 
   if (!hasAnyCollection) return null;
 
@@ -63,6 +65,7 @@ export function extractCtStateFromSnapshot(snapshotData) {
     toolAssets: Array.isArray(snapshotData.toolAssets) ? snapshotData.toolAssets : [],
     movements: Array.isArray(snapshotData.movements) ? snapshotData.movements : [],
     shipments: Array.isArray(snapshotData.shipments) ? snapshotData.shipments : [],
+    pdfImports: Array.isArray(snapshotData.pdfImports) ? snapshotData.pdfImports : [],
     updatedAt: snapshotData.updatedAt || null,
     clientId: snapshotData.clientId || null,
     updatedBy: snapshotData.updatedBy || null,

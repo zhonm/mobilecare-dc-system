@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../supabase/client.js';
 import dbStorage from '../utils/dbStorage.js';
-import consumablesToolsSeed from '../data/consumablesToolsSeed.json' with { type: 'json' };
 import {
   importPriorityPartsFromCsv,
   mergePriorityCatalogAndOrders
@@ -30,6 +29,12 @@ import {
   createConsumablesToolsShipment,
   confirmConsumablesToolsDelivery
 } from '../utils/consumablesToolsEngine.js';
+import {
+  detectDuplicateSpreadsheetImport,
+  validateSpreadsheetImportDraft,
+  parseReportRefList
+} from '../utils/ctSpreadsheetImporter.js';
+import { uploadCtApplePdfReportToDrive } from '../services/driveAutoSyncService.js';
 
 const LS_KEYS = {
   catalog: 'mdc_ct_catalog',
@@ -37,7 +42,8 @@ const LS_KEYS = {
   stock: 'mdc_ct_stock',
   toolAssets: 'mdc_ct_tool_assets',
   movements: 'mdc_ct_movements',
-  shipments: 'mdc_ct_shipments'
+  shipments: 'mdc_ct_shipments',
+  pdfImports: 'mdc_ct_pdf_imports'
 };
 
 function readStorageJson(key, fallback) {
@@ -68,6 +74,7 @@ export function useConsumablesAndTools({
   currentUser,
   getCurrentUser,
   parts = [],
+  savePart = null,
   showToast,
   logAuditEvent
 }) {
@@ -80,12 +87,8 @@ export function useConsumablesAndTools({
     };
   }, [currentUser, getCurrentUser]);
 
-  const [ctCatalog, setCtCatalog] = useState(() => {
-    const saved = readStorageJson(LS_KEYS.catalog, []);
-    const seedItems = Array.isArray(consumablesToolsSeed?.catalogItems) ? consumablesToolsSeed.catalogItems : [];
-    const merged = mergePriorityCatalogAndOrders(saved, [], { catalogItems: seedItems, orders: [] });
-    return merged.catalog || [];
-  });
+  // Start from persisted/cloud CT catalog without re-injecting legacy seed items
+  const [ctCatalog, setCtCatalog] = useState(() => readStorageJson(LS_KEYS.catalog, []));
 
   // Unify Priority Consumables/Tools definitions with Settings -> Parts Master Catalog
   // so Consumables & Tools relies on the existing system Parts Master Catalog without a duplicate catalog UI.
@@ -110,7 +113,8 @@ export function useConsumablesAndTools({
         category: part.category || 'Master Catalog',
         unit_of_measure: inferredKind === 'tool' ? 'unit' : 'pcs',
         pack_size: 1,
-        unit_cost: Number(part.stock_price ?? part.unit_cost ?? 0) || 0,
+        unit_cost: Number(part.stocking_price ?? part.stock_price ?? part.unit_cost ?? 0) || 0,
+        stocking_price: Number(part.stocking_price ?? part.stock_price ?? part.unit_cost ?? 0) || 0,
         is_serialized: false,
         min_stock_threshold: 2,
         reorder_qty: 5,
@@ -124,9 +128,7 @@ export function useConsumablesAndTools({
 
   const [ctOrders, setCtOrders] = useState(() => {
     const saved = readStorageJson(LS_KEYS.orders, []);
-    const seedOrders = Array.isArray(consumablesToolsSeed?.orders) ? consumablesToolsSeed.orders : [];
-    const merged = mergePriorityCatalogAndOrders([], saved, { catalogItems: [], orders: seedOrders });
-    return normalizeLegacyCtOrders(merged.orders);
+    return normalizeLegacyCtOrders(saved);
   });
 
   const [ctStock, setCtStock] = useState(() => readStorageJson(LS_KEYS.stock, []));
@@ -136,6 +138,7 @@ export function useConsumablesAndTools({
     return stripSeedMovements(saved);
   });
   const [ctShipments, setCtShipments] = useState(() => readStorageJson(LS_KEYS.shipments, []));
+  const [ctPdfImports, setCtPdfImports] = useState(() => readStorageJson(LS_KEYS.pdfImports, []));
   const [ctSyncStatus, setCtSyncStatus] = useState({
     isSyncing: false,
     lastSyncedAt: null,
@@ -153,7 +156,8 @@ export function useConsumablesAndTools({
     stock: ctStock,
     toolAssets: ctToolAssets,
     movements: ctMovements,
-    shipments: ctShipments
+    shipments: ctShipments,
+    pdfImports: ctPdfImports
   });
 
   useEffect(() => {
@@ -163,9 +167,10 @@ export function useConsumablesAndTools({
       stock: ctStock,
       toolAssets: ctToolAssets,
       movements: ctMovements,
-      shipments: ctShipments
+      shipments: ctShipments,
+      pdfImports: ctPdfImports
     };
-  }, [ctCatalog, ctOrders, ctStock, ctToolAssets, ctMovements, ctShipments]);
+  }, [ctCatalog, ctOrders, ctStock, ctToolAssets, ctMovements, ctShipments, ctPdfImports]);
 
   const applyRemoteCtState = useCallback((remoteState, { force = false } = {}) => {
     if (!remoteState) return false;
@@ -191,7 +196,8 @@ export function useConsumablesAndTools({
       movements: Array.isArray(remoteState.movements)
         ? stripSeedMovements(remoteState.movements)
         : latestStateRef.current.movements,
-      shipments: Array.isArray(remoteState.shipments) ? remoteState.shipments : latestStateRef.current.shipments
+      shipments: Array.isArray(remoteState.shipments) ? remoteState.shipments : latestStateRef.current.shipments,
+      pdfImports: Array.isArray(remoteState.pdfImports) ? remoteState.pdfImports : latestStateRef.current.pdfImports
     };
 
     latestStateRef.current = nextState;
@@ -201,6 +207,7 @@ export function useConsumablesAndTools({
     setCtToolAssets(nextState.toolAssets);
     setCtMovements(nextState.movements);
     setCtShipments(nextState.shipments);
+    setCtPdfImports(nextState.pdfImports);
 
     persistDual(LS_KEYS.catalog, nextState.catalog);
     persistDual(LS_KEYS.orders, nextState.orders);
@@ -208,6 +215,7 @@ export function useConsumablesAndTools({
     persistDual(LS_KEYS.toolAssets, nextState.toolAssets);
     persistDual(LS_KEYS.movements, nextState.movements);
     persistDual(LS_KEYS.shipments, nextState.shipments);
+    persistDual(LS_KEYS.pdfImports, nextState.pdfImports);
 
     if (remoteState.updatedAt) {
       localUpdatedAtRef.current = remoteState.updatedAt;
@@ -269,7 +277,8 @@ export function useConsumablesAndTools({
       stock: partialNext.stock ?? latestStateRef.current.stock,
       toolAssets: partialNext.toolAssets ?? latestStateRef.current.toolAssets,
       movements: partialNext.movements ?? latestStateRef.current.movements,
-      shipments: partialNext.shipments ?? latestStateRef.current.shipments
+      shipments: partialNext.shipments ?? latestStateRef.current.shipments,
+      pdfImports: partialNext.pdfImports ?? latestStateRef.current.pdfImports
     };
     latestStateRef.current = nextState;
 
@@ -369,13 +378,14 @@ export function useConsumablesAndTools({
     let cancelled = false;
     (async () => {
       try {
-        const [dbCat, dbOrd, dbStk, dbAssets, dbMov, dbShp] = await Promise.all([
+        const [dbCat, dbOrd, dbStk, dbAssets, dbMov, dbShp, dbPdfImp] = await Promise.all([
           dbStorage.getItem(LS_KEYS.catalog),
           dbStorage.getItem(LS_KEYS.orders),
           dbStorage.getItem(LS_KEYS.stock),
           dbStorage.getItem(LS_KEYS.toolAssets),
           dbStorage.getItem(LS_KEYS.movements),
-          dbStorage.getItem(LS_KEYS.shipments)
+          dbStorage.getItem(LS_KEYS.shipments),
+          dbStorage.getItem(LS_KEYS.pdfImports)
         ]);
         if (cancelled) return;
 
@@ -406,6 +416,9 @@ export function useConsumablesAndTools({
         }
         if (Array.isArray(dbShp) && dbShp.length > 0) {
           setCtShipments(prev => (prev.length >= dbShp.length ? prev : dbShp));
+        }
+        if (Array.isArray(dbPdfImp) && dbPdfImp.length > 0) {
+          setCtPdfImports(prev => (prev.length >= dbPdfImp.length ? prev : dbPdfImp));
         }
       } catch {
         // IndexedDB optional in non-browser/test environments
@@ -641,6 +654,61 @@ export function useConsumablesAndTools({
     recordAudit('CT_CATALOG_SAVED', cleanPn, { performed_by: actor.name });
     showToast?.(`Saved catalog item ${cleanPn}`, 'success');
     return { ok: true, item: savedItem };
+  }, [resolveActor, commitAndSyncState, recordAudit, showToast]);
+
+  const deleteCtCatalogItem = useCallback((catalogId) => {
+    const actor = resolveActor();
+    const existing = latestStateRef.current.catalog.find(c => c.id === catalogId);
+    if (!existing) return { ok: false, message: 'Catalog item not found.' };
+    const nextCatalog = latestStateRef.current.catalog.filter(c => c.id !== catalogId);
+    setCtCatalog(nextCatalog);
+    persistDual(LS_KEYS.catalog, nextCatalog);
+    commitAndSyncState({ catalog: nextCatalog }, { reason: 'catalog_deleted', actorName: actor.name });
+    recordAudit('CT_CATALOG_DELETED', existing.part_number, { performed_by: actor.name });
+    showToast?.(`Removed ${existing.part_number} from Tools & Consumables Catalog`, 'info');
+    return { ok: true };
+  }, [resolveActor, commitAndSyncState, recordAudit, showToast]);
+
+  const clearCtCatalog = useCallback(() => {
+    const actor = resolveActor();
+    setCtCatalog([]);
+    persistDual(LS_KEYS.catalog, []);
+    commitAndSyncState({ catalog: [] }, { reason: 'catalog_cleared', actorName: actor.name });
+    recordAudit('CT_CATALOG_CLEARED', 'ALL', { performed_by: actor.name });
+    showToast?.('Cleared old Tools & Consumables Catalog. Ready for PDF-sourced catalog items.', 'success');
+    return { ok: true };
+  }, [resolveActor, commitAndSyncState, recordAudit, showToast]);
+
+  const updateCtStockRecord = useCallback((stockId, updates = {}) => {
+    const actor = resolveActor();
+    const now = new Date().toISOString();
+    const prevStock = latestStateRef.current.stock;
+    const idx = prevStock.findIndex(s => s.id === stockId);
+    if (idx < 0) return { ok: false, message: 'Consumable stock record not found.' };
+
+    const existing = prevStock[idx];
+    const nextQty = updates.qty_on_hand !== undefined ? Math.max(0, parseInt(updates.qty_on_hand, 10) || 0) : existing.qty_on_hand;
+    const nextMin = updates.min_stock_threshold !== undefined ? Math.max(0, parseInt(updates.min_stock_threshold, 10) || 0) : existing.min_stock_threshold;
+    const updatedRow = {
+      ...existing,
+      part_number: updates.part_number ? normalizePartNumber(updates.part_number) : existing.part_number,
+      description: updates.description !== undefined ? String(updates.description).trim() : existing.description,
+      qty_on_hand: nextQty,
+      min_stock_threshold: nextMin,
+      last_updated_by: actor.id,
+      last_updated_by_name: actor.name,
+      updated_at: now
+    };
+    const nextStock = prevStock.map(s => (s.id === stockId ? updatedRow : s));
+    setCtStock(nextStock);
+    persistDual(LS_KEYS.stock, nextStock);
+    commitAndSyncState({ stock: nextStock }, { reason: 'ct_stock_updated', actorName: actor.name });
+    recordAudit('CT_STOCK_UPDATED', `${updatedRow.part_number} (${updatedRow.site_code})`, {
+      qty_on_hand: updatedRow.qty_on_hand,
+      performed_by: actor.name
+    });
+    showToast?.(`Updated consumable record ${updatedRow.part_number}`, 'success');
+    return { ok: true, stockRow: updatedRow };
   }, [resolveActor, commitAndSyncState, recordAudit, showToast]);
 
   const addCtOrder = useCallback((orderPayload) => {
@@ -1069,12 +1137,13 @@ export function useConsumablesAndTools({
     return res;
   }, [resolveActor, ctToolAssets, appendMovements, commitAndSyncState, showToast]);
 
-  const updateToolMetadata = useCallback(({ assetId, adminAssetTag, assignedTo, notes = '' }) => {
+  const updateToolMetadata = useCallback(({ assetId, adminAssetTag, ownershipTag, assignedTo, notes = '' }) => {
     const actor = resolveActor();
     const res = updateToolAssetMetadata({
       toolAssets: ctToolAssets,
       assetId,
       adminAssetTag,
+      ownershipTag,
       assignedTo,
       actorName: actor.name,
       actorId: actor.id,
@@ -1254,6 +1323,464 @@ export function useConsumablesAndTools({
     return { ...imported, catalog: nextCatalog, catalogItems: nextCatalog, orders: merged.orders };
   }, [resolveActor, ctCatalog, ctOrders, commitAndSyncState, showToast]);
 
+  const commitCtPdfImport = useCallback(async ({
+    file = null,
+    pdfBytes = null,
+    fileHash = '',
+    filename = 'Apple_Tools_Report.pdf',
+    fileSize = 0,
+    pageCount = 1,
+    extractionMethod = 'ocr',
+    ocrConfidence = null,
+    reportRef = '',
+    poNumber = '',
+    siteCode = 'DC-MDC',
+    documentDate = '',
+    supplier = 'Apple South Asia Pte Ltd',
+    notes = '',
+    items = [],
+    allowDuplicateOverride = false
+  }) => {
+    const actor = resolveActor();
+    const now = new Date().toISOString();
+    const parsedRefs = parseReportRefList(reportRef);
+    const cleanRef = parsedRefs.length > 0 ? parsedRefs.join(', ') : String(reportRef || '').trim().toUpperCase();
+    const cleanSite = String(siteCode || 'DC-MDC').trim() || 'DC-MDC';
+    const existingImports = latestStateRef.current.pdfImports || [];
+
+    // 1. Duplicate check
+    const dupCheck = detectDuplicateSpreadsheetImport({
+      fileHash,
+      filename,
+      reportRef: cleanRef,
+      existingImports
+    });
+
+    if (dupCheck.isDuplicate && !allowDuplicateOverride) {
+      const blockedRecord = {
+        id: generateCtId('ct-pdf'),
+        filename,
+        file_size: fileSize,
+        file_hash: fileHash,
+        report_ref: cleanRef,
+        po_number: poNumber || null,
+        site_code: cleanSite,
+        document_date: documentDate || now.slice(0, 10),
+        supplier,
+        extraction_method: extractionMethod,
+        ocr_confidence: ocrConfidence,
+        page_count: pageCount,
+        status: 'duplicate_blocked',
+        items_imported_count: 0,
+        tools_created_count: 0,
+        consumables_qty_added: 0,
+        errors: [dupCheck.message],
+        imported_part_numbers: [],
+        imported_asset_tags: [],
+        imported_by: actor.id,
+        imported_by_name: actor.name,
+        imported_at: now,
+        notes: notes || dupCheck.message
+      };
+      const nextImports = [blockedRecord, ...existingImports];
+      setCtPdfImports(nextImports);
+      persistDual(LS_KEYS.pdfImports, nextImports);
+      commitAndSyncState({ pdfImports: nextImports }, { reason: 'ct_pdf_duplicate_blocked', actorName: actor.name });
+      showToast?.(dupCheck.message, 'error');
+      return { ok: false, errorCode: 'DUPLICATE_PDF_REPORT', message: dupCheck.message, duplicateCheck: dupCheck };
+    }
+
+    // 2. Validation rules check
+    const validation = validateSpreadsheetImportDraft({
+      reportRef: cleanRef,
+      siteCode: cleanSite,
+      documentDate,
+      items,
+      duplicateCheck: dupCheck,
+      existingToolAssets: latestStateRef.current.toolAssets,
+      allowDuplicateOverride
+    });
+
+    if (!validation.valid) {
+      const firstErr = validation.documentErrors[0] || Object.values(validation.rowErrors)[0]?.[0] || 'Validation failed.';
+      showToast?.(firstErr, 'error');
+      return { ok: false, errorCode: 'VALIDATION_FAILED', message: firstErr, validation };
+    }
+
+    const importId = generateCtId('ct-pdf');
+    const localBlobKey = `mdc_ct_pdf_blob_${importId}`;
+
+    // 3. Persist original CSV/XLSX locally in IndexedDB for instant auditing & offline fallback
+    try {
+      let bytesToStore = pdfBytes;
+      if (!bytesToStore && file && typeof file.arrayBuffer === 'function') {
+        bytesToStore = new Uint8Array(await file.arrayBuffer());
+      }
+      if (bytesToStore && bytesToStore.length > 0) {
+        const lowerName = String(filename || '').toLowerCase();
+        const mimeType = lowerName.endsWith('.csv')
+          ? 'text/csv'
+          : lowerName.endsWith('.xlsx')
+            ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            : lowerName.endsWith('.xls')
+              ? 'application/vnd.ms-excel'
+              : 'application/octet-stream';
+        await dbStorage.setItem(localBlobKey, {
+          filename,
+          mimeType,
+          bytes: Array.from(bytesToStore),
+          savedAt: now
+        });
+      }
+    } catch {
+      // Non-blocking IndexedDB blob storage
+    }
+
+    // 4. Archive original PDF in Google Drive (if configured)
+    let driveMeta = {
+      drive_file_id: null,
+      drive_web_view_link: null,
+      drive_filename: null,
+      drive_folder_name: null
+    };
+    if (file || pdfBytes) {
+      try {
+        const driveRes = await uploadCtApplePdfReportToDrive({
+          file: file || pdfBytes,
+          siteCode: cleanSite,
+          reportRef: cleanRef,
+          importId,
+          originalFilename: filename
+        });
+        if (driveRes.success && driveRes.fileId) {
+          driveMeta = {
+            drive_file_id: driveRes.fileId,
+            drive_web_view_link: driveRes.webViewLink || null,
+            drive_filename: driveRes.filename || filename,
+            drive_folder_name: driveRes.siteFolder || driveRes.folderName || null
+          };
+        }
+      } catch {
+        // Non-blocking Google Drive archive
+      }
+    }
+
+    const sourcePdfMeta = {
+      importId,
+      reportRef: cleanRef,
+      filename,
+      supplier,
+      driveUrl: driveMeta.drive_web_view_link || null,
+      localBlobKey
+    };
+
+    // 5. Ensure any newly discovered parts are added to BOTH ctCatalog AND the system Parts Master Catalog (with USD price)
+    let workingRawCatalog = [...latestStateRef.current.catalog];
+    const workingUnifiedCatalog = [...unifiedCatalog];
+    const selectedItems = (items || []).filter(it => it && it.selected !== false);
+    const existingMasterPartsSet = new Set(
+      (parts || []).map(p => normalizePartNumber(p.part_number)).filter(Boolean)
+    );
+    const addedToMasterCatalog = [];
+
+    for (const item of selectedItems) {
+      const cleanPn = normalizePartNumber(item.part_number);
+      const cleanDesc = String(item.description || cleanPn).trim();
+      const usdPrice = Math.max(0, Number(item.unit_cost) || 0);
+      const existsInUnified = workingUnifiedCatalog.some(c => normalizePartNumber(c.part_number) === cleanPn);
+      const existsInRaw = workingRawCatalog.some(c => normalizePartNumber(c.part_number) === cleanPn);
+
+      // Auto-add missing part to the system Parts Master Catalog (Settings -> Parts Catalog) with its USD price
+      if (cleanPn && !existingMasterPartsSet.has(cleanPn) && typeof savePart === 'function') {
+        try {
+          const partRes = await savePart({
+            part_number: cleanPn,
+            description: cleanDesc,
+            stocking_price: usdPrice > 0 ? usdPrice : 0,
+            part_type: item.item_kind === 'tool' ? 'Tool' : 'Consumable',
+            is_active: true
+          });
+          if (partRes?.success !== false) {
+            existingMasterPartsSet.add(cleanPn);
+            addedToMasterCatalog.push(cleanPn);
+          }
+        } catch {
+          // Non-blocking: continue CT import even if master catalog upsert fails
+        }
+      }
+
+      if (!existsInRaw) {
+        const newCatEntry = {
+          id: generateCtId('ct-cat'),
+          part_number: cleanPn,
+          description: cleanDesc,
+          item_kind: item.item_kind === 'tool' ? 'tool' : 'consumable',
+          category: item.item_kind === 'tool' ? 'Service Tools' : 'Consumables',
+          unit_of_measure: item.item_kind === 'tool' ? 'unit' : 'pcs',
+          pack_size: 1,
+          unit_cost: usdPrice,
+          is_serialized: Array.isArray(item.serial_numbers) && item.serial_numbers.length > 0,
+          min_stock_threshold: item.item_kind === 'tool' ? 1 : 2,
+          reorder_qty: item.item_kind === 'tool' ? 1 : 5,
+          is_synthetic_sku: false,
+          needs_review: false,
+          is_active: true,
+          source_pdf_import_id: importId,
+          source_pdf_ref: cleanRef,
+          source_pdf_filename: filename,
+          created_at: now,
+          updated_at: now
+        };
+        workingRawCatalog.unshift(newCatEntry);
+        if (!existsInUnified) workingUnifiedCatalog.unshift(newCatEntry);
+      } else {
+        // Always update existing ctCatalog entry with the scanned PDF's verified description, type & USD price
+        const rawIdx = workingRawCatalog.findIndex(c => normalizePartNumber(c.part_number) === cleanPn);
+        if (rawIdx >= 0) {
+          workingRawCatalog[rawIdx] = {
+            ...workingRawCatalog[rawIdx],
+            description: cleanDesc || workingRawCatalog[rawIdx].description,
+            item_kind: item.item_kind === 'tool' ? 'tool' : 'consumable',
+            unit_cost: usdPrice > 0 ? usdPrice : Number(workingRawCatalog[rawIdx].unit_cost || 0),
+            source_pdf_import_id: importId,
+            source_pdf_ref: cleanRef,
+            source_pdf_filename: filename,
+            updated_at: now
+          };
+        }
+      }
+      if (existsInUnified) {
+        const idx = workingUnifiedCatalog.findIndex(c => normalizePartNumber(c.part_number) === cleanPn);
+        if (idx >= 0) {
+          workingUnifiedCatalog[idx] = {
+            ...workingUnifiedCatalog[idx],
+            description: cleanDesc || workingUnifiedCatalog[idx].description,
+            item_kind: item.item_kind === 'tool' ? 'tool' : 'consumable',
+            unit_cost: usdPrice > 0 ? usdPrice : Number(workingUnifiedCatalog[idx].unit_cost || 0)
+          };
+        }
+      }
+    }
+
+    // 6. Receive every selected tool/consumable into stock & toolAssets with full source PDF traceability
+    let workingOrders = [...latestStateRef.current.orders];
+    let workingStock = [...latestStateRef.current.stock];
+    let workingAssets = [...latestStateRef.current.toolAssets];
+    const allMovements = [];
+    const importedPartNumbers = [];
+    const importedAssetTags = [];
+    const itemErrors = [];
+    let toolsCreatedCount = 0;
+    let consumablesQtyAdded = 0;
+    let itemsImportedCount = 0;
+
+    const linkedOrder = poNumber
+      ? workingOrders.find(o => o.po_number.toUpperCase() === String(poNumber).trim().toUpperCase())
+      : null;
+
+    for (const item of selectedItems) {
+      const cleanPn = normalizePartNumber(item.part_number);
+      const qty = parseInt(item.quantity, 10) || 1;
+      const serials = Array.isArray(item.serial_numbers)
+        ? item.serial_numbers.map(s => String(s || '').trim().toUpperCase()).filter(Boolean)
+        : String(item.serial_numbers || '')
+            .split(/[\n,;]+/)
+            .map(s => s.trim().toUpperCase())
+            .filter(Boolean);
+
+      const rowSiteCode = String(item.site_code || cleanSite || 'DC-MDC').trim() || 'DC-MDC';
+      const rowSourceMeta = item.report_ref
+        ? { ...sourcePdfMeta, reportRef: item.report_ref }
+        : sourcePdfMeta;
+
+      const res = validateAndReceiveOrderLine({
+        order: linkedOrder ? workingOrders.find(o => o.id === linkedOrder.id) : null,
+        partNumber: cleanPn,
+        deliveredQty: qty,
+        scannedSerials: serials,
+        siteCode: rowSiteCode,
+        catalogItems: workingUnifiedCatalog,
+        stockRows: workingStock,
+        toolAssets: workingAssets,
+        actorName: actor.name,
+        actorId: actor.id,
+        allowOverDelivery: true,
+        allowAdHoc: true,
+        allowMissingSerials: true,
+        sourcePdfMeta: rowSourceMeta,
+        notes: item.notes || (notes
+          ? `Import ${item.report_ref || cleanRef} · ${notes}`
+          : `Imported from ${filename}`),
+        timestamp: now
+      });
+
+      if (!res.ok) {
+        itemErrors.push(`${cleanPn}: ${res.message}`);
+        continue;
+      }
+
+      if (res.updatedOrder) {
+        workingOrders = workingOrders.map(o => (o.id === res.updatedOrder.id ? res.updatedOrder : o));
+      }
+      workingStock = res.nextStockRows;
+      workingAssets = res.nextToolAssets;
+      allMovements.push(...res.movements);
+      itemsImportedCount += 1;
+      importedPartNumbers.push(cleanPn);
+      if (res.newToolAssets.length > 0) {
+        toolsCreatedCount += res.newToolAssets.length;
+        importedAssetTags.push(...res.newToolAssets.map(a => a.asset_tag));
+      } else {
+        consumablesQtyAdded += qty;
+      }
+    }
+
+    const importStatus =
+      itemsImportedCount === 0
+        ? 'failed'
+        : itemErrors.length > 0
+          ? 'partial'
+          : 'completed';
+
+    const distinctImportedSites = Array.from(
+      new Set(
+        selectedItems
+          .map(it => String(it.site_code || cleanSite || '').trim())
+          .filter(Boolean)
+      )
+    );
+    const summarySiteLabel =
+      distinctImportedSites.length > 0 ? distinctImportedSites.join(', ') : cleanSite;
+
+    const importRecord = {
+      id: importId,
+      filename,
+      file_size: fileSize,
+      file_hash: fileHash,
+      report_ref: cleanRef,
+      report_refs: parsedRefs.length > 0 ? parsedRefs : (cleanRef ? [cleanRef] : []),
+      po_number: poNumber || null,
+      site_code: summarySiteLabel,
+      site_codes: distinctImportedSites,
+      document_date: documentDate || now.slice(0, 10),
+      supplier,
+      extraction_method: extractionMethod,
+      ocr_confidence: ocrConfidence,
+      page_count: pageCount,
+      status: importStatus,
+      items_imported_count: itemsImportedCount,
+      tools_created_count: toolsCreatedCount,
+      consumables_qty_added: consumablesQtyAdded,
+      errors: itemErrors,
+      imported_part_numbers: Array.from(new Set(importedPartNumbers)),
+      imported_asset_tags: importedAssetTags,
+      added_to_parts_catalog: addedToMasterCatalog,
+      local_blob_key: localBlobKey,
+      ...driveMeta,
+      imported_by: actor.id,
+      imported_by_name: actor.name,
+      imported_at: now,
+      notes: notes || null
+    };
+
+    const nextImports = [importRecord, ...existingImports];
+
+    setCtCatalog(workingRawCatalog);
+    setCtOrders(workingOrders);
+    setCtStock(workingStock);
+    setCtToolAssets(workingAssets);
+    setCtPdfImports(nextImports);
+
+    persistDual(LS_KEYS.catalog, workingRawCatalog);
+    persistDual(LS_KEYS.orders, workingOrders);
+    persistDual(LS_KEYS.stock, workingStock);
+    persistDual(LS_KEYS.toolAssets, workingAssets);
+    persistDual(LS_KEYS.pdfImports, nextImports);
+
+    const nextMovements = appendMovements(allMovements);
+    commitAndSyncState(
+      {
+        catalog: workingRawCatalog,
+        orders: workingOrders,
+        stock: workingStock,
+        toolAssets: workingAssets,
+        movements: nextMovements,
+        pdfImports: nextImports
+      },
+      { reason: 'ct_apple_pdf_imported', actorName: actor.name }
+    );
+
+    recordAudit('CT_APPLE_PDF_IMPORTED', cleanRef || filename, {
+      filename,
+      site_code: cleanSite,
+      itemsImportedCount,
+      toolsCreatedCount,
+      consumablesQtyAdded,
+      driveFileId: driveMeta.drive_file_id,
+      performed_by: actor.name
+    });
+
+    if (importStatus === 'failed') {
+      showToast?.(`PDF import failed: ${itemErrors[0] || 'No items imported'}`, 'error');
+    } else if (importStatus === 'partial') {
+      showToast?.(
+        `Partially imported ${cleanRef}: ${toolsCreatedCount} tool(s), ${consumablesQtyAdded} consumable unit(s) (${itemErrors.length} error(s))`,
+        'warning'
+      );
+    } else {
+      showToast?.(
+        `Imported ${cleanRef}: ${toolsCreatedCount} tool(s) & ${consumablesQtyAdded} consumable unit(s) added to ${summarySiteLabel}${addedToMasterCatalog.length > 0 ? ` · Added ${addedToMasterCatalog.length} new part(s) to Parts Catalog` : ''}${driveMeta.drive_file_id ? ' · Archived to Drive' : ''}`,
+        'success'
+      );
+    }
+
+    return { ok: importStatus !== 'failed', importRecord, itemErrors };
+  }, [resolveActor, unifiedCatalog, parts, savePart, appendMovements, commitAndSyncState, recordAudit, showToast]);
+
+  const openCtSourcePdf = useCallback(async (importOrId) => {
+    const rec =
+      typeof importOrId === 'string'
+        ? (latestStateRef.current.pdfImports || []).find(p => p.id === importOrId || p.report_ref === importOrId)
+        : importOrId;
+
+    if (!rec) {
+      showToast?.('Source PDF record not found.', 'warning');
+      return { ok: false };
+    }
+
+    if (rec.drive_web_view_link || rec.source_pdf_url) {
+      window.open(rec.drive_web_view_link || rec.source_pdf_url, '_blank', 'noopener,noreferrer');
+      return { ok: true, source: 'drive' };
+    }
+
+    const blobKey = rec.local_blob_key || (rec.id ? `mdc_ct_pdf_blob_${rec.id}` : null);
+    if (blobKey) {
+      try {
+        const stored = await dbStorage.getItem(blobKey);
+        if (stored?.bytes && stored.bytes.length > 0) {
+          const blob = new Blob([new Uint8Array(stored.bytes)], { type: stored.mimeType || 'application/octet-stream' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = stored.filename || rec.filename || 'CT_Import_File.xlsx';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(url), 60000);
+          return { ok: true, source: 'local_indexeddb' };
+        }
+      } catch {
+        // Fallback error below
+      }
+    }
+
+    showToast?.(
+      'Original PDF file is archived on the importing device or Google Drive (not cached locally on this browser).',
+      'info'
+    );
+    return { ok: false };
+  }, [showToast]);
+
   const restoreCtState = useCallback((snapshot = {}) => {
     const actor = resolveActor();
     const nextState = {
@@ -1266,7 +1793,8 @@ export function useConsumablesAndTools({
       movements: Array.isArray(snapshot.movements)
         ? stripSeedMovements(snapshot.movements)
         : latestStateRef.current.movements,
-      shipments: Array.isArray(snapshot.shipments) ? snapshot.shipments : latestStateRef.current.shipments
+      shipments: Array.isArray(snapshot.shipments) ? snapshot.shipments : latestStateRef.current.shipments,
+      pdfImports: Array.isArray(snapshot.pdfImports) ? snapshot.pdfImports : latestStateRef.current.pdfImports
     };
 
     latestStateRef.current = nextState;
@@ -1276,6 +1804,7 @@ export function useConsumablesAndTools({
     setCtToolAssets(nextState.toolAssets);
     setCtMovements(nextState.movements);
     setCtShipments(nextState.shipments);
+    setCtPdfImports(nextState.pdfImports);
 
     persistDual(LS_KEYS.catalog, nextState.catalog);
     persistDual(LS_KEYS.orders, nextState.orders);
@@ -1283,6 +1812,7 @@ export function useConsumablesAndTools({
     persistDual(LS_KEYS.toolAssets, nextState.toolAssets);
     persistDual(LS_KEYS.movements, nextState.movements);
     persistDual(LS_KEYS.shipments, nextState.shipments);
+    persistDual(LS_KEYS.pdfImports, nextState.pdfImports);
 
     commitAndSyncState(nextState, {
       reason: 'system_backup_restored',
@@ -1299,15 +1829,21 @@ export function useConsumablesAndTools({
     ctToolAssets,
     ctMovements,
     ctShipments,
+    ctPdfImports,
     ctSyncStatus,
     syncCtFromCloud,
     restoreCtState,
     saveCtCatalogItem,
+    deleteCtCatalogItem,
+    clearCtCatalog,
+    updateCtStockRecord,
     addCtOrder,
     updateCtOrder,
     deleteCtOrder,
     receiveCtOrderLine,
     bulkReceiveCtCsv,
+    commitCtPdfImport,
+    openCtSourcePdf,
     checkoutTool,
     checkinTool,
     updateToolStatus,
