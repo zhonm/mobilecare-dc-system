@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import mobilecareNoBGLogo from '../assets/mobilecareNoBGLogo.png';
-import { getCategoryForPart } from '../utils/categoryFilter';
+import { getCategoryForPart, isDefaultCategoryCode, normalizeCategoryCode } from '../utils/categoryFilter';
 import { formatTo12HourTime } from '../utils/dateUtils';
 import { resolveSafeRegion } from '../constants/config';
 import { enrichSiteWithDirectory } from '../constants/branchDirectory';
@@ -81,6 +81,8 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
     scanLogs = [],
     savePart,
     deletePart,
+    saveCategory,
+    deleteCategory,
     refreshGsxCatalogFromCsv,
     rawCtCatalog = [],
     saveCtCatalogItem,
@@ -117,6 +119,129 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
     currentUser?.role === 'superadmin' ||
     (currentUser?.role || '').toLowerCase().includes('superadmin') ||
     currentUser?.role === 'SUPERADMIN';
+
+  const canManageCategories =
+    isSuperadmin ||
+    currentUser?.isSuperAdmin === true ||
+    String(currentUser?.role || '').trim().toLowerCase() === 'admin';
+
+  // ── Category Management State ──────────────────────────────────────────────
+  const [categorySearch, setCategorySearch] = useState('');
+  const [categoryModalMode, setCategoryModalMode] = useState(null); // null | 'create' | 'edit'
+  const [categoryCodeManuallyEdited, setCategoryCodeManuallyEdited] = useState(false);
+  const [categoryForm, setCategoryForm] = useState({
+    id: null,
+    originalCode: '',
+    name: '',
+    code: '',
+    is_serialized: false,
+    has_imei: false,
+    sort_order: 9
+  });
+  const [categoryFormError, setCategoryFormError] = useState('');
+  const [isSavingCategory, setIsSavingCategory] = useState(false);
+  const [deletingCategory, setDeletingCategory] = useState(null);
+  const [isDeletingCategory, setIsDeletingCategory] = useState(false);
+
+  const categoryPartCounts = useMemo(() => {
+    const counts = {};
+    (parts || []).forEach(p => {
+      const cat = getCategoryForPart(p, categories);
+      const code = normalizeCategoryCode(cat?.code || '');
+      if (code) counts[code] = (counts[code] || 0) + 1;
+    });
+    // Also count Consumables & Tools catalog entries under TOOLS / CONSUMABLES
+    (rawCtCatalog || []).forEach(item => {
+      const kind = String(item?.item_kind || '').toLowerCase();
+      if (kind === 'tool') counts.TOOLS = (counts.TOOLS || 0) + 1;
+      else if (kind === 'consumable') counts.CONSUMABLES = (counts.CONSUMABLES || 0) + 1;
+    });
+    return counts;
+  }, [parts, categories, rawCtCatalog]);
+
+  const filteredCategories = useMemo(() => {
+    const q = categorySearch.trim().toLowerCase();
+    const list = Array.isArray(categories) ? categories : [];
+    if (!q) return list;
+    return list.filter(c =>
+      String(c.name || '').toLowerCase().includes(q) ||
+      String(c.code || '').toLowerCase().includes(q)
+    );
+  }, [categories, categorySearch]);
+
+  const openCreateCategoryModal = () => {
+    const maxSort = (categories || []).reduce((max, c) => Math.max(max, Number(c.sort_order) || 0), 0);
+    setCategoryForm({
+      id: null,
+      originalCode: '',
+      name: '',
+      code: '',
+      is_serialized: false,
+      has_imei: false,
+      sort_order: maxSort + 1
+    });
+    setCategoryCodeManuallyEdited(false);
+    setCategoryFormError('');
+    setCategoryModalMode('create');
+  };
+
+  const openEditCategoryModal = (cat) => {
+    setCategoryForm({
+      id: cat.id,
+      originalCode: cat.code,
+      name: cat.name || '',
+      code: cat.code || '',
+      is_serialized: Boolean(cat.is_serialized),
+      has_imei: Boolean(cat.has_imei),
+      sort_order: Number(cat.sort_order) || 1
+    });
+    setCategoryCodeManuallyEdited(true);
+    setCategoryFormError('');
+    setCategoryModalMode('edit');
+  };
+
+  const handleSaveCategorySubmit = async (e) => {
+    e.preventDefault();
+    setCategoryFormError('');
+    if (!categoryForm.name.trim()) {
+      setCategoryFormError('Category name is required.');
+      return;
+    }
+    const normalizedCode = normalizeCategoryCode(categoryForm.code || categoryForm.name);
+    if (!normalizedCode) {
+      setCategoryFormError('Category code must contain letters or numbers.');
+      return;
+    }
+
+    setIsSavingCategory(true);
+    try {
+      const res = await saveCategory({
+        ...categoryForm,
+        name: categoryForm.name.trim(),
+        code: normalizedCode
+      });
+      if (!res?.success) {
+        setCategoryFormError(res?.error || 'Failed to save category.');
+        return;
+      }
+      setCategoryModalMode(null);
+    } finally {
+      setIsSavingCategory(false);
+    }
+  };
+
+  const handleConfirmDeleteCategory = async () => {
+    if (!deletingCategory) return;
+    setIsDeletingCategory(true);
+    try {
+      const res = await deleteCategory(deletingCategory.id, deletingCategory.code);
+      if (res?.success) {
+        setDeletingCategory(null);
+      }
+    } finally {
+      setIsDeletingCategory(false);
+    }
+  };
 
   useEffect(() => {
     if (defaultTab) {
@@ -330,6 +455,16 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
     return otherCat?.id || 'cat-other';
   }, [categories]);
 
+  const toolsCategoryId = useMemo(() => {
+    const toolsCat = (categories || []).find(c => String(c.code || '').toUpperCase() === 'TOOLS');
+    return toolsCat?.id || 'cat-tools';
+  }, [categories]);
+
+  const consumablesCategoryId = useMemo(() => {
+    const consCat = (categories || []).find(c => String(c.code || '').toUpperCase() === 'CONSUMABLES');
+    return consCat?.id || 'cat-consumables';
+  }, [categories]);
+
   const unifiedPartsCatalog = useMemo(() => {
     const seenPns = new Set();
     const list = (parts || []).map(p => {
@@ -358,7 +493,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
         part_number: pn,
         description: ct.description || pn,
         iphone_model: kind === 'tool' ? 'Service Tool' : 'Consumable',
-        category_id: otherCategoryId,
+        category_id: kind === 'tool' ? toolsCategoryId : consumablesCategoryId,
         stocking_price: Number(ct.unit_cost ?? ct.stocking_price ?? 0) || 0,
         is_active: ct.is_active !== false,
         item_kind: kind,
@@ -369,7 +504,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
     });
 
     return list.sort((a, b) => String(a.part_number || '').localeCompare(String(b.part_number || '')));
-  }, [parts, rawCtCatalog, ctByPnMap, otherCategoryId]);
+  }, [parts, rawCtCatalog, ctByPnMap, toolsCategoryId, consumablesCategoryId]);
 
   const catalogTypeCounts = useMemo(() => {
     let repair = 0;
@@ -419,7 +554,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
       part_number: cleanPn,
       description: cleanDesc,
       iphone_model: newModel.trim() || (newCatalogType === 'tool' ? 'Service Tool' : newCatalogType === 'consumable' ? 'Consumable' : 'iPhone'),
-      category_id: isToolOrConsumable ? otherCategoryId : newCatId,
+      category_id: newCatId || (newCatalogType === 'tool' ? toolsCategoryId : newCatalogType === 'consumable' ? consumablesCategoryId : otherCategoryId),
       stocking_price: parsedPrice,
       item_kind: isToolOrConsumable ? newCatalogType : null,
       is_active: true
@@ -475,7 +610,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
       part_number: cleanPn,
       description: cleanDesc,
       iphone_model: editingPart.iphone_model?.trim() || (nextType === 'tool' ? 'Service Tool' : nextType === 'consumable' ? 'Consumable' : 'iPhone'),
-      category_id: isToolOrConsumable ? (editingPart.category_id || otherCategoryId) : editingPart.category_id,
+      category_id: editingPart.category_id || (nextType === 'tool' ? toolsCategoryId : nextType === 'consumable' ? consumablesCategoryId : otherCategoryId),
       stocking_price: parsedPrice,
       item_kind: isToolOrConsumable ? nextType : null
     });
@@ -870,8 +1005,10 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                       onChange={(e) => {
                         const val = e.target.value;
                         setNewCatalogType(val);
-                        if (val === 'tool' || val === 'consumable') {
-                          setNewCatId(otherCategoryId);
+                        if (val === 'tool') {
+                          setNewCatId(toolsCategoryId);
+                        } else if (val === 'consumable') {
+                          setNewCatId(consumablesCategoryId);
                         }
                       }}
                       style={{ height: '42px', fontSize: '13.5px', borderRadius: '8px' }}
@@ -1434,7 +1571,11 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                         setEditingPart({
                           ...editingPart,
                           catalog_type: nextType,
-                          category_id: (nextType === 'tool' || nextType === 'consumable') ? otherCategoryId : editingPart.category_id
+                          category_id: nextType === 'tool'
+                            ? toolsCategoryId
+                            : nextType === 'consumable'
+                            ? consumablesCategoryId
+                            : editingPart.category_id
                         });
                       }}
                     >
@@ -2127,35 +2268,399 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
       {/* 3. Categories Tab */}
       {activeTab === 'categories' && (
         <div className="card" style={{ padding: '22px 24px', border: '1px solid #e2e8f0', borderRadius: '12px' }}>
-          <div style={{ marginBottom: '18px' }}>
-            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>Extensible Part Categories</h3>
-            <p style={{ margin: '3px 0 0', fontSize: '13px', color: '#64748b' }}>Hardware categories, serialization rules, and IMEI validation requirements</p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '14px', marginBottom: '18px' }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>Extensible Part Categories</h3>
+                <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontSize: '11.5px', fontWeight: 700, padding: '2px 9px' }}>
+                  {categories.length} Categories
+                </span>
+              </div>
+              <p style={{ margin: '3px 0 0', fontSize: '13px', color: '#64748b' }}>
+                Hardware, tools, consumables, and custom categories with serialization rules and IMEI validation requirements
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <div style={{ position: 'relative', minWidth: '210px' }}>
+                <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="Search categories..."
+                  value={categorySearch}
+                  onChange={(e) => setCategorySearch(e.target.value)}
+                  style={{ paddingLeft: '30px', paddingRight: categorySearch ? '26px' : '10px', height: '36px', fontSize: '12.5px', width: '100%' }}
+                />
+                {categorySearch && (
+                  <button
+                    type="button"
+                    onClick={() => setCategorySearch('')}
+                    style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 0 }}
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+
+              {canManageCategories && (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={openCreateCategoryModal}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', height: '36px', padding: '0 14px', fontSize: '13px', fontWeight: 700, borderRadius: '8px' }}
+                >
+                  <Plus size={15} />
+                  <span>Add Custom Category</span>
+                </button>
+              )}
+            </div>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '18px' }}>
-            {categories.map(c => (
+
+          {filteredCategories.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '32px 16px', background: '#f8fafc', borderRadius: '10px', border: '1px dashed #cbd5e1', color: '#64748b', fontSize: '13px' }}>
+              No categories match "{categorySearch}".
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))', gap: '16px' }}>
+              {filteredCategories.map(c => {
+                const isDefault = isDefaultCategoryCode(c.code);
+                const badgeColors = getCategoryBadgeStyle(c.code || c.name);
+                const assignedCount = categoryPartCounts[normalizeCategoryCode(c.code)] || 0;
+
+                return (
+                  <div
+                    key={c.id}
+                    style={{
+                      border: '1px solid #e2e8f0',
+                      borderRadius: '10px',
+                      padding: '16px 18px',
+                      background: '#f8fafc',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      gap: '12px'
+                    }}
+                  >
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', marginBottom: '10px' }}>
+                        <div style={{ minWidth: 0 }}>
+                          <strong style={{ fontSize: '15px', color: '#0f172a', fontWeight: 700, display: 'block', lineHeight: 1.25 }}>
+                            {c.name}
+                          </strong>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
+                            <span
+                              style={{
+                                fontSize: '10.5px',
+                                fontWeight: 700,
+                                padding: '1px 7px',
+                                borderRadius: '999px',
+                                background: isDefault ? '#e2e8f0' : '#fef3c7',
+                                color: isDefault ? '#475569' : '#92400e'
+                              }}
+                            >
+                              {isDefault ? 'Default' : 'Custom'}
+                            </span>
+                            <span style={{ fontSize: '11px', color: '#64748b' }}>
+                              {assignedCount.toLocaleString()} item{assignedCount === 1 ? '' : 's'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <span
+                          className="font-mono"
+                          style={{
+                            fontSize: '11.5px',
+                            fontWeight: 700,
+                            color: badgeColors.text,
+                            background: badgeColors.bg,
+                            border: `1px solid ${badgeColors.border}`,
+                            padding: '2px 8px',
+                            borderRadius: '6px',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          {c.code}
+                        </span>
+                      </div>
+
+                      <div style={{ fontSize: '12.5px', color: '#475569', marginBottom: '5px' }}>
+                        Serialized: <strong style={{ color: '#1e293b' }}>{c.is_serialized ? 'Yes (Part # + Serial)' : 'No (Non-Serialized)'}</strong>
+                      </div>
+                      <div style={{ fontSize: '12.5px', color: '#475569' }}>
+                        Requires IMEI: <strong style={{ color: '#1e293b' }}>{c.has_imei ? 'Yes' : 'No'}</strong>
+                      </div>
+                    </div>
+
+                    {canManageCategories && (
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', paddingTop: '10px', borderTop: '1px solid #e2e8f0' }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => openEditCategoryModal(c)}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', padding: '4px 10px' }}
+                        >
+                          <Edit2 size={12} />
+                          <span>Edit</span>
+                        </button>
+                        {!isDefault && (
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => setDeletingCategory(c)}
+                            disabled={assignedCount > 0}
+                            title={assignedCount > 0 ? `Cannot delete while ${assignedCount} item(s) are assigned to this category` : `Delete custom category ${c.name}`}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '5px',
+                              fontSize: '11.5px',
+                              padding: '4px 10px',
+                              color: assignedCount > 0 ? '#94a3b8' : '#dc2626',
+                              borderColor: assignedCount > 0 ? '#e2e8f0' : '#fecaca',
+                              background: assignedCount > 0 ? '#f8fafc' : '#fff',
+                              cursor: assignedCount > 0 ? 'not-allowed' : 'pointer'
+                            }}
+                          >
+                            <Trash2 size={12} />
+                            <span>Delete</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Create / Edit Category Modal */}
+          {categoryModalMode && (
+            <div
+              className="modal-backdrop"
+              onClick={(e) => {
+                if (e.target === e.currentTarget && !isSavingCategory) setCategoryModalMode(null);
+              }}
+              style={{ zIndex: 1000 }}
+            >
               <div
-                key={c.id}
+                className="modal-content"
                 style={{
+                  maxWidth: '480px',
+                  width: '92%',
+                  background: '#ffffff',
+                  color: '#0f172a',
+                  borderRadius: '14px',
                   border: '1px solid #e2e8f0',
-                  borderRadius: '10px',
-                  padding: '18px 20px',
-                  background: '#f8fafc',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.02)'
+                  boxShadow: '0 20px 40px rgba(15, 23, 42, 0.25)',
+                  overflow: 'hidden'
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                  <strong style={{ fontSize: '15px', color: '#0f172a', fontWeight: 700 }}>{c.name}</strong>
-                  <span className="font-mono" style={{ fontSize: '12px', fontWeight: 700, color: '#0284c7', background: '#e0f2fe', padding: '2px 8px', borderRadius: '6px' }}>{c.code}</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                  <div>
+                    <h4 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>
+                      {categoryModalMode === 'edit' ? 'Edit Part Category' : 'Create Custom Category'}
+                    </h4>
+                    <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748b' }}>
+                      {categoryModalMode === 'edit'
+                        ? 'Update display name, serialization tracking, and validation rules.'
+                        : 'Add a new category available across the Parts Catalog and inventory modules.'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => !isSavingCategory && setCategoryModalMode(null)}
+                    style={{ background: 'transparent', border: 'none', color: '#64748b', cursor: 'pointer', padding: '4px' }}
+                  >
+                    <X size={18} />
+                  </button>
                 </div>
-                <div style={{ fontSize: '13px', color: '#475569', marginBottom: '6px' }}>
-                  Serialized: <strong style={{ color: '#1e293b' }}>{c.is_serialized ? 'Yes (Part # + Serial)' : 'No'}</strong>
+
+                <form onSubmit={handleSaveCategorySubmit} style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  {categoryFormError && (
+                    <div style={{ padding: '9px 12px', borderRadius: '8px', background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', fontSize: '12.5px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <AlertTriangle size={15} />
+                      <span>{categoryFormError}</span>
+                    </div>
+                  )}
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '5px' }}>
+                      Category Name <span style={{ color: '#dc2626' }}>*</span>
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g. Adhesives, Service Cables, Accessories"
+                      value={categoryForm.name}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setCategoryForm(prev => ({
+                          ...prev,
+                          name: val,
+                          code: (!categoryCodeManuallyEdited && categoryModalMode === 'create')
+                            ? normalizeCategoryCode(val)
+                            : prev.code
+                        }));
+                      }}
+                      required
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px', gap: '12px' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '5px' }}>
+                        Category Code <span style={{ color: '#dc2626' }}>*</span>
+                      </label>
+                      <input
+                        type="text"
+                        className="form-input font-mono"
+                        placeholder="e.g. ADHESIVES"
+                        value={categoryForm.code}
+                        disabled={categoryModalMode === 'edit' && isDefaultCategoryCode(categoryForm.originalCode)}
+                        onChange={(e) => {
+                          setCategoryCodeManuallyEdited(true);
+                          setCategoryForm(prev => ({ ...prev, code: e.target.value.toUpperCase() }));
+                        }}
+                        required
+                        style={{
+                          width: '100%',
+                          background: (categoryModalMode === 'edit' && isDefaultCategoryCode(categoryForm.originalCode)) ? '#f1f5f9' : undefined
+                        }}
+                      />
+                      <span style={{ fontSize: '11px', color: '#64748b', display: 'block', marginTop: '3px' }}>
+                        {categoryModalMode === 'edit' && isDefaultCategoryCode(categoryForm.originalCode)
+                          ? 'Built-in default category codes cannot be changed.'
+                          : 'Stored as uppercase slug (e.g. SERVICE_CABLES).'}
+                      </span>
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '5px' }}>
+                        Sort Order
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="999"
+                        className="form-input"
+                        value={categoryForm.sort_order}
+                        onChange={(e) => setCategoryForm(prev => ({ ...prev, sort_order: Number(e.target.value) || 1 }))}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '12px 14px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', fontSize: '13px', color: '#0f172a' }}>
+                      <input
+                        type="checkbox"
+                        checked={categoryForm.is_serialized}
+                        onChange={(e) => setCategoryForm(prev => ({ ...prev, is_serialized: e.target.checked }))}
+                        style={{ marginTop: '2px' }}
+                      />
+                      <span>
+                        <strong style={{ display: 'block' }}>Serialized Tracking (Part # + Serial)</strong>
+                        <span style={{ fontSize: '11.5px', color: '#64748b' }}>Enable if each individual unit requires a unique serial number on scan-in/out.</span>
+                      </span>
+                    </label>
+
+                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', fontSize: '13px', color: '#0f172a' }}>
+                      <input
+                        type="checkbox"
+                        checked={categoryForm.has_imei}
+                        onChange={(e) => setCategoryForm(prev => ({ ...prev, has_imei: e.target.checked }))}
+                        style={{ marginTop: '2px' }}
+                      />
+                      <span>
+                        <strong style={{ display: 'block' }}>Requires IMEI Validation</strong>
+                        <span style={{ fontSize: '11.5px', color: '#64748b' }}>Enable if parts in this category require IMEI verification during intake or service.</span>
+                      </span>
+                    </label>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', paddingTop: '6px' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => setCategoryModalMode(null)}
+                      disabled={isSavingCategory}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      disabled={isSavingCategory}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      <Save size={14} />
+                      <span>{isSavingCategory ? 'Saving...' : categoryModalMode === 'edit' ? 'Save Changes' : 'Create Category'}</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Delete Custom Category Confirmation Modal */}
+          {deletingCategory && (
+            <div
+              className="modal-backdrop"
+              onClick={(e) => {
+                if (e.target === e.currentTarget && !isDeletingCategory) setDeletingCategory(null);
+              }}
+              style={{ zIndex: 1000 }}
+            >
+              <div
+                className="modal-content"
+                style={{
+                  maxWidth: '420px',
+                  width: '92%',
+                  background: '#ffffff',
+                  color: '#0f172a',
+                  borderRadius: '14px',
+                  border: '1px solid #e2e8f0',
+                  boxShadow: '0 20px 40px rgba(15, 23, 42, 0.25)',
+                  padding: '20px 22px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                  <div style={{ background: '#fee2e2', color: '#dc2626', padding: '8px', borderRadius: '8px', display: 'flex' }}>
+                    <Trash2 size={18} />
+                  </div>
+                  <div>
+                    <h4 style={{ margin: 0, fontSize: '15.5px', fontWeight: 800, color: '#0f172a' }}>Delete Custom Category</h4>
+                    <span className="font-mono" style={{ fontSize: '11.5px', color: '#64748b' }}>{deletingCategory.code}</span>
+                  </div>
                 </div>
-                <div style={{ fontSize: '13px', color: '#475569' }}>
-                  Requires IMEI: <strong style={{ color: '#1e293b' }}>{c.has_imei ? 'Yes' : 'No (Battery/Display)'}</strong>
+                <p style={{ margin: '0 0 18px', fontSize: '13px', color: '#475569', lineHeight: 1.5 }}>
+                  Are you sure you want to permanently delete <strong>{deletingCategory.name}</strong>? This action will sync across connected sessions.
+                </p>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setDeletingCategory(null)}
+                    disabled={isDeletingCategory}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    onClick={handleConfirmDeleteCategory}
+                    disabled={isDeletingCategory}
+                    style={{ background: '#dc2626', borderColor: '#dc2626', color: '#ffffff' }}
+                  >
+                    {isDeletingCategory ? 'Deleting...' : 'Delete Category'}
+                  </button>
                 </div>
               </div>
-            ))}
-          </div>
+            </div>
+          )}
         </div>
       )}
 

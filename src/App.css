@@ -2105,8 +2105,9 @@
    Modernized Receive Scan-In Workstation Console (Keyboard / HID Optimized)
    ========================================================================== */
 .scanner-container {
-  max-width: 1040px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
 }
 
 .scanner-hero {
@@ -2114,8 +2115,8 @@
   color: #fff;
   border: 1px solid #1e293b;
   border-radius: 14px;
-  padding: 24px 26px;
-  margin-bottom: 22px;
+  padding: 18px 22px;
+  margin-bottom: 16px;
   box-shadow: 0 10px 30px -6px rgba(0, 0, 0, 0.45);
   position: relative;
 }
@@ -2125,11 +2126,11 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 18px;
-  padding-bottom: 14px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
   border-bottom: 1px solid rgba(51, 65, 85, 0.5);
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 10px;
 }
 
 .workstation-hero-meta {
@@ -2204,8 +2205,8 @@
   background: #172033;
   border: 1px solid #293548;
   border-radius: 12px;
-  padding: 16px 18px;
-  margin-bottom: 20px;
+  padding: 13px 16px;
+  margin-bottom: 14px;
 }
 
 .workstation-toolbar-grid {
@@ -4896,10 +4897,154 @@ input[type="password"]::-ms-clear {
    ========================================================================== */
 .scanin-top-tabs-bar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 14px;
-  margin-bottom: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
   width: 100%;
+}
+
+/* Responsive Full-Width Inventory Table Card for Receive Scan-In */
+.scanin-inventory-card {
+  width: 100%;
+  margin-bottom: 20px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  padding: 14px 18px;
+  box-sizing: border-box;
+}
+
+.scanin-table-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.scanin-table-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.scanin-table-search {
+  position: relative;
+  flex: 1 1 240px;
+  min-width: 200px;
+  max-width: 320px;
+}
+
+.scanin-table-container {
+  width: 100%;
+  max-height: clamp(460px, calc(100vh - 330px), 840px);
+  overflow-x: auto;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.scanin-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  table-layout: auto;
+}
+
+.scanin-data-table thead {
+  position: sticky;
+  top: 0;
+  background: #f8fafc;
+  z-index: 2;
+}
+
+.scanin-data-table th {
+  padding: 9px 10px;
+  font-size: 11px;
+  white-space: nowrap;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.scanin-data-table td {
+  padding: 8px 10px;
+  vertical-align: middle;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.scanin-data-table .col-nowrap {
+  white-space: nowrap;
+}
+
+.scanin-data-table .col-desc {
+  min-width: 210px;
+  white-space: normal;
+  line-height: 1.3;
+}
+
+.scanin-data-table .desc-title {
+  font-weight: 500;
+  color: #1e293b;
+}
+
+.scanin-data-table .desc-model {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 1px;
+}
+
+@media (max-width: 1366px) {
+  .scanin-data-table {
+    font-size: 12px;
+  }
+
+  .scanin-data-table th {
+    padding: 8px 8px;
+    font-size: 10.5px;
+  }
+
+  .scanin-data-table td {
+    padding: 7px 8px;
+  }
+
+  .scanin-data-table .col-desc {
+    min-width: 180px;
+  }
+}
+
+@media (max-width: 1024px) {
+  .scanin-inventory-card {
+    padding: 12px 14px;
+  }
+
+  .scanin-table-container {
+    max-height: clamp(380px, calc(100vh - 280px), 680px);
+  }
+
+  .scanin-data-table {
+    font-size: 11.5px;
+  }
+
+  .scanin-data-table th,
+  .scanin-data-table td {
+    padding: 7px 7px;
+  }
+}
+
+@media (max-width: 768px) {
+  .scanin-inventory-card {
+    padding: 12px;
+  }
+
+  .scanin-table-controls {
+    width: 100%;
+  }
+
+  .scanin-table-search {
+    min-width: 0;
+    max-width: 100%;
+    flex: 1 1 180px;
+  }
 }
 
 .scanin-tab-card {

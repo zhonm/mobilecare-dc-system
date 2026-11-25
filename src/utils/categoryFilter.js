@@ -10,6 +10,8 @@ export const HARDWARE_CATEGORIES = [
   { code: 'CAMERA', id: 'cat-camera', name: 'Camera', color: '#db2777', bg: '#fdf2f8', border: '#fbcfe8' },
   { code: 'BACK_GLASS', id: 'cat-backglass', name: 'Back Glass', color: '#0d9488', bg: '#f0fdfa', border: '#99f6e4' },
   { code: 'MID_REAR', id: 'cat-midrear', name: 'Mid/Rear System', color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe' },
+  { code: 'TOOLS', id: 'cat-tools', name: 'Tools', color: '#1d4ed8', bg: '#eff6ff', border: '#93c5fd' },
+  { code: 'CONSUMABLES', id: 'cat-consumables', name: 'Consumables', color: '#047857', bg: '#ecfdf5', border: '#6ee7b7' },
   { code: 'OTHER', id: 'cat-other', name: 'Other Components', color: '#475569', bg: '#f1f5f9', border: '#e2e8f0' }
 ];
 
@@ -19,8 +21,60 @@ export const DEFAULT_PART_CATEGORIES = [
   { id: 'cat-camera', code: 'CAMERA', name: 'Camera', has_imei: false, is_serialized: true, sort_order: 3 },
   { id: 'cat-backglass', code: 'BACK_GLASS', name: 'Back Glass', has_imei: false, is_serialized: true, sort_order: 4 },
   { id: 'cat-midrear', code: 'MID_REAR', name: 'Mid/Rear System', has_imei: false, is_serialized: true, sort_order: 5 },
-  { id: 'cat-other', code: 'OTHER', name: 'Other Components', has_imei: false, is_serialized: false, sort_order: 6 }
+  { id: 'cat-tools', code: 'TOOLS', name: 'Tools', has_imei: false, is_serialized: false, sort_order: 6 },
+  { id: 'cat-consumables', code: 'CONSUMABLES', name: 'Consumables', has_imei: false, is_serialized: false, sort_order: 7 },
+  { id: 'cat-other', code: 'OTHER', name: 'Other Components', has_imei: false, is_serialized: false, sort_order: 8 }
 ];
+
+export const DEFAULT_CATEGORY_CODES = new Set(DEFAULT_PART_CATEGORIES.map(c => c.code));
+
+export function isDefaultCategoryCode(code) {
+  return DEFAULT_CATEGORY_CODES.has(String(code || '').trim().toUpperCase());
+}
+
+export function normalizeCategoryCode(rawCode) {
+  return String(rawCode || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 32);
+}
+
+/**
+ * Ensures all default system categories (including Tools, Consumables, and Other)
+ * exist alongside any custom categories, deduplicated by code and sorted by sort_order.
+ */
+export function mergeWithDefaultCategories(list = []) {
+  const byCode = new Map();
+  const safeList = Array.isArray(list) ? list : [];
+
+  safeList.forEach(c => {
+    if (!c) return;
+    const code = normalizeCategoryCode(c.code || c.name);
+    if (!code) return;
+    byCode.set(code, {
+      id: c.id || `cat-${code.toLowerCase().replace(/_/g, '')}`,
+      code,
+      name: String(c.name || code).trim(),
+      has_imei: Boolean(c.has_imei),
+      is_serialized: c.is_serialized !== false,
+      sort_order: Number.isFinite(Number(c.sort_order)) ? Number(c.sort_order) : 99
+    });
+  });
+
+  DEFAULT_PART_CATEGORIES.forEach(def => {
+    if (!byCode.has(def.code)) {
+      byCode.set(def.code, { ...def });
+    }
+  });
+
+  return Array.from(byCode.values()).sort((a, b) => {
+    const orderDiff = (a.sort_order ?? 999) - (b.sort_order ?? 999);
+    if (orderDiff !== 0) return orderDiff;
+    return String(a.name || '').localeCompare(String(b.name || ''));
+  });
+}
 
 // Common component disqualifiers that prevent accessories, consumables, and sub-modules from being misclassified
 const UNRELATED_COMPONENT_TERMS = [
@@ -203,7 +257,8 @@ export function isPartMatchingCategoryFilter(item, selectedCats = DEFAULT_SELECT
  * Returns badge styling and human label for a category
  */
 export function getCategoryBadgeStyle(categoryCode) {
-  switch (categoryCode) {
+  const code = String(categoryCode || '').trim().toUpperCase();
+  switch (code) {
     case 'DISPLAY':
       return { label: 'DISPLAY', bg: '#e0f2fe', color: '#0369a1', border: '#bae6fd' };
     case 'BATTERY':
@@ -214,8 +269,15 @@ export function getCategoryBadgeStyle(categoryCode) {
       return { label: 'BACK GLASS', bg: '#f0fdfa', color: '#0f766e', border: '#99f6e4' };
     case 'MID_REAR':
       return { label: 'MID/REAR', bg: '#f5f3ff', color: '#6d28d9', border: '#ddd6fe' };
-    default:
+    case 'TOOLS':
+      return { label: 'TOOLS', bg: '#eff6ff', color: '#1d4ed8', border: '#93c5fd' };
+    case 'CONSUMABLES':
+      return { label: 'CONSUMABLES', bg: '#ecfdf5', color: '#047857', border: '#6ee7b7' };
+    case 'OTHER':
+    case '':
       return { label: 'OTHER', bg: '#f1f5f9', color: '#475569', border: '#e2e8f0' };
+    default:
+      return { label: code.replace(/_/g, ' '), bg: '#fefce8', color: '#854d0e', border: '#fde68a' };
   }
 }
 
@@ -242,8 +304,9 @@ export function getCategoryForPart(part, categories = []) {
       if (existingCode === detectedCode) {
         return existingCat;
       }
-      // If detectedCode is OTHER and existing is an accessories/other category, accept it
-      if (detectedCode === 'OTHER' && (existingCode === 'OTHER' || existingCode === 'GEN' || existingCode === 'ACC')) {
+      // If detectedCode is OTHER and existing is OTHER, TOOLS, CONSUMABLES, or a custom category, accept it
+      const coreHardwareCodes = ['BATTERY', 'DISPLAY', 'CAMERA', 'BACK_GLASS', 'MID_REAR'];
+      if (detectedCode === 'OTHER' && !coreHardwareCodes.includes(existingCode)) {
         return existingCat;
       }
     }
@@ -290,6 +353,8 @@ export const CANONICAL_CATEGORY_UUIDS = {
   CAMERA: 'c79bff7c-7a67-44b4-9761-2f47a8ddda04',
   BACK_GLASS: '34068b1c-78ca-43bd-99d5-6afa8c45cdab',
   MID_REAR: 'e94505e8-04f5-4058-bea0-b5bcee19fa34',
+  TOOLS: '6f2a9c4e-8b1d-4e3a-9c7f-1a2b3c4d5e6f',
+  CONSUMABLES: '7a3b8d5f-9c2e-4f4b-8d6a-2b3c4d5e6f7a',
   OTHER: 'de1c3a4e-ee19-4213-afa5-9b66688288b3'
 };
 

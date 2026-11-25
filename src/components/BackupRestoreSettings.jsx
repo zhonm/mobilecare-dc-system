@@ -28,8 +28,7 @@ import {
 import {
   BACKUP_SCHEMA_VERSION,
   compileSystemBackupPackage,
-  compileFullEnterpriseBackupPackage,
-  uploadBackupPackageToDrive,
+  uploadSpreadsheetBackupToDrive,
   listGoogleDriveBackups,
   fetchBackupPackageFromDrive,
   validateBackupPackage,
@@ -50,8 +49,15 @@ import {
   safeJsonStringify
 } from '../services/backupRestoreService';
 import {
+  generateXlsxBackupWorkbook,
+  generateCsvBackupContent,
+  triggerBackupBytesDownload,
+  parseAndValidateBackupFile
+} from '../services/spreadsheetBackupService';
+import {
   isGoogleDriveConfigured,
   setGoogleDriveCredentialsOverride,
+  downloadFromGoogleDrive,
   GOOGLE_DRIVE_CONFIG
 } from '../services/googleDriveService';
 import { loadLocalTransferHistory } from '../services/transferHistoryService';
@@ -174,7 +180,9 @@ export default function BackupRestoreSettings() {
   const [confirmInputText, setConfirmInputText] = useState('');
   const [isRestoring, setIsRestoring] = useState(false);
   const [restoreProgress, setRestoreProgress] = useState(null);
+  const [restoreError, setRestoreError] = useState(null);
   const [restoreSuccessResult, setRestoreSuccessResult] = useState(null);
+  const [backupFormat, setBackupFormat] = useState('xlsx'); // 'xlsx' | 'csv'
 
   // Inspection & Diff Modal State
   const [inspectingPackage, setInspectingPackage] = useState(null);
@@ -413,7 +421,7 @@ export default function BackupRestoreSettings() {
     }
   };
 
-  // 1. Create Live Backup to Google Drive
+  // 1. Create Live XLSX / CSV Backup to Google Drive
   const handleCreateDriveBackup = async () => {
     if (!isGoogleDriveConfigured()) {
       setIsCredsModalOpen(true);
@@ -421,24 +429,28 @@ export default function BackupRestoreSettings() {
       return;
     }
 
+    const fmt = backupFormat === 'csv' ? 'csv' : 'xlsx';
     setIsBackingUp(true);
-    setBackupProgressPercent(10);
-    setBackupProgressMsg('Compiling all 22 system stores & computing integrity checksum...');
+    setBackupProgressPercent(15);
+    setBackupProgressMsg(`Generating lightweight ${fmt.toUpperCase()} backup (Parts, DC Stock, Branch Stock, Tools, Consumables, Users, Sites)...`);
 
     try {
-      const pkg = await compileFullEnterpriseBackupPackage(currentAppState, currentUser, {
-        trigger: 'MANUAL_DRIVE_BACKUP',
-        label: backupLabel.trim()
-      });
+      const artifact = fmt === 'csv'
+        ? generateCsvBackupContent(currentAppState, currentUser, { label: backupLabel.trim() })
+        : generateXlsxBackupWorkbook(currentAppState, currentUser, { label: backupLabel.trim() });
 
-      setBackupProgressPercent(30);
-      setBackupProgressMsg('Streaming verified backup package to Google Drive (backups folder)...');
+      setBackupProgressPercent(40);
+      setBackupProgressMsg(`Uploading ${artifact.filename} (${formatFileSize(artifact.sizeBytes)}) to Google Drive...`);
 
-      const result = await uploadBackupPackageToDrive(pkg, ({ percent }) => {
-        const scaled = Math.min(99, 30 + Math.round((percent || 0) * 0.7));
-        setBackupProgressPercent(scaled);
-        setBackupProgressMsg(`Uploading to Google Drive... ${percent}%`);
-      });
+      const result = await uploadSpreadsheetBackupToDrive(
+        { ...artifact, label: backupLabel.trim() },
+        currentUser,
+        ({ percent }) => {
+          const scaled = Math.min(99, 40 + Math.round((percent || 0) * 0.6));
+          setBackupProgressPercent(scaled);
+          setBackupProgressMsg(`Uploading ${fmt.toUpperCase()} backup to Google Drive... ${percent}%`);
+        }
+      );
 
       if (!result.success) {
         throw new Error(result.error || 'Failed to upload backup to Google Drive');
@@ -450,6 +462,7 @@ export default function BackupRestoreSettings() {
         webViewLink: result.webViewLink,
         size: result.size,
         checksum: result.checksum,
+        format: result.format,
         timestamp: new Date()
       });
       setBackupLabel('');
@@ -458,15 +471,16 @@ export default function BackupRestoreSettings() {
         logAuditEvent({
           action: 'SYSTEM_BACKUP_ARCHIVED_TO_DRIVE',
           category: 'DISASTER_RECOVERY',
-          entityType: 'System Database Backup',
+          entityType: `System ${result.format} Backup`,
           entityId: result.filename,
-          entityLabel: `${result.filename} (${formatFileSize(result.size)} • ${pkg.stats.totalRecordsCount} records)`,
+          entityLabel: `${result.filename} (${formatFileSize(result.size)} • ${artifact.stats.totalRecordsCount} records)`,
           details: {
             filename: result.filename,
+            format: result.format,
             fileId: result.fileId,
             sizeBytes: result.size,
             checksum: result.checksum,
-            stats: pkg.stats
+            stats: artifact.stats
           },
           user: currentUser,
           status: 'SUCCESS'
@@ -474,7 +488,7 @@ export default function BackupRestoreSettings() {
       }
 
       showToast?.(
-        `Full system backup (${pkg.stats.totalRecordsCount.toLocaleString()} records, ${formatFileSize(result.size)}) archived to Google Drive!`,
+        `${result.format} backup (${artifact.stats.totalRecordsCount.toLocaleString()} records, ${formatFileSize(result.size)}) saved to Google Drive!`,
         'success'
       );
       await Promise.all([loadRemoteBackups(), refreshLocalMetaAndSnapshots()]);
@@ -489,40 +503,25 @@ export default function BackupRestoreSettings() {
     }
   };
 
-  // 2. Download Local JSON Backup
-  const handleDownloadLocalBackup = async () => {
+  // 2. Download Local XLSX or CSV Backup
+  const handleDownloadLocalBackup = async (formatOverride = null) => {
+    const fmt = (formatOverride || backupFormat) === 'csv' ? 'csv' : 'xlsx';
     const t0 = Date.now();
     try {
-      const pkg = await compileFullEnterpriseBackupPackage(currentAppState, currentUser, {
-        trigger: 'MANUAL_LOCAL_EXPORT',
-        label: backupLabel.trim()
-      });
+      const artifact = fmt === 'csv'
+        ? generateCsvBackupContent(currentAppState, currentUser, { label: backupLabel.trim() })
+        : generateXlsxBackupWorkbook(currentAppState, currentUser, { label: backupLabel.trim() });
 
-      const cleanLabel = pkg.label
-        ? `_${String(pkg.label).trim().replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 28)}`
-        : '';
-      const filename = `MDC_SYSTEM_BACKUP_${pkg.formattedTimestamp}${cleanLabel}.json`;
-      const jsonStr = safeJsonStringify(pkg, 2);
-      const sizeBytes = new TextEncoder().encode(jsonStr).length;
-
-      const blob = new Blob([jsonStr], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      triggerBackupBytesDownload(artifact.bytes, artifact.filename, artifact.mimeType);
 
       recordBackupExecutionLog({
         status: 'SUCCESS',
-        operationType: 'LOCAL_JSON_EXPORT',
-        filename,
-        label: pkg.label || '',
-        sizeBytes,
-        totalRecords: pkg.stats.totalRecordsCount,
-        checksum: pkg.integrity?.checksum || null,
+        operationType: `LOCAL_${artifact.format}_EXPORT`,
+        filename: artifact.filename,
+        label: backupLabel.trim(),
+        sizeBytes: artifact.sizeBytes,
+        totalRecords: artifact.stats.totalRecordsCount,
+        checksum: artifact.checksum || null,
         durationMs: Date.now() - t0,
         actorName: currentUser?.fullName || 'Superadmin',
         actorEmail: currentUser?.email || ''
@@ -531,51 +530,49 @@ export default function BackupRestoreSettings() {
       setBackupLabel('');
       await refreshLocalMetaAndSnapshots();
       showToast?.(
-        `System backup JSON (${pkg.stats.totalRecordsCount.toLocaleString()} records, ${formatFileSize(sizeBytes)}) downloaded to your computer.`,
+        `${artifact.format} backup (${artifact.stats.totalRecordsCount.toLocaleString()} records, ${formatFileSize(artifact.sizeBytes)}) downloaded!`,
         'success'
       );
     } catch (err) {
       recordBackupExecutionLog({
         status: 'FAILED',
-        operationType: 'LOCAL_JSON_EXPORT',
-        filename: 'MDC_SYSTEM_BACKUP_LOCAL.json',
+        operationType: `LOCAL_${fmt.toUpperCase()}_EXPORT`,
+        filename: `MDC_SYSTEM_BACKUP_LOCAL.${fmt}`,
         durationMs: Date.now() - t0,
         actorName: currentUser?.fullName || 'Superadmin',
         actorEmail: currentUser?.email || '',
         error: err.message
       });
       await refreshLocalMetaAndSnapshots();
-      showToast?.('Failed to export local backup: ' + err.message, 'error');
+      showToast?.(`Failed to export ${fmt.toUpperCase()} backup: ` + err.message, 'error');
     }
   };
 
-  // Helper to process and validate a local File object (from input or drag-and-drop)
-  const processLocalBackupFile = (file) => {
+  // Helper to process and validate a local File object (.xlsx, .csv, or legacy .json)
+  const processLocalBackupFile = async (file) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const parsed = JSON.parse(event.target.result);
-        const validation = validateBackupPackage(parsed);
-
-        if (!validation.isValid) {
-          showToast?.(validation.error || 'Invalid backup file', 'error');
-          return;
-        }
-
-        setStagedBackupPackage(parsed);
-        setStagedValidation(validation);
-        setStagedSourceMeta({
-          sourceType: 'LOCAL_FILE',
-          sourceFilename: file.name || 'Local_Backup_Package.json'
-        });
-        setConfirmInputText('');
-        setIsConfirmModalOpen(true);
-      } catch (parseErr) {
-        showToast?.('Invalid JSON file format: ' + parseErr.message, 'error');
+    setIsLoadingInspect(true);
+    try {
+      const parsed = await parseAndValidateBackupFile(file, file.name);
+      if (!parsed.isValid) {
+        showToast?.(parsed.error || 'Invalid backup file', 'error');
+        return;
       }
-    };
-    reader.readAsText(file);
+
+      setStagedBackupPackage(parsed.package);
+      setStagedValidation(parsed.validation);
+      setStagedSourceMeta({
+        sourceType: 'LOCAL_FILE',
+        sourceFilename: file.name || `Local_Backup.${parsed.format.toLowerCase()}`
+      });
+      setRestoreError(null);
+      setConfirmInputText('');
+      setIsConfirmModalOpen(true);
+    } catch (parseErr) {
+      showToast?.('Failed to read backup file: ' + parseErr.message, 'error');
+    } finally {
+      setIsLoadingInspect(false);
+    }
   };
 
   // 3. Staging a Local File for Restore (Click or Drag & Drop)
@@ -593,12 +590,12 @@ export default function BackupRestoreSettings() {
     if (file) processLocalBackupFile(file);
   };
 
-  // 4. Staging a Remote Drive Backup for Restore
+  // 4. Staging a Remote Drive Backup for Restore (.xlsx, .csv, or legacy .json)
   const handleStageRemoteBackup = async (file) => {
     setIsLoadingInspect(true);
     try {
       showToast?.(`Downloading ${file.name} from Google Drive for pre-flight verification...`, 'info');
-      const pkg = await fetchBackupPackageFromDrive(file.id);
+      const pkg = await fetchBackupPackageFromDrive(file.id, file.name);
       const validation = validateBackupPackage(pkg);
 
       if (!validation.isValid) {
@@ -612,6 +609,7 @@ export default function BackupRestoreSettings() {
         sourceType: 'GOOGLE_DRIVE',
         sourceFilename: file.name
       });
+      setRestoreError(null);
       setConfirmInputText('');
       setIsConfirmModalOpen(true);
     } catch (err) {
@@ -621,22 +619,28 @@ export default function BackupRestoreSettings() {
     }
   };
 
-  // 4b. Download a Remote Drive Backup as a Local .json File
+  // 4b. Download a Remote Drive Backup (.xlsx, .csv, or .json) to Local Computer
   const handleDownloadRemoteArchive = async (file) => {
     setIsLoadingInspect(true);
     try {
-      showToast?.(`Fetching ${file.name} from Google Drive...`, 'info');
-      const pkg = await fetchBackupPackageFromDrive(file.id);
-      const jsonStr = safeJsonStringify(pkg, 2);
-      const blob = new Blob([jsonStr], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = file.name.endsWith('.json') ? file.name : `${file.name}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      showToast?.(`Downloading ${file.name} from Google Drive...`, 'info');
+      const lower = String(file.name || '').toLowerCase();
+      if (lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.csv')) {
+        const res = await downloadFromGoogleDrive(file.id);
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        const mime = lower.endsWith('.csv')
+          ? 'text/csv;charset=utf-8'
+          : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        triggerBackupBytesDownload(bytes, file.name, mime);
+      } else {
+        const pkg = await fetchBackupPackageFromDrive(file.id, file.name);
+        const jsonStr = safeJsonStringify(pkg, 2);
+        triggerBackupBytesDownload(
+          new TextEncoder().encode(jsonStr),
+          file.name.endsWith('.json') ? file.name : `${file.name}.json`,
+          'application/json'
+        );
+      }
       showToast?.(`Downloaded ${file.name} to your computer.`, 'success');
     } catch (err) {
       showToast?.('Failed to download remote archive: ' + err.message, 'error');
@@ -649,7 +653,7 @@ export default function BackupRestoreSettings() {
   const handleInspectRemoteBackup = async (file) => {
     setIsLoadingInspect(true);
     try {
-      const pkg = await fetchBackupPackageFromDrive(file.id);
+      const pkg = await fetchBackupPackageFromDrive(file.id, file.name);
       const validation = validateBackupPackage(pkg);
       const diff = compareBackupWithLiveState(pkg, currentAppState);
       setInspectActiveTab('diff');
@@ -750,7 +754,8 @@ export default function BackupRestoreSettings() {
     if (!stagedBackupPackage) return;
 
     setIsRestoring(true);
-    setRestoreProgress({ step: 1, totalSteps: 6, title: 'Starting point-in-time restoration...', percent: 5 });
+    setRestoreError(null);
+    setRestoreProgress({ step: 1, totalSteps: 6, title: 'Starting point-in-time restoration...', description: 'Validating backup integrity and preparing recovery pipeline...', percent: 5 });
 
     try {
       const result = await executeSystemStateRestore(
@@ -809,15 +814,20 @@ export default function BackupRestoreSettings() {
         sourceFilename: stagedSourceMeta.sourceFilename || 'Backup_Package.json',
         restoredAt: new Date().toISOString()
       });
+      const recoveredNote = result.recoveredDeletedUnits > 0
+        ? ` (${result.recoveredDeletedUnits.toLocaleString()} deleted unit(s) recovered)`
+        : '';
+      const secText = ((result.durationMs || 0) / 1000).toFixed(1);
       showToast?.(
-        `System restoration completed & verified! Restored ${result.computedStats?.totalRecordsCount?.toLocaleString() || ''} records with 0 data loss.`,
-        'success'
+        `Restore verified in ${secText}s! Restored ${result.computedStats?.totalRecordsCount?.toLocaleString() || ''} records${recoveredNote} with ${result.verificationReport?.lostRecords || 0} lost.`,
+        result.verificationReport?.verified ? 'success' : 'warning'
       );
       setIsConfirmModalOpen(false);
       setStagedBackupPackage(null);
       await refreshLocalMetaAndSnapshots();
     } catch (err) {
       console.error('[BackupRestore] Restore execution failed:', err);
+      setRestoreError(err.message || 'An unexpected error occurred during system restore.');
       showToast?.('Restore failed: ' + err.message, 'error');
       await refreshLocalMetaAndSnapshots();
     } finally {
@@ -1188,7 +1198,7 @@ export default function BackupRestoreSettings() {
                 </h4>
                 <span
                   style={{
-                    background: '#059669',
+                    background: restoreSuccessResult.verificationReport?.verified === false ? '#d97706' : '#059669',
                     color: '#ffffff',
                     fontSize: '10.5px',
                     fontWeight: 800,
@@ -1196,8 +1206,36 @@ export default function BackupRestoreSettings() {
                     borderRadius: '12px'
                   }}
                 >
-                  0 Lost • 0 Duplicates • {(restoreSuccessResult.durationMs / 1000).toFixed(2)}s
+                  {restoreSuccessResult.verificationReport?.lostRecords || 0} Lost • {restoreSuccessResult.verificationReport?.duplicateRecords || 0} Duplicates • {((restoreSuccessResult.durationMs || 0) / 1000).toFixed(2)}s
                 </span>
+                {restoreSuccessResult.recoveredDeletedUnits > 0 && (
+                  <span
+                    style={{
+                      background: '#dbeafe',
+                      color: '#1d4ed8',
+                      fontSize: '10.5px',
+                      fontWeight: 800,
+                      padding: '2px 8px',
+                      borderRadius: '12px'
+                    }}
+                  >
+                    +{restoreSuccessResult.recoveredDeletedUnits.toLocaleString()} Deleted Unit(s) Recovered
+                  </span>
+                )}
+                {restoreSuccessResult.cloudSyncReport?.success && !restoreSuccessResult.cloudSyncReport?.offlineOnly && (
+                  <span
+                    style={{
+                      background: '#dcfce7',
+                      color: '#166534',
+                      fontSize: '10.5px',
+                      fontWeight: 800,
+                      padding: '2px 8px',
+                      borderRadius: '12px'
+                    }}
+                  >
+                    Cloud DB Synced ({(restoreSuccessResult.cloudSyncReport.inventoryUnitsSynced || 0).toLocaleString()} units)
+                  </span>
+                )}
               </div>
               <p style={{ margin: '4px 0 0 0', color: '#047857', fontSize: '12.5px', lineHeight: 1.5 }}>
                 Restored <strong>{restoreSuccessResult.restoredStats?.inventoryUnitsCount || 0}</strong> Inventory Units,{' '}
@@ -1262,11 +1300,11 @@ export default function BackupRestoreSettings() {
                 </h3>
               </div>
               <span style={{ fontSize: '11px', fontWeight: 700, color: '#059669', background: '#ecfdf5', padding: '2px 8px', borderRadius: '12px' }}>
-                22 System Stores
+                XLSX / CSV • Lightweight
               </span>
             </div>
             <p style={{ margin: 0, fontSize: '12.5px', color: '#64748b', lineHeight: 1.5 }}>
-              Compiles an immutable, checksum-verified JSON snapshot of all {inventoryUnits.length} inventory units, {shipments.length} shipments, {parts.length} parts, {sites.length} sites, POs, intakes, forecasts, allocations, C&amp;T, transfers, and system configs.
+              Exports all system data (Parts Catalog, DC Stock, Branch Stock, Tools, Consumables, Users, Sites, Shipments, POs, Intakes &amp; Settings) into a lightweight <strong>.xlsx</strong> workbook or <strong>.csv</strong> file — saved to Google Drive or downloaded locally.
             </p>
           </div>
 
@@ -1367,6 +1405,50 @@ export default function BackupRestoreSettings() {
             </div>
           )}
 
+          {/* Backup Format Selector (XLSX / CSV) */}
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              type="button"
+              onClick={() => setBackupFormat('xlsx')}
+              disabled={isBackingUp}
+              style={{
+                flex: 1,
+                padding: '8px 10px',
+                borderRadius: '8px',
+                border: backupFormat === 'xlsx' ? '2px solid #059669' : '1px solid #cbd5e1',
+                background: backupFormat === 'xlsx' ? '#ecfdf5' : '#ffffff',
+                color: backupFormat === 'xlsx' ? '#065f46' : '#475569',
+                fontSize: '12px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                textAlign: 'left'
+              }}
+            >
+              <div>Excel Workbook (.xlsx)</div>
+              <div style={{ fontSize: '10.5px', fontWeight: 500, opacity: 0.85 }}>Multi-sheet • Recommended</div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setBackupFormat('csv')}
+              disabled={isBackingUp}
+              style={{
+                flex: 1,
+                padding: '8px 10px',
+                borderRadius: '8px',
+                border: backupFormat === 'csv' ? '2px solid #059669' : '1px solid #cbd5e1',
+                background: backupFormat === 'csv' ? '#ecfdf5' : '#ffffff',
+                color: backupFormat === 'csv' ? '#065f46' : '#475569',
+                fontSize: '12px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                textAlign: 'left'
+              }}
+            >
+              <div>Unified CSV (.csv)</div>
+              <div style={{ fontSize: '10.5px', fontWeight: 500, opacity: 0.85 }}>Plain text • Universal</div>
+            </button>
+          </div>
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <button
               type="button"
@@ -1394,30 +1476,49 @@ export default function BackupRestoreSettings() {
               ) : (
                 <>
                   <HardDrive size={16} />
-                  <span>Backup to Google Drive Now</span>
+                  <span>Save {backupFormat.toUpperCase()} Backup to Google Drive</span>
                 </>
               )}
             </button>
 
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={handleDownloadLocalBackup}
-              disabled={isBackingUp}
-              style={{
-                width: '100%',
-                padding: '8px 14px',
-                fontSize: '12.5px',
-                fontWeight: 600,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '6px'
-              }}
-            >
-              <Download size={14} />
-              <span>Download Local Backup (.json)</span>
-            </button>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => handleDownloadLocalBackup('xlsx')}
+                disabled={isBackingUp}
+                style={{
+                  padding: '8px 12px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px'
+                }}
+              >
+                <Download size={14} />
+                <span>Download .xlsx</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => handleDownloadLocalBackup('csv')}
+                disabled={isBackingUp}
+                style={{
+                  padding: '8px 12px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px'
+                }}
+              >
+                <Download size={14} />
+                <span>Download .csv</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1450,7 +1551,7 @@ export default function BackupRestoreSettings() {
               </span>
             </div>
             <p style={{ margin: 0, fontSize: '12.5px', color: '#64748b', lineHeight: 1.5 }}>
-              Upload a previously exported <code>MDC_SYSTEM_BACKUP_*.json</code> file to restore all system records with pre-flight schema &amp; checksum inspection.
+              Upload a previously exported <code>.xlsx</code> or <code>.csv</code> backup file (or legacy <code>.json</code> archive) to validate and restore all system records quickly and accurately.
             </p>
           </div>
 
@@ -1493,13 +1594,13 @@ export default function BackupRestoreSettings() {
               Click or Drag &amp; Drop Backup File
             </div>
             <div style={{ fontSize: '11.5px', color: '#94a3b8', marginTop: '2px' }}>
-              Accepts .json backup packages (v1.0, v2.0, v3.0 &amp; CLI dumps)
+              Accepts .xlsx, .csv (recommended) &amp; legacy .json backups
             </div>
             <input
               type="file"
               ref={fileInputRef}
               onChange={handleFileSelected}
-              accept=".json"
+              accept=".xlsx,.xls,.csv,.json"
               style={{ display: 'none' }}
             />
           </div>
@@ -2864,9 +2965,36 @@ export default function BackupRestoreSettings() {
                 </label>
               )}
 
+              {/* Restore Error Alert */}
+              {restoreError && !isRestoring && (
+                <div
+                  style={{
+                    background: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    borderRadius: '8px',
+                    padding: '10px 12px',
+                    color: '#991b1b',
+                    fontSize: '12px',
+                    lineHeight: 1.45
+                  }}
+                >
+                  <strong>Restore Error:</strong> {restoreError}
+                </div>
+              )}
+
               {/* Progress bar during restore */}
               {isRestoring && restoreProgress && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    padding: '12px'
+                  }}
+                >
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 700, color: '#047857' }}>
                     <span>Step {restoreProgress.step} of {restoreProgress.totalSteps}: {restoreProgress.title}</span>
                     <span>{restoreProgress.percent}%</span>
@@ -2876,12 +3004,12 @@ export default function BackupRestoreSettings() {
                       style={{
                         height: '100%',
                         width: `${restoreProgress.percent}%`,
-                        background: '#059669',
-                        transition: 'width 0.3s ease'
+                        background: 'linear-gradient(90deg, #059669, #10b981)',
+                        transition: 'width 0.25s ease'
                       }}
                     />
                   </div>
-                  <div style={{ fontSize: '11.5px', color: '#64748b' }}>
+                  <div style={{ fontSize: '11.5px', color: '#475569' }}>
                     {restoreProgress.description}
                   </div>
                 </div>

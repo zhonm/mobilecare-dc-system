@@ -44,7 +44,7 @@ import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { clearStoredUserSession } from '../utils/security';
 import { ensureSavedRecordPeriodFields } from '../utils/savedRecordsQueue.js';
 import { scanMasterlistData, setActiveScannedMasterlist, getActiveMasterlist } from '../utils/rawMasterlistScanner.js';
-import { resolvePartCategoryId, resolvePartCategoryUUID, getPartCategory, DEFAULT_PART_CATEGORIES } from '../utils/categoryFilter';
+import { resolvePartCategoryId, resolvePartCategoryUUID, getPartCategory, mergeWithDefaultCategories } from '../utils/categoryFilter';
 import {
   mergeGsxPartsIntoCatalog,
   loadGsxSeedParts,
@@ -515,6 +515,9 @@ export function useCloudSync({
   // Main Database Hydration
   const hydrateFromSupabase = useCallback(async (selectiveTables = null, isForce = false) => {
     if (!supabase) return false;
+    if (typeof window !== 'undefined' && window.__MDC_SYSTEM_RESTORE_IN_PROGRESS) {
+      return false;
+    }
 
     const selectiveKey = Array.isArray(selectiveTables) && selectiveTables.length > 0
       ? [...selectiveTables].sort().join(',')
@@ -726,27 +729,46 @@ export function useCloudSync({
           }
         }
 
+        // Fetch inventory_units in parallel batches of 6 pages (6,000 rows/wave) instead of 26 sequential round-trips!
         const rows = [];
+        let useStarFallback = false;
+        const PARALLEL_PAGES = 6;
+        let pageBatchOffset = 0;
 
-        for (let offset = 0; ; offset += pageSize) {
-          let response = await supabase
-            .from('inventory_units')
-            .select(INVENTORY_COLUMNS)
-            .order('created_at', { ascending: true })
-            .range(offset, offset + pageSize - 1);
+        while (true) {
+          const offsets = Array.from({ length: PARALLEL_PAGES }, (_, idx) => pageBatchOffset + idx * pageSize);
+          const waveResults = await Promise.all(
+            offsets.map(async (offset) => {
+              let response = await supabase
+                .from('inventory_units')
+                .select(useStarFallback ? '*' : INVENTORY_COLUMNS)
+                .order('created_at', { ascending: true })
+                .range(offset, offset + pageSize - 1);
 
-          if (response.error && (response.error.code === '42703' || response.error.message?.includes('does not exist'))) {
-            response = await supabase
-              .from('inventory_units')
-              .select('*')
-              .order('created_at', { ascending: true })
-              .range(offset, offset + pageSize - 1);
+              if (!useStarFallback && response.error && (response.error.code === '42703' || response.error.message?.includes('does not exist'))) {
+                useStarFallback = true;
+                response = await supabase
+                  .from('inventory_units')
+                  .select('*')
+                  .order('created_at', { ascending: true })
+                  .range(offset, offset + pageSize - 1);
+              }
+              return response;
+            })
+          );
+
+          let reachedEnd = false;
+          for (const res of waveResults) {
+            if (res.error) return res;
+            const page = res.data || [];
+            rows.push(...page);
+            if (page.length < pageSize) {
+              reachedEnd = true;
+              break;
+            }
           }
-
-          if (response.error) return response;
-          const page = response.data || [];
-          rows.push(...page);
-          if (page.length < pageSize) break;
+          if (reachedEnd) break;
+          pageBatchOffset += PARALLEL_PAGES * pageSize;
         }
 
         if (rows.length > 0) {
@@ -916,9 +938,8 @@ export function useCloudSync({
               .from('saved_records')
               .select('*')
               .eq('record_type', 'shipment')
-              .gte('created_at', archiveCutoffIsoTimestamp)
               .order('created_at', { ascending: false })
-              .limit(150);
+              .limit(200);
             if (!fullRes.error && Array.isArray(fullRes.data)) {
               shipCache.rowsById.clear();
               let maxTs = null;
@@ -1413,11 +1434,44 @@ export function useCloudSync({
         ) : Promise.resolve({ data: null }),
         // In-Stock Inventory Units: PMG branch users have network-wide ASP branch visibility (Central DC excluded by RLS & UI)
         shouldFetch('inventory_units') ? (
-          fetchAllInventoryUnits()
+          withTimeout(fetchAllInventoryUnits(), 20000, 'fetchAllInventoryUnits').catch((invErr) => {
+            console.warn('[CloudSync] inventory_units fetch slow/skipped, preserving other tables:', invErr?.message);
+            return { data: null, error: invErr };
+          })
         ) : Promise.resolve({ data: null }),
-        shouldFetch('parts') ? supabase.from('parts').select('*').order('part_number', { ascending: true }) : Promise.resolve({ data: null }),
+        shouldFetch('parts') ? (async () => {
+          const allParts = [];
+          const pageSize = 1000;
+          const PARALLEL_PART_PAGES = 5;
+          let batchOffset = 0;
+          while (true) {
+            const offsets = Array.from({ length: PARALLEL_PART_PAGES }, (_, idx) => batchOffset + idx * pageSize);
+            const wave = await Promise.all(
+              offsets.map((offset) =>
+                supabase
+                  .from('parts')
+                  .select('*')
+                  .order('part_number', { ascending: true })
+                  .range(offset, offset + pageSize - 1)
+              )
+            );
+            let done = false;
+            for (const res of wave) {
+              if (res.error) return { data: allParts.length > 0 ? allParts : null, error: res.error };
+              const pageData = res.data || [];
+              allParts.push(...pageData);
+              if (pageData.length < pageSize) {
+                done = true;
+                break;
+              }
+            }
+            if (done) break;
+            batchOffset += PARALLEL_PART_PAGES * pageSize;
+          }
+          return { data: allParts, error: null };
+        })() : Promise.resolve({ data: null }),
         shouldFetch('sites') ? supabase.from('sites').select('*').order('code', { ascending: true }) : Promise.resolve({ data: null }),
-        shouldFetch('part_categories') ? supabase.from('part_categories').select('*').limit(20) : Promise.resolve({ data: null }),
+        shouldFetch('part_categories') ? supabase.from('part_categories').select('*').limit(100) : Promise.resolve({ data: null }),
         // Egress optimization: Scope by site_id destination for PMG branch users & filter active/open or recent manifests (<60 days)
         shouldFetch('shipments') ? (
           isSiteRestrictedPmg
@@ -1443,9 +1497,8 @@ export function useCloudSync({
               })()
             : supabase.from('shipments')
                 .select('*, shipment_items(*)')
-                .or(`status.not.in.(received_confirmed,delivered),shipment_date.gte.${archiveCutoffIsoDate},created_at.gte.${archiveCutoffIsoTimestamp}`)
                 .order('created_at', { ascending: false })
-                .limit(200)
+                .limit(250)
         ) : Promise.resolve({ data: null }),
         // Egress optimization: Scope by site_id for PMG branch users
         shouldFetch('parts_requests') ? (
@@ -1805,18 +1858,14 @@ export function useCloudSync({
 
       // 2. Process Categories
       if (shouldFetch('part_categories') && dbCats && dbCats.length > 0) {
-        const catRows = dbCats.map(c => ({
+        const catRows = mergeWithDefaultCategories(dbCats.map(c => ({
           id: c.id,
           code: c.code,
           name: c.name,
           has_imei: c.has_imei || false,
           is_serialized: c.is_serialized ?? true,
           sort_order: c.sort_order || 1
-        }));
-        if (!catRows.some(c => c.code === 'OTHER')) {
-          const otherCat = DEFAULT_PART_CATEGORIES.find(c => c.code === 'OTHER');
-          if (otherCat) catRows.push(otherCat);
-        }
+        })));
         setCategories(catRows);
       }
 
@@ -3983,7 +4032,7 @@ export function useCloudSync({
     };
 
     const runWithWatchdog = () =>
-      withTimeout(executeHydration(), 25000, 'hydrateFromSupabase').catch((err) => {
+      withTimeout(executeHydration(), isForce ? 60000 : 45000, 'hydrateFromSupabase').catch((err) => {
         console.warn('[CloudSync] Hydration aborted/timed out:', err?.message);
         return false;
       });
@@ -5314,151 +5363,187 @@ export function useCloudSync({
       }
     }
 
+    const isRestoreMode = Boolean(overrideData?.isSystemRestore);
+    const silentMode = isRestoreMode || Boolean(overrideData?.silent);
+
     try {
-      showToast('Syncing master data to Supabase cloud...', 'info');
-
-      try {
-        const resolvedActivePeriod = currentActivePeriod;
-        const fallbackYear = new Date().getFullYear();
-        const fallbackMonth = new Date().getMonth() + 1;
-        const fallbackLabel = `${new Date().toLocaleString('en-US', { month: 'long' })} ${fallbackYear}`;
-        const liveSnapshotPayload = {
-          id: LIVE_MASTER_RECORD_ID,
-          record_type: 'both',
-          period_label: `${resolvedActivePeriod.label || fallbackLabel} Live Master State`,
-          period_year: resolvedActivePeriod.year || fallbackYear,
-          period_month: resolvedActivePeriod.month || fallbackMonth,
-          saved_by_name: currentUser?.fullName || 'Superadmin User',
-          saved_by_user_id: null,
-          notes: 'Real-time multi-user synchronized Distribution Center state',
-          snapshot_data: {
-            isCleared: isExplicitlyCleared(),
-            activePeriod: resolvedActivePeriod,
-            forecastingModel: currentForecastingModel,
-            forecastItems: isExplicitlyCleared() ? [] : (currentForecast || []),
-            allocations: isExplicitlyCleared() ? [] : (currentAllocs || []),
-            parts: currentParts || [],
-            sites: currentSites || [],
-            masterlistSummary: currentMasterlistData ? {
-              totalUnits: currentMasterlistData.totalUnits,
-              totalDistinctParts: currentMasterlistData.totalDistinctParts,
-              totalSites: currentMasterlistData.totalSites,
-              totalValUSD: currentMasterlistData.totalValUSD,
-              totalValPHP: currentMasterlistData.totalValPHP,
-              periodLabel: currentMasterlistData.periodLabel
-            } : null,
-            masterlistData: currentMasterlistData || null,
-            uploadAuditLogs: currentUploadLogs || [],
-            deletionAuditLogs: currentDeletionLogs || []
-          },
-          updated_at: new Date().toISOString()
-        };
-
-        await supabase.from('saved_records').upsert([liveSnapshotPayload], { onConflict: 'id' });
-        try {
-          localStorage.setItem('mdc_live_master_updated_at', liveSnapshotPayload.updated_at);
-          dbStorage.setItem('mdc_live_master_updated_at', liveSnapshotPayload.updated_at);
-        } catch (e) {}
-
-        if (currentMasterlistData && currentMasterlistData.totalUnits > 0) {
-          const masterlistPayload = {
-            id: 'master_masterlist_data_registry',
-            record_type: 'masterlist_registry',
-            period_label: `${resolvedActivePeriod.label || fallbackLabel} Masterlist Data Registry`,
-            period_year: resolvedActivePeriod?.year || fallbackYear,
-            period_month: resolvedActivePeriod?.month || fallbackMonth,
-            notes: `Scanned masterlist intelligence (${currentMasterlistData.totalUnits} units, ${currentMasterlistData.totalDistinctParts} SKUs)`,
-            saved_by_name: currentUser?.fullName || 'Superadmin User',
-            snapshot_data: {
-              masterlistData: currentMasterlistData,
-              lastUpdated: new Date().toISOString()
-            },
-            updated_at: new Date().toISOString()
-          };
-          await supabase.from('saved_records').upsert(masterlistPayload, { onConflict: 'id' });
-          try {
-            localStorage.setItem('mdc_masterlist_updated_at', masterlistPayload.updated_at);
-            dbStorage.setItem('mdc_masterlist_updated_at', masterlistPayload.updated_at);
-          } catch (e) {}
-        }
-
-        if (currentUploadLogs && currentUploadLogs.length > 0) {
-          await supabase.from('saved_records').upsert({
-            id: 'master_upload_audit_logs_registry',
-            record_type: 'upload_audit_registry',
-            period_label: 'Master Upload Audit Registry',
-            period_year: activePeriod?.year || fallbackYear,
-            period_month: activePeriod?.month || fallbackMonth,
-            notes: `Master upload audit records (${currentUploadLogs.length} entries)`,
-            saved_by_name: currentUser?.fullName || 'Superadmin User',
-            snapshot_data: {
-              logs: currentUploadLogs,
-              lastUpdated: new Date().toISOString()
-            },
-            updated_at: new Date().toISOString()
-          }, { onConflict: 'id' });
-        }
-
-        if (currentDeletionLogs && currentDeletionLogs.length > 0) {
-          await supabase.from('saved_records').upsert({
-            id: 'master_deletion_audit_logs_registry',
-            record_type: 'deletion_audit_registry',
-            period_label: 'Master Deletion Audit Registry',
-            period_year: activePeriod?.year || fallbackYear,
-            period_month: activePeriod?.month || fallbackMonth,
-            notes: `Master deletion audit records (${currentDeletionLogs.length} entries)`,
-            saved_by_name: currentUser?.fullName || 'Superadmin User',
-            snapshot_data: {
-              logs: currentDeletionLogs,
-              lastUpdated: new Date().toISOString()
-            },
-            updated_at: new Date().toISOString()
-          }, { onConflict: 'id' });
-        }
-      } catch (err) {
-        console.warn('Live master snapshot sync notice:', err);
+      if (!silentMode) {
+        showToast('Syncing master data to Supabase cloud...', 'info');
       }
 
-      if (categories && categories.length > 0) {
-        try {
-          const catRows = categories.map((c, i) => ({
-            code: c.code,
-            name: c.name,
-            has_imei: c.has_imei || false,
-            is_serialized: c.is_serialized ?? true,
-            sort_order: c.sort_order || i + 1
-          })).filter(c => c.code);
-          const uniqueCatRows = Array.from(new Map(catRows.map(r => [r.code.trim().toUpperCase(), r])).values());
-          if (uniqueCatRows.length > 0) {
-            await supabase.from('part_categories').upsert(uniqueCatRows, { onConflict: 'code' });
+      const nowIso = new Date().toISOString();
+      const resolvedActivePeriod = currentActivePeriod;
+      const fallbackYear = new Date().getFullYear();
+      const fallbackMonth = new Date().getMonth() + 1;
+      const fallbackLabel = `${new Date().toLocaleString('en-US', { month: 'long' })} ${fallbackYear}`;
+      const liveSnapshotPayload = {
+        id: LIVE_MASTER_RECORD_ID,
+        record_type: 'both',
+        period_label: `${resolvedActivePeriod.label || fallbackLabel} Live Master State`,
+        period_year: resolvedActivePeriod.year || fallbackYear,
+        period_month: resolvedActivePeriod.month || fallbackMonth,
+        saved_by_name: currentUser?.fullName || 'Superadmin User',
+        saved_by_user_id: null,
+        notes: 'Real-time multi-user synchronized Distribution Center state',
+        snapshot_data: {
+          isCleared: isExplicitlyCleared(),
+          activePeriod: resolvedActivePeriod,
+          forecastingModel: currentForecastingModel,
+          forecastItems: isExplicitlyCleared() ? [] : (currentForecast || []),
+          allocations: isExplicitlyCleared() ? [] : (currentAllocs || []),
+          parts: currentParts || [],
+          sites: currentSites || [],
+          masterlistSummary: currentMasterlistData ? {
+            totalUnits: currentMasterlistData.totalUnits,
+            totalDistinctParts: currentMasterlistData.totalDistinctParts,
+            totalSites: currentMasterlistData.totalSites,
+            totalValUSD: currentMasterlistData.totalValUSD,
+            totalValPHP: currentMasterlistData.totalValPHP,
+            periodLabel: currentMasterlistData.periodLabel
+          } : null,
+          masterlistData: currentMasterlistData || null,
+          uploadAuditLogs: currentUploadLogs || [],
+          deletionAuditLogs: currentDeletionLogs || []
+        },
+        updated_at: nowIso
+      };
+
+      // Phase A: Run independent saved_records, part_categories, and sites upserts in parallel
+      const phaseATasks = [];
+
+      phaseATasks.push(
+        (async () => {
+          try {
+            await supabase.from('saved_records').upsert([liveSnapshotPayload], { onConflict: 'id' });
+            try {
+              localStorage.setItem('mdc_live_master_updated_at', liveSnapshotPayload.updated_at);
+              dbStorage.setItem('mdc_live_master_updated_at', liveSnapshotPayload.updated_at);
+            } catch (e) {}
+          } catch (err) {
+            console.warn('Live master snapshot sync notice:', err);
           }
-        } catch (e) {}
+        })()
+      );
+
+      const auxSavedRecords = [];
+      if (currentMasterlistData && currentMasterlistData.totalUnits > 0) {
+        auxSavedRecords.push({
+          id: 'master_masterlist_data_registry',
+          record_type: 'masterlist_registry',
+          period_label: `${resolvedActivePeriod.label || fallbackLabel} Masterlist Data Registry`,
+          period_year: resolvedActivePeriod?.year || fallbackYear,
+          period_month: resolvedActivePeriod?.month || fallbackMonth,
+          notes: `Scanned masterlist intelligence (${currentMasterlistData.totalUnits} units, ${currentMasterlistData.totalDistinctParts} SKUs)`,
+          saved_by_name: currentUser?.fullName || 'Superadmin User',
+          snapshot_data: {
+            masterlistData: currentMasterlistData,
+            lastUpdated: nowIso
+          },
+          updated_at: nowIso
+        });
+      }
+      if (currentUploadLogs && currentUploadLogs.length > 0) {
+        auxSavedRecords.push({
+          id: 'master_upload_audit_logs_registry',
+          record_type: 'upload_audit_registry',
+          period_label: 'Master Upload Audit Registry',
+          period_year: resolvedActivePeriod?.year || fallbackYear,
+          period_month: resolvedActivePeriod?.month || fallbackMonth,
+          notes: `Master upload audit records (${currentUploadLogs.length} entries)`,
+          saved_by_name: currentUser?.fullName || 'Superadmin User',
+          snapshot_data: {
+            logs: currentUploadLogs,
+            lastUpdated: nowIso
+          },
+          updated_at: nowIso
+        });
+      }
+      if (currentDeletionLogs && currentDeletionLogs.length > 0) {
+        auxSavedRecords.push({
+          id: 'master_deletion_audit_logs_registry',
+          record_type: 'deletion_audit_registry',
+          period_label: 'Master Deletion Audit Registry',
+          period_year: resolvedActivePeriod?.year || fallbackYear,
+          period_month: resolvedActivePeriod?.month || fallbackMonth,
+          notes: `Master deletion audit records (${currentDeletionLogs.length} entries)`,
+          saved_by_name: currentUser?.fullName || 'Superadmin User',
+          snapshot_data: {
+            logs: currentDeletionLogs,
+            lastUpdated: nowIso
+          },
+          updated_at: nowIso
+        });
+      }
+      if (auxSavedRecords.length > 0) {
+        phaseATasks.push(
+          (async () => {
+            try {
+              await supabase.from('saved_records').upsert(auxSavedRecords, { onConflict: 'id' });
+              if (currentMasterlistData && currentMasterlistData.totalUnits > 0) {
+                try {
+                  localStorage.setItem('mdc_masterlist_updated_at', nowIso);
+                  dbStorage.setItem('mdc_masterlist_updated_at', nowIso);
+                } catch (e) {}
+              }
+            } catch (err) {
+              console.warn('Aux master saved_records sync notice:', err);
+            }
+          })()
+        );
+      }
+
+      const activeCategories = overrideData?.categories || categories;
+      if (activeCategories && activeCategories.length > 0) {
+        phaseATasks.push(
+          (async () => {
+            try {
+              const catRows = activeCategories.map((c, i) => ({
+                code: c.code,
+                name: c.name,
+                has_imei: c.has_imei || false,
+                is_serialized: c.is_serialized ?? true,
+                sort_order: c.sort_order || i + 1
+              })).filter(c => c.code);
+              const uniqueCatRows = Array.from(new Map(catRows.map(r => [r.code.trim().toUpperCase(), r])).values());
+              if (uniqueCatRows.length > 0) {
+                await supabase.from('part_categories').upsert(uniqueCatRows, { onConflict: 'code' });
+              }
+            } catch (e) {}
+          })()
+        );
       }
 
       if (currentSites && currentSites.length > 0) {
-        try {
-          const siteRows = currentSites.map(s => ({
-            code: s.code,
-            name: s.name,
-            region: resolveSafeRegion(s.code, s.region),
-            address: s.address || s.full_address || '',
-            full_address: s.full_address || s.address || '',
-            contact_person: s.contact_person || '',
-            contact_phone: s.contact_phone || '',
-            contact_email: s.contact_email || '',
-            ship_to: s.ship_to || null,
-            sold_to: s.sold_to || null,
-            invoice_prefix: s.invoice_prefix || '',
-            is_dc: s.is_dc || false,
-            is_active: s.is_active ?? true
-          })).filter(s => s.code);
-          const uniqueSiteRows = Array.from(new Map(siteRows.map(r => [r.code.trim().toUpperCase(), r])).values());
-          if (uniqueSiteRows.length > 0) {
-            await supabase.from('sites').upsert(uniqueSiteRows, { onConflict: 'code' });
-          }
-        } catch (e) {}
+        phaseATasks.push(
+          (async () => {
+            try {
+              const siteRows = currentSites.map(s => ({
+                code: s.code,
+                name: s.name,
+                region: resolveSafeRegion(s.code, s.region),
+                address: s.address || s.full_address || '',
+                full_address: s.full_address || s.address || '',
+                contact_person: s.contact_person || '',
+                contact_phone: s.contact_phone || '',
+                contact_email: s.contact_email || '',
+                ship_to: s.ship_to || null,
+                sold_to: s.sold_to || null,
+                invoice_prefix: s.invoice_prefix || '',
+                is_dc: s.is_dc || false,
+                is_active: s.is_active ?? true
+              })).filter(s => s.code);
+              const uniqueSiteRows = Array.from(new Map(siteRows.map(r => [r.code.trim().toUpperCase(), r])).values());
+              if (uniqueSiteRows.length > 0) {
+                await supabase.from('sites').upsert(uniqueSiteRows, { onConflict: 'code' });
+              }
+            } catch (e) {}
+          })()
+        );
       }
 
+      await Promise.allSettled(phaseATasks);
+
+      // Phase B: Chunked parallel upsert for parts catalog (500 rows/chunk, 4 concurrent)
       if (currentParts && currentParts.length > 0) {
         try {
           const { data: dbCats } = await supabase.from('part_categories').select('id, code');
@@ -5466,12 +5551,12 @@ export function useCloudSync({
 
           const partRows = currentParts.map(p => {
             const trueCode = getPartCategory(p);
-            const catObj = categories.find(c => c.id === p.category_id);
+            const catObj = (activeCategories || []).find(c => c.id === p.category_id);
             const catCode = (catObj && catObj.code === trueCode) ? catObj.code : trueCode;
             const candidateCatId = catMap.get(catCode);
             const resolvedUuid = (candidateCatId && isUUID(candidateCatId))
               ? candidateCatId
-              : resolvePartCategoryUUID(p, categories);
+              : resolvePartCategoryUUID(p, activeCategories || []);
 
             return {
               part_number: p.part_number,
@@ -5484,17 +5569,31 @@ export function useCloudSync({
             };
           }).filter(p => p.part_number);
           const uniquePartRows = Array.from(new Map(partRows.map(r => [r.part_number.trim().toUpperCase(), r])).values());
-          if (uniquePartRows.length > 0) {
-            await supabase.from('parts').upsert(uniquePartRows, { onConflict: 'part_number' });
+
+          const PART_CHUNK = 500;
+          const partChunks = [];
+          for (let i = 0; i < uniquePartRows.length; i += PART_CHUNK) {
+            partChunks.push(uniquePartRows.slice(i, i + PART_CHUNK));
+          }
+          for (let i = 0; i < partChunks.length; i += 4) {
+            await Promise.allSettled(
+              partChunks.slice(i, i + 4).map(chunk =>
+                supabase.from('parts').upsert(chunk, { onConflict: 'part_number' })
+              )
+            );
           }
         } catch (e) {}
       }
 
-      showToast('All master data, forecasts, allocations & audit logs synced to cloud!', 'success');
+      if (!silentMode) {
+        showToast('All master data, forecasts, allocations & audit logs synced to cloud!', 'success');
+      }
       return { success: true };
     } catch (err) {
       console.error('Cloud sync error:', err);
-      showToast(`Cloud sync error: ${err.message}`, 'error');
+      if (!silentMode) {
+        showToast(`Cloud sync error: ${err.message}`, 'error');
+      }
       return { success: false, error: err.message };
     }
   };
@@ -6080,9 +6179,23 @@ export function useCloudSync({
   // Force Global Cloud Sync & Purge All Users Cache
   const forceGlobalCloudSyncAndPurge = async (overrideData = null) => {
     const isRestoreMode = Boolean(overrideData?.isSystemRestore);
+    const reportProgress = typeof overrideData?.onProgress === 'function' ? overrideData.onProgress : null;
+    const syncStartedAt = Date.now();
+    const warnings = [];
+
     if (!supabase) {
       if (isRestoreMode) {
-        return { success: true, offlineOnly: true, timestamp: new Date().toISOString() };
+        return {
+          success: true,
+          offlineOnly: true,
+          deletedRegistriesFlushed: false,
+          inventoryUnitsSynced: 0,
+          inventoryUnitsFailed: 0,
+          registriesSynced: 0,
+          warnings: ['Offline mode: Supabase client not connected — restored locally only.'],
+          durationMs: Date.now() - syncStartedAt,
+          timestamp: new Date().toISOString()
+        };
       }
       showToast('Supabase client is not connected', 'error');
       return { success: false, error: 'Supabase client is not connected' };
@@ -6097,250 +6210,504 @@ export function useCloudSync({
       const nowYear = new Date().getFullYear();
       const nowMonth = new Date().getMonth() + 1;
       const actorName = currentUser?.fullName || 'Superadmin';
+      const currentInv = overrideData?.inventoryUnits !== undefined ? overrideData.inventoryUnits : (inventoryUnits || []);
+      const currentShipments = overrideData?.shipments !== undefined ? overrideData.shipments : (_shipments || []);
+      const currentPos = overrideData?.purchaseOrders !== undefined ? overrideData.purchaseOrders : (_purchaseOrders || []);
+      const currentIntakes = overrideData?.dcIntakeRecords !== undefined ? overrideData.dcIntakeRecords : (_dcIntakeRecords || []);
+      const currentRequests = overrideData?.partsRequests !== undefined ? overrideData.partsRequests : (_partsRequests || []);
+      const currentUsers = overrideData?.usersList !== undefined ? overrideData.usersList : (_usersList || []);
 
-      // 1. Sync all master data to Supabase (parts, sites, categories, forecasts, allocations, logs)
-      const syncRes = await syncAllDataToCloud(overrideData);
+      let deletedRegistriesFlushed = false;
+      let inventoryUnitsSynced = 0;
+      let inventoryUnitsFailed = 0;
+      let registriesSynced = 0;
+
+      // PHASE 0 (CRITICAL FOR RESTORE): Flush reconciled deletion & cleared-site tombstones FIRST!
+      // This guarantees no concurrent/realtime sync can ever see stale deleted serials and hide restored DC stock.
+      if (isRestoreMode && overrideData?.registries) {
+        reportProgress?.({
+          percent: 88,
+          description: 'Clearing deletion tombstones in Supabase so deleted parts can be recovered...'
+        });
+        const tombstoneRows = [
+          {
+            id: 'deleted_unit_serials_registry',
+            record_type: 'deletion_registry',
+            period_label: 'Deleted Unit Serials Registry',
+            period_year: nowYear,
+            period_month: nowMonth,
+            snapshot_data: { deletedSerials: overrideData.registries.deletedUnitSerials || [] },
+            updated_at: nowIso
+          },
+          {
+            id: 'deleted_shipment_ids_registry',
+            record_type: 'deletion_registry',
+            period_label: 'Deleted Shipment IDs Registry',
+            period_year: nowYear,
+            period_month: nowMonth,
+            snapshot_data: { deletedIds: overrideData.registries.deletedShipmentIds || [] },
+            updated_at: nowIso
+          },
+          {
+            id: 'deleted_intake_ids_registry',
+            record_type: 'deletion_registry',
+            period_label: 'Deleted Intake IDs Registry',
+            period_year: nowYear,
+            period_month: nowMonth,
+            snapshot_data: { deletedIds: overrideData.registries.deletedIntakeIds || [] },
+            updated_at: nowIso
+          },
+          {
+            id: 'cleared_sites_registry',
+            record_type: 'cleared_sites',
+            period_label: 'Cleared Sites Registry',
+            period_year: nowYear,
+            period_month: nowMonth,
+            snapshot_data: { clearedSites: overrideData.registries.clearedSiteTimestamps || {} },
+            updated_at: nowIso
+          }
+        ];
+        try {
+          const { error: tombErr } = await supabase.from('saved_records').upsert(tombstoneRows, { onConflict: 'id' });
+          if (tombErr) {
+            warnings.push(`Tombstone registry flush warning: ${tombErr.message}`);
+          } else {
+            deletedRegistriesFlushed = true;
+            registriesSynced += tombstoneRows.length;
+          }
+        } catch (tombEx) {
+          warnings.push(`Tombstone registry flush error: ${tombEx.message}`);
+        }
+      }
+
+      // PHASE 1: Sync master tables (categories, sites, parts, live master snapshot)
+      reportProgress?.({
+        percent: 90,
+        description: 'Syncing catalog, sites, and master state to Supabase...'
+      });
+      const syncRes = await syncAllDataToCloud({ ...overrideData, silent: isRestoreMode });
       if (!syncRes.success && !isRestoreMode) {
         throw new Error(syncRes.error || 'Failed to sync master data');
       }
-
-      // 2. Sync Live Inventory Units (DC & Branches)
-      const currentInv = overrideData?.inventoryUnits !== undefined ? overrideData.inventoryUnits : (inventoryUnits || []);
-      if (Array.isArray(currentInv) && (currentInv.length > 0 || isRestoreMode)) {
-        try {
-          await supabase.from('saved_records').upsert({
-            id: 'live_master_dc_inventory',
-            record_type: 'inventory_master',
-            period_label: 'Live Master DC Inventory',
-            period_year: nowYear,
-            period_month: nowMonth,
-            period_week: 1,
-            notes: 'Master DC In-Stock inventory pool across all accounts',
-            saved_by_name: actorName,
-            snapshot_data: { units: currentInv },
-            updated_at: nowIso
-          }, { onConflict: 'id' });
-
-          const branchUnits = currentInv.filter(u => {
-            const sId = String(u?.current_site_id || u?.site_id || '').toLowerCase();
-            const sCode = String(u?.site_code || '').toUpperCase();
-            const isDc = sId === 'site-dc' || sCode === 'DC-MDC' || sCode === 'DC' || u?.is_dc;
-            return !isDc && u?.status !== 'draft';
-          });
-
-          await supabase.from('saved_records').upsert({
-            id: 'master_branch_inventory_registry',
-            record_type: 'inventory_master',
-            period_label: 'Master Branch Inventory Registry',
-            period_year: nowYear,
-            period_month: nowMonth,
-            period_week: 1,
-            notes: 'Authoritative In-Stock branch inventory across all retail ASP sites',
-            saved_by_name: actorName,
-            snapshot_data: { units: branchUnits },
-            updated_at: nowIso
-          }, { onConflict: 'id' });
-
-          try {
-            localStorage.setItem('mdc_live_inventory_updated_at', nowIso);
-            localStorage.setItem('mdc_branch_inventory_updated_at', nowIso);
-            localStorage.setItem('mdc_inventory_units_updated_at', nowIso);
-            localStorage.setItem('mdc_inventory_units_count', String(currentInv.length));
-            dbStorage.setItem('mdc_live_inventory_updated_at', nowIso);
-            dbStorage.setItem('mdc_branch_inventory_updated_at', nowIso);
-            dbStorage.setItem('mdc_inventory_units_updated_at', nowIso);
-            dbStorage.setItem('mdc_inventory_units_count', currentInv.length);
-          } catch (e) {}
-        } catch (e) {
-          console.warn('Inventory units saved_records sync note:', e);
-        }
+      if (!syncRes.success && syncRes.error) {
+        warnings.push(`Master catalog sync notice: ${syncRes.error}`);
       }
 
-      // 3. Sync Outbound Shipments & Manifests
-      const currentShipments = overrideData?.shipments !== undefined ? overrideData.shipments : (_shipments || []);
-      if (Array.isArray(currentShipments) && (currentShipments.length > 0 || isRestoreMode)) {
-        try {
-          await supabase.from('saved_records').upsert({
-            id: 'master_shipments_registry',
-            record_type: 'shipments_registry',
-            period_label: 'Master Shipments Registry',
+      // PHASE 2: Parallel sync of direct `public.inventory_units` table AND all `saved_records` registries
+      reportProgress?.({
+        percent: 93,
+        description: `Recovering ${currentInv.length.toLocaleString()} inventory units & operational registries in Supabase...`
+      });
+
+      const phase2Tasks = [];
+
+      // 2A. Direct PostgreSQL `public.inventory_units` upsert (CRITICAL so deleted DC Stock units are restored in DB!)
+      if (Array.isArray(currentInv) && currentInv.length > 0) {
+        phase2Tasks.push(
+          (async () => {
+            try {
+              // Fetch ALL authoritative Supabase parts (paginated past PostgREST 1,000-row cap) & sites in parallel
+              const fetchAllDbParts = async () => {
+                const rows = [];
+                const pageSize = 1000;
+                for (let offset = 0; ; offset += pageSize) {
+                  const { data: page, error: pErr } = await supabase
+                    .from('parts')
+                    .select('id, part_number')
+                    .order('part_number', { ascending: true })
+                    .range(offset, offset + pageSize - 1);
+                  if (pErr || !page || page.length === 0) break;
+                  rows.push(...page);
+                  if (page.length < pageSize) break;
+                }
+                return { data: rows };
+              };
+
+              const [partsRes, sitesRes] = await Promise.all([
+                fetchAllDbParts(),
+                supabase.from('sites').select('id, code, name, is_dc').limit(500)
+              ]);
+
+              const pMap = new Map();
+              (partsRes.data || []).forEach(p => {
+                if (p?.part_number && p?.id) {
+                  pMap.set(String(p.part_number).trim().toUpperCase(), p.id);
+                }
+              });
+
+              const dbSites = sitesRes.data || [];
+              const dcSite = dbSites.find(s => s.is_dc || String(s.code || '').toUpperCase() === 'DC-MDC');
+              const dcSiteId = dcSite?.id || dbSites[0]?.id || null;
+
+              // Auto-register any part numbers present in restored inventory that are missing from `public.parts`
+              const missingPartNumbers = new Map();
+              for (const u of currentInv) {
+                const pn = String(u?.part_number || '').trim().toUpperCase();
+                if (pn && !pMap.has(pn) && !missingPartNumbers.has(pn)) {
+                  missingPartNumbers.set(pn, {
+                    part_number: pn,
+                    description: u?.description || pn,
+                    iphone_model: u?.iphone_model || '',
+                    stocking_price: Number(u?.stocking_price || 0),
+                    safety_stock_pct: 0.05,
+                    is_active: true
+                  });
+                }
+              }
+              if (missingPartNumbers.size > 0) {
+                try {
+                  const { data: insertedParts } = await supabase
+                    .from('parts')
+                    .upsert(Array.from(missingPartNumbers.values()), { onConflict: 'part_number' })
+                    .select('id, part_number');
+                  (insertedParts || []).forEach(p => {
+                    if (p?.part_number && p?.id) {
+                      pMap.set(String(p.part_number).trim().toUpperCase(), p.id);
+                    }
+                  });
+                } catch (mpErr) {
+                  console.warn('Restore missing parts auto-upsert notice:', mpErr.message);
+                }
+              }
+
+              const fallbackPartId = pMap.values().next().value || null;
+              const VALID_DB_STATUSES = new Set(['in_stock', 'allocated', 'packed', 'shipped', 'delivered', 'received', 'damaged', 'returned']);
+
+              const unitRows = [];
+              for (const u of currentInv) {
+                const cleanPN = String(u?.part_number || '').trim().toUpperCase();
+                const cleanSerial = String(u?.serial_number || u?.serialNumber || '').trim().toUpperCase();
+                if (!cleanSerial) continue;
+
+                const pId = (cleanPN && pMap.get(cleanPN)) || (isUUID(u?.part_id) ? u.part_id : fallbackPartId);
+                const unitSiteKey = String(u?.current_site_id || u?.site_id || u?.targetSiteId || '').trim();
+                const unitSiteCode = String(u?.site_code || '').trim().toUpperCase();
+                const unitSiteClean = unitSiteCode.replace(/^(ASP|APP)\s+/, '');
+                const isDcUnit =
+                  unitSiteKey.toLowerCase() === 'site-dc' ||
+                  unitSiteCode === 'DC-MDC' ||
+                  unitSiteCode === 'DC' ||
+                  Boolean(u?.is_dc);
+
+                const matchedSite = isDcUnit
+                  ? dcSite
+                  : dbSites.find(s => {
+                      const sCode = String(s.code || '').trim().toUpperCase();
+                      const sCodeClean = sCode.replace(/^(ASP|APP)\s+/, '');
+                      return (
+                        (unitSiteKey && (s.id === unitSiteKey || sCode === unitSiteKey.toUpperCase())) ||
+                        (unitSiteCode && (sCode === unitSiteCode || sCodeClean === unitSiteClean)) ||
+                        (u?.site_name && s.name && (s.name.toUpperCase().includes(String(u.site_name).toUpperCase()) || String(u.site_name).toUpperCase().includes(s.name.toUpperCase())))
+                      );
+                    });
+
+                const targetSiteId = matchedSite?.id || (isUUID(unitSiteKey) ? unitSiteKey : dcSiteId);
+                if (!pId || !targetSiteId) continue;
+
+                const assign = String(u?.intake_assignment || u?.assignment || 'MDC - Forecasting').trim() || 'MDC - Forecasting';
+                const rawStatus = String(u?.status || 'in_stock').trim().toLowerCase();
+                const dbStatus = VALID_DB_STATUSES.has(rawStatus)
+                  ? rawStatus
+                  : (rawStatus === 'outtake' ? 'returned' : 'in_stock');
+
+                const existingNotes = typeof u?.notes === 'string' && u.notes.includes('__META__:')
+                  ? u.notes
+                  : `${assign} | __META__:${JSON.stringify({
+                      part_number: cleanPN || null,
+                      description: u?.description || null,
+                      intake_assignment: assign,
+                      lifecycle_status: u?.status || 'in_stock',
+                      work_order_number: u?.work_order_number || null,
+                      usage_notes: u?.usage_notes || null,
+                      used_at: u?.used_at || null,
+                      outtake_at: u?.outtake_at || null,
+                      outtake_reason: u?.outtake_reason || null,
+                      transferred_at: u?.transferred_at || null,
+                      transfer_slip_number: u?.transfer_slip_number || null,
+                      transferred_to_site_code: u?.transferred_to_site_code || null,
+                      site_code: u?.site_code || matchedSite?.code || (isDcUnit ? 'DC-MDC' : null),
+                      site_name: u?.site_name || matchedSite?.name || null
+                    })}`;
+
+                unitRows.push({
+                  part_id: pId,
+                  current_site_id: targetSiteId,
+                  serial_number: cleanSerial,
+                  status: dbStatus,
+                  is_deleted: false,
+                  box_number: Number(u?.box_number) || 1,
+                  notes: existingNotes,
+                  received_at: u?.received_at || nowIso,
+                  updated_at: nowIso
+                });
+              }
+
+              const uniqueUnitRows = Array.from(
+                new Map(unitRows.map(r => [r.serial_number, r])).values()
+              );
+
+              // Upsert in parallel chunks of 250 (concurrency 4); gracefully fall back if `is_deleted` column is absent
+              const UNIT_CHUNK = 250;
+              const unitChunks = [];
+              for (let i = 0; i < uniqueUnitRows.length; i += UNIT_CHUNK) {
+                unitChunks.push(uniqueUnitRows.slice(i, i + UNIT_CHUNK));
+              }
+
+              for (let i = 0; i < unitChunks.length; i += 4) {
+                const batch = unitChunks.slice(i, i + 4);
+                await Promise.all(
+                  batch.map(async (chunk) => {
+                    try {
+                      let { error: upsertErr } = await supabase
+                        .from('inventory_units')
+                        .upsert(chunk, { onConflict: 'serial_number' });
+                      if (upsertErr && /is_deleted/i.test(upsertErr.message || '')) {
+                        const fallbackChunk = chunk.map(({ is_deleted: _ignored, ...rest }) => rest);
+                        const retry = await supabase
+                          .from('inventory_units')
+                          .upsert(fallbackChunk, { onConflict: 'serial_number' });
+                        upsertErr = retry.error;
+                      }
+                      if (upsertErr) {
+                        inventoryUnitsFailed += chunk.length;
+                        warnings.push(`inventory_units chunk notice: ${upsertErr.message}`);
+                      } else {
+                        inventoryUnitsSynced += chunk.length;
+                      }
+                    } catch (chunkEx) {
+                      inventoryUnitsFailed += chunk.length;
+                      warnings.push(`inventory_units chunk error: ${chunkEx.message}`);
+                    }
+                  })
+                );
+              }
+            } catch (invTableErr) {
+              warnings.push(`Direct inventory_units restore warning: ${invTableErr.message}`);
+            }
+          })()
+        );
+      }
+
+      // 2B. Live Inventory & Branch Inventory `saved_records` registries (compact when large to stay under PostgREST payload limits)
+      if (Array.isArray(currentInv) && (currentInv.length > 0 || isRestoreMode)) {
+        const compactUnit = (u) => ({
+          id: u?.id,
+          serial_number: u?.serial_number || u?.serialNumber,
+          part_number: u?.part_number,
+          description: u?.description,
+          status: u?.status || 'in_stock',
+          intake_assignment: u?.intake_assignment || u?.assignment,
+          current_site_id: u?.current_site_id || u?.site_id,
+          site_code: u?.site_code,
+          site_name: u?.site_name,
+          box_number: u?.box_number || 1,
+          received_at: u?.received_at,
+          updated_at: u?.updated_at
+        });
+
+        const dcOnlyUnits = currentInv.filter(u => {
+          const sId = String(u?.current_site_id || u?.site_id || '').toLowerCase();
+          const sCode = String(u?.site_code || '').toUpperCase();
+          return sId === 'site-dc' || sCode === 'DC-MDC' || sCode === 'DC' || Boolean(u?.is_dc);
+        });
+
+        const branchUnits = currentInv.filter(u => {
+          const sId = String(u?.current_site_id || u?.site_id || '').toLowerCase();
+          const sCode = String(u?.site_code || '').toUpperCase();
+          const isDc = sId === 'site-dc' || sCode === 'DC-MDC' || sCode === 'DC' || u?.is_dc;
+          return !isDc && u?.status !== 'draft';
+        });
+
+        // Keep live_master_dc_inventory compact so PostgREST never rejects >10MB JSONB payloads;
+        // full serialized history is already upserted to public.inventory_units in 250-row chunks above!
+        const liveMasterUnitsPayload = currentInv.length > 4000
+          ? dcOnlyUnits.map(compactUnit)
+          : currentInv;
+        const branchRegistryPayload = branchUnits.length > 4000
+          ? branchUnits.slice(0, 4000).map(compactUnit)
+          : branchUnits;
+
+        phase2Tasks.push(
+          (async () => {
+            try {
+              const { error: liveInvErr } = await supabase.from('saved_records').upsert({
+                id: 'live_master_dc_inventory',
+                record_type: 'inventory_master',
+                period_label: 'Live Master DC Inventory',
+                period_year: nowYear,
+                period_month: nowMonth,
+                period_week: 1,
+                notes: 'Master DC In-Stock inventory pool across all accounts',
+                saved_by_name: actorName,
+                snapshot_data: { units: liveMasterUnitsPayload, totalCount: currentInv.length },
+                updated_at: nowIso
+              }, { onConflict: 'id' });
+              if (liveInvErr) warnings.push(`live_master_dc_inventory warning: ${liveInvErr.message}`);
+              else registriesSynced += 1;
+
+              const { error: branchInvErr } = await supabase.from('saved_records').upsert({
+                id: 'master_branch_inventory_registry',
+                record_type: 'inventory_master',
+                period_label: 'Master Branch Inventory Registry',
+                period_year: nowYear,
+                period_month: nowMonth,
+                period_week: 1,
+                notes: 'Authoritative In-Stock branch inventory across all retail ASP sites',
+                saved_by_name: actorName,
+                snapshot_data: { units: branchRegistryPayload, totalCount: branchUnits.length },
+                updated_at: nowIso
+              }, { onConflict: 'id' });
+              if (branchInvErr) warnings.push(`master_branch_inventory_registry warning: ${branchInvErr.message}`);
+              else registriesSynced += 1;
+
+              try {
+                localStorage.setItem('mdc_live_inventory_updated_at', nowIso);
+                localStorage.setItem('mdc_branch_inventory_updated_at', nowIso);
+                localStorage.setItem('mdc_inventory_units_updated_at', nowIso);
+                localStorage.setItem('mdc_inventory_units_count', String(currentInv.length));
+                dbStorage.setItem('mdc_live_inventory_updated_at', nowIso);
+                dbStorage.setItem('mdc_branch_inventory_updated_at', nowIso);
+                dbStorage.setItem('mdc_inventory_units_updated_at', nowIso);
+                dbStorage.setItem('mdc_inventory_units_count', currentInv.length);
+              } catch (e) {}
+            } catch (e) {
+              warnings.push(`Inventory registries sync warning: ${e.message}`);
+            }
+          })()
+        );
+      }
+
+      // 2C. Shipments registry + parallel shipment doc chunks (never overwrite cloud shipments with empty [])
+      if (Array.isArray(currentShipments) && currentShipments.length > 0) {
+        phase2Tasks.push(
+          (async () => {
+            try {
+              await supabase.from('saved_records').upsert({
+                id: 'master_shipments_registry',
+                record_type: 'shipments_registry',
+                period_label: 'Master Shipments Registry',
+                period_year: nowYear,
+                period_month: nowMonth,
+                notes: 'Master DC Outbound Shipments & Packing Lists',
+                saved_by_name: actorName,
+                snapshot_data: {
+                  shipments: currentShipments,
+                  updatedAt: nowIso
+                },
+                updated_at: nowIso
+              }, { onConflict: 'id' });
+              registriesSynced += 1;
+
+              if (isRestoreMode && currentShipments.length > 0) {
+                const shipmentDocs = currentShipments.filter(sh => sh && sh.id).map(sh => ({
+                  id: String(sh.id),
+                  record_type: 'shipment',
+                  period_label: sh.invoice_ref || sh.shipment_number || String(sh.id),
+                  period_year: nowYear,
+                  period_month: nowMonth,
+                  period_week: sh.week_number || 1,
+                  notes: sh.remarks || '',
+                  saved_by_name: sh.prepared_by_name || actorName,
+                  snapshot_data: sh,
+                  created_at: sh.created_at || nowIso,
+                  updated_at: nowIso
+                }));
+                const shipChunks = [];
+                for (let i = 0; i < shipmentDocs.length; i += 50) {
+                  shipChunks.push(shipmentDocs.slice(i, i + 50));
+                }
+                for (let i = 0; i < shipChunks.length; i += 4) {
+                  await Promise.allSettled(
+                    shipChunks.slice(i, i + 4).map(chunk =>
+                      supabase.from('saved_records').upsert(chunk, { onConflict: 'id' })
+                    )
+                  );
+                }
+              }
+            } catch (e) {
+              warnings.push(`Shipments registry sync warning: ${e.message}`);
+            }
+          })()
+        );
+      }
+
+      // 2D. Batch all operational & governance registries together in one parallel call (never overwrite with empty [])
+      const batchedRegistries = [];
+      if (Array.isArray(currentPos) && currentPos.length > 0) {
+        batchedRegistries.push({
+          id: 'master_purchase_orders_registry',
+          record_type: 'purchase_orders_registry',
+          period_label: 'Master Purchase Orders Registry',
+          period_year: nowYear,
+          period_month: nowMonth,
+          snapshot_data: { orders: currentPos },
+          saved_by_name: actorName,
+          updated_at: nowIso
+        });
+      }
+      if (Array.isArray(currentIntakes) && currentIntakes.length > 0) {
+        batchedRegistries.push({
+          id: 'master_dc_intakes_registry',
+          record_type: 'intake_registry',
+          period_label: 'Master DC Intakes Registry',
+          period_year: nowYear,
+          period_month: nowMonth,
+          notes: 'Master operational intake batches synchronized across all users',
+          saved_by_name: actorName,
+          snapshot_data: { records: currentIntakes },
+          updated_at: nowIso
+        });
+      }
+      if (Array.isArray(currentRequests) && currentRequests.length > 0) {
+        batchedRegistries.push({
+          id: 'master_parts_requests_registry',
+          record_type: 'parts_requests_registry',
+          period_label: 'Master Parts Requests Registry',
+          period_year: nowYear,
+          period_month: nowMonth,
+          notes: 'Live Parts Requests registry across all branches',
+          saved_by_name: actorName,
+          snapshot_data: { requests: currentRequests.slice(0, 500) },
+          updated_at: nowIso
+        });
+      }
+      if (Array.isArray(currentUsers) && currentUsers.length > 0) {
+        batchedRegistries.push(
+          {
+            id: 'master_users_registry',
+            record_type: 'users_registry',
+            period_label: 'Master Users Registry',
             period_year: nowYear,
             period_month: nowMonth,
-            notes: 'Master DC Outbound Shipments & Packing Lists',
+            notes: 'Master Provisioned Accounts & Permissions Registry',
             saved_by_name: actorName,
             snapshot_data: {
-              shipments: currentShipments,
+              users: currentUsers,
+              deletedUserIds: overrideData?.registries?.deletedUserIds || [],
               updatedAt: nowIso
             },
             updated_at: nowIso
-          }, { onConflict: 'id' });
-
-          if (isRestoreMode && currentShipments.length > 0) {
-            const shipmentDocs = currentShipments.filter(sh => sh && sh.id).map(sh => ({
-              id: String(sh.id),
-              record_type: 'shipment',
-              period_label: sh.invoice_ref || sh.shipment_number || String(sh.id),
-              period_year: nowYear,
-              period_month: nowMonth,
-              period_week: sh.week_number || 1,
-              notes: sh.remarks || '',
-              saved_by_name: sh.prepared_by_name || actorName,
-              snapshot_data: sh,
-              created_at: sh.created_at || nowIso,
-              updated_at: nowIso
-            }));
-            for (let i = 0; i < shipmentDocs.length; i += 50) {
-              await supabase.from('saved_records').upsert(shipmentDocs.slice(i, i + 50), { onConflict: 'id' });
-            }
+          },
+          {
+            id: 'master_user_accounts_registry',
+            record_type: 'user_accounts_registry',
+            period_label: 'Master User Accounts Registry',
+            period_year: nowYear,
+            period_month: nowMonth,
+            notes: 'Master User Accounts & Security Matrix',
+            saved_by_name: actorName,
+            snapshot_data: {
+              users: currentUsers,
+              updatedAt: nowIso
+            },
+            updated_at: nowIso
           }
-        } catch (e) {
-          console.warn('Shipments saved_records sync note:', e);
-        }
+        );
       }
 
-      // 3b. Sync Purchase Orders, DC Intake Batches & Parts Requests Registries
-      const currentPos = overrideData?.purchaseOrders !== undefined ? overrideData.purchaseOrders : (_purchaseOrders || []);
-      if (Array.isArray(currentPos) && (currentPos.length > 0 || isRestoreMode)) {
-        try {
-          await supabase.from('saved_records').upsert({
-            id: 'master_purchase_orders_registry',
-            record_type: 'purchase_orders_registry',
-            period_label: 'Master Purchase Orders Registry',
-            period_year: nowYear,
-            period_month: nowMonth,
-            snapshot_data: { orders: currentPos },
-            saved_by_name: actorName,
-            updated_at: nowIso
-          }, { onConflict: 'id' });
-        } catch (e) {
-          console.warn('PO registry sync note:', e);
-        }
-      }
-
-      const currentIntakes = overrideData?.dcIntakeRecords !== undefined ? overrideData.dcIntakeRecords : (_dcIntakeRecords || []);
-      if (Array.isArray(currentIntakes) && (currentIntakes.length > 0 || isRestoreMode)) {
-        try {
-          await supabase.from('saved_records').upsert({
-            id: 'master_dc_intakes_registry',
-            record_type: 'intake_registry',
-            period_label: 'Master DC Intakes Registry',
-            period_year: nowYear,
-            period_month: nowMonth,
-            notes: 'Master operational intake batches synchronized across all users',
-            saved_by_name: actorName,
-            snapshot_data: { records: currentIntakes },
-            updated_at: nowIso
-          }, { onConflict: 'id' });
-        } catch (e) {
-          console.warn('Intakes registry sync note:', e);
-        }
-      }
-
-      const currentRequests = overrideData?.partsRequests !== undefined ? overrideData.partsRequests : (_partsRequests || []);
-      if (Array.isArray(currentRequests) && (currentRequests.length > 0 || isRestoreMode)) {
-        try {
-          await supabase.from('saved_records').upsert({
-            id: 'master_parts_requests_registry',
-            record_type: 'parts_requests_registry',
-            period_label: 'Master Parts Requests Registry',
-            period_year: nowYear,
-            period_month: nowMonth,
-            notes: 'Live Parts Requests registry across all branches',
-            saved_by_name: actorName,
-            snapshot_data: { requests: currentRequests.slice(0, 500) },
-            updated_at: nowIso
-          }, { onConflict: 'id' });
-        } catch (e) {
-          console.warn('Parts requests registry sync note:', e);
-        }
-      }
-
-      // 4. Sync User Accounts & Roles
-      const currentUsers = overrideData?.usersList !== undefined ? overrideData.usersList : (_usersList || []);
-      if (Array.isArray(currentUsers) && (currentUsers.length > 0 || isRestoreMode)) {
-        try {
-          await supabase.from('saved_records').upsert([
-            {
-              id: 'master_users_registry',
-              record_type: 'users_registry',
-              period_label: 'Master Users Registry',
-              period_year: nowYear,
-              period_month: nowMonth,
-              notes: 'Master Provisioned Accounts & Permissions Registry',
-              saved_by_name: actorName,
-              snapshot_data: {
-                users: currentUsers,
-                deletedUserIds: overrideData?.registries?.deletedUserIds || [],
-                updatedAt: nowIso
-              },
-              updated_at: nowIso
-            },
-            {
-              id: 'master_user_accounts_registry',
-              record_type: 'user_accounts_registry',
-              period_label: 'Master User Accounts Registry',
-              period_year: nowYear,
-              period_month: nowMonth,
-              notes: 'Master User Accounts & Security Matrix',
-              saved_by_name: actorName,
-              snapshot_data: {
-                users: currentUsers,
-                updatedAt: nowIso
-              },
-              updated_at: nowIso
-            }
-          ], { onConflict: 'id' });
-        } catch (e) {
-          console.warn('Users saved_records sync note:', e);
-        }
-      }
-
-      // 4b. When restoring system state, also sync Deletion Registries, Transfer History, Consumables & Tools, and Audit Logs
       if (isRestoreMode) {
-        const extraRegistries = [];
-        if (overrideData.registries) {
-          extraRegistries.push(
-            {
-              id: 'deleted_unit_serials_registry',
-              record_type: 'deletion_registry',
-              period_label: 'Deleted Unit Serials Registry',
-              period_year: nowYear,
-              period_month: nowMonth,
-              snapshot_data: { deletedSerials: overrideData.registries.deletedUnitSerials || [] },
-              updated_at: nowIso
-            },
-            {
-              id: 'deleted_shipment_ids_registry',
-              record_type: 'deletion_registry',
-              period_label: 'Deleted Shipment IDs Registry',
-              period_year: nowYear,
-              period_month: nowMonth,
-              snapshot_data: { deletedIds: overrideData.registries.deletedShipmentIds || [] },
-              updated_at: nowIso
-            },
-            {
-              id: 'deleted_intake_ids_registry',
-              record_type: 'deletion_registry',
-              period_label: 'Deleted Intake IDs Registry',
-              period_year: nowYear,
-              period_month: nowMonth,
-              snapshot_data: { deletedIds: overrideData.registries.deletedIntakeIds || [] },
-              updated_at: nowIso
-            },
-            {
-              id: 'cleared_sites_registry',
-              record_type: 'cleared_sites',
-              period_label: 'Cleared Sites Registry',
-              period_year: nowYear,
-              period_month: nowMonth,
-              snapshot_data: { clearedSites: overrideData.registries.clearedSiteTimestamps || {} },
-              updated_at: nowIso
-            }
-          );
-        }
-
         if (Array.isArray(overrideData.partTransferHistory)) {
-          extraRegistries.push({
+          batchedRegistries.push({
             id: 'part_transfer_history_registry',
             record_type: 'transfer_history',
             period_label: 'Master Part Transfer & Stock Ownership History Registry',
@@ -6351,9 +6718,8 @@ export function useCloudSync({
             updated_at: nowIso
           });
         }
-
         if (Array.isArray(overrideData.systemAuditLogs)) {
-          extraRegistries.push({
+          batchedRegistries.push({
             id: 'master_system_audit_logs_registry',
             record_type: 'system_audit_registry',
             period_label: 'Master System Activity Audit Registry',
@@ -6364,9 +6730,8 @@ export function useCloudSync({
             updated_at: nowIso
           });
         }
-
         if (Array.isArray(overrideData.sessionAuditLogs)) {
-          extraRegistries.push({
+          batchedRegistries.push({
             id: 'master_session_audit_logs_registry',
             record_type: 'session_audit_registry',
             period_label: 'Master Session & Auto-Logout Audit Registry',
@@ -6377,9 +6742,8 @@ export function useCloudSync({
             updated_at: nowIso
           });
         }
-
         if (overrideData.fixablySnapshot && typeof overrideData.fixablySnapshot === 'object') {
-          extraRegistries.push({
+          batchedRegistries.push({
             id: 'master_fixably_inventory_snapshot',
             record_type: 'fixably_snapshot',
             period_label: 'Master Fixably Inventory Snapshot',
@@ -6390,17 +6754,42 @@ export function useCloudSync({
             updated_at: nowIso
           });
         }
-
-        if (extraRegistries.length > 0) {
-          try {
-            await supabase.from('saved_records').upsert(extraRegistries, { onConflict: 'id' });
-          } catch (regErr) {
-            console.warn('Restore extra registries sync note:', regErr);
-          }
-        }
       }
 
-      // 5. Write Global Sync Beacon
+      if (batchedRegistries.length > 0) {
+        phase2Tasks.push(
+          (async () => {
+            try {
+              // Chunk into batches of 4 registries to keep payload sizes fast and reliable
+              const regChunks = [];
+              for (let i = 0; i < batchedRegistries.length; i += 4) {
+                regChunks.push(batchedRegistries.slice(i, i + 4));
+              }
+              await Promise.all(
+                regChunks.map(async (chunk) => {
+                  const { error: regErr } = await supabase.from('saved_records').upsert(chunk, { onConflict: 'id' });
+                  if (regErr) {
+                    warnings.push(`Registry batch sync warning: ${regErr.message}`);
+                  } else {
+                    registriesSynced += chunk.length;
+                  }
+                })
+              );
+            } catch (e) {
+              warnings.push(`Operational registries sync warning: ${e.message}`);
+            }
+          })()
+        );
+      }
+
+      await Promise.allSettled(phase2Tasks);
+
+      // PHASE 3: Write Global Sync Beacon & broadcast cache purge to peer devices
+      reportProgress?.({
+        percent: 97,
+        description: 'Broadcasting global sync beacon to refresh connected workstations...'
+      });
+
       const syncBeaconPayload = {
         syncVersion: Date.now(),
         syncedBy: actorName,
@@ -6426,10 +6815,13 @@ export function useCloudSync({
         console.warn('Sync beacon note:', e);
       }
 
-      // 6. Broadcast Global Cache Purge & Hard Refresh across the entire network
+      // Broadcast Global Cache Purge & Hard Refresh across the entire network
       broadcastCloudEvent('GLOBAL_FORCE_CACHE_REFRESH', syncBeaconPayload);
 
-      // 7. For normal global sync, clear operational cache & rehydrate; for system restore, preserve freshly restored local state!
+      // Mark local refresh timestamp so immediate renders trust freshly restored state
+      lastRefreshTimeRef.current = Date.now();
+
+      // For normal global sync, clear operational cache & rehydrate; for system restore, preserve freshly restored local state!
       if (!isRestoreMode) {
         await clearOperationalLocalStorage({ keepSession: true });
         lastRefreshTimeRef.current = 0;
@@ -6443,13 +6835,27 @@ export function useCloudSync({
       }
 
       setLastSyncedAt(new Date());
-      return { success: true, timestamp: syncBeaconPayload.syncedAt };
+      return {
+        success: true,
+        timestamp: syncBeaconPayload.syncedAt,
+        deletedRegistriesFlushed,
+        inventoryUnitsSynced,
+        inventoryUnitsFailed,
+        registriesSynced,
+        warnings,
+        durationMs: Date.now() - syncStartedAt
+      };
     } catch (err) {
       console.error('Global cloud sync error:', err);
       if (!isRestoreMode) {
         showToast(`Global sync error: ${err.message}`, 'error');
       }
-      return { success: false, error: err.message };
+      return {
+        success: false,
+        error: err.message,
+        warnings,
+        durationMs: Date.now() - syncStartedAt
+      };
     }
   };
 

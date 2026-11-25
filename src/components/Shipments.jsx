@@ -66,6 +66,7 @@ export default function Shipments() {
     updateShipmentStatus,
     deleteShipment,
     reconcileCompletedDrafts,
+    autoRefreshData,
     confirmCourierPickup,
     confirmSiteReceive,
     partsRequests,
@@ -1964,8 +1965,17 @@ export default function Shipments() {
           <button
             className="btn"
             onClick={async () => {
+              if (typeof autoRefreshData === 'function') {
+                await autoRefreshData({
+                  force: true,
+                  silent: false,
+                  isManual: true,
+                  tables: ['shipments', 'saved_records'],
+                  reason: 'Outbound Shipments Manual Sync'
+                });
+              }
               if (typeof reconcileCompletedDrafts === 'function') {
-                await reconcileCompletedDrafts(null, { silent: false });
+                await reconcileCompletedDrafts(null, { silent: true });
               }
             }}
             style={{

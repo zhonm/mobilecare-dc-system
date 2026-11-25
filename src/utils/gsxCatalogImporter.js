@@ -330,7 +330,12 @@ export async function loadGsxSeedParts() {
   if (_gsxSeedLoadPromise) {
     return _gsxSeedLoadPromise;
   }
-  _gsxSeedLoadPromise = import('../data/gsxPartsCatalog.json', { with: { type: 'json' } })
+  const importSeedModule =
+    typeof window !== 'undefined'
+      ? import('../data/gsxPartsCatalog.json')
+      : import('../data/gsxPartsCatalog.json', { with: { type: 'json' } });
+
+  _gsxSeedLoadPromise = importSeedModule
     .then((mod) => {
       const gsxSeed = mod?.default || mod;
       const seedParts = Array.isArray(gsxSeed?.parts) ? gsxSeed.parts : [];

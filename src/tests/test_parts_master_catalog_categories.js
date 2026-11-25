@@ -15,6 +15,9 @@ import {
   HARDWARE_CATEGORIES,
   DEFAULT_PART_CATEGORIES,
   CANONICAL_CATEGORY_UUIDS,
+  mergeWithDefaultCategories,
+  normalizeCategoryCode,
+  isDefaultCategoryCode,
   getPartCategory,
   getCategoryForPart,
   resolvePartCategoryId,
@@ -33,15 +36,34 @@ console.log('====================================================\n');
 // 1. Categories Definition Integrity
 // ----------------------------------------------------
 console.log('--- 1. Category Definitions Integrity ---');
-assert.strictEqual(HARDWARE_CATEGORIES.length, 6, 'HARDWARE_CATEGORIES must contain 6 categories');
-assert.strictEqual(DEFAULT_PART_CATEGORIES.length, 6, 'DEFAULT_PART_CATEGORIES must contain 6 categories');
+assert.strictEqual(HARDWARE_CATEGORIES.length, 8, 'HARDWARE_CATEGORIES must contain 8 categories');
+assert.strictEqual(DEFAULT_PART_CATEGORIES.length, 8, 'DEFAULT_PART_CATEGORIES must contain 8 categories');
 
-const expectedCodes = ['BATTERY', 'DISPLAY', 'CAMERA', 'BACK_GLASS', 'MID_REAR', 'OTHER'];
+const expectedCodes = ['BATTERY', 'DISPLAY', 'CAMERA', 'BACK_GLASS', 'MID_REAR', 'TOOLS', 'CONSUMABLES', 'OTHER'];
 expectedCodes.forEach(code => {
   const found = DEFAULT_PART_CATEGORIES.find(c => c.code === code);
   assert.ok(found, `Category code ${code} must exist in DEFAULT_PART_CATEGORIES`);
+  assert.strictEqual(isDefaultCategoryCode(code), true, `isDefaultCategoryCode(${code}) must be true`);
 });
-console.log('  ✓ PASS: All 6 standard categories defined including OTHER (Other Components)');
+
+// Verify custom category preservation and default backfill (Tools & Consumables)
+assert.strictEqual(normalizeCategoryCode('Service Cables & Adapters'), 'SERVICE_CABLES_ADAPTERS');
+assert.strictEqual(isDefaultCategoryCode('SERVICE_CABLES'), false);
+const mergedCats = mergeWithDefaultCategories([
+  { id: 'uuid-batt', code: 'BATTERY', name: 'Battery', is_serialized: true, has_imei: false, sort_order: 1 },
+  { id: 'cat-custom-cables', code: 'SERVICE_CABLES', name: 'Service Cables', is_serialized: false, has_imei: false, sort_order: 9 }
+]);
+assert.strictEqual(mergedCats.length, 9, 'mergeWithDefaultCategories must preserve custom category and backfill missing defaults');
+assert.ok(mergedCats.some(c => c.code === 'TOOLS'), 'TOOLS default must be backfilled');
+assert.ok(mergedCats.some(c => c.code === 'CONSUMABLES'), 'CONSUMABLES default must be backfilled');
+assert.ok(mergedCats.some(c => c.code === 'SERVICE_CABLES'), 'Custom category must be preserved');
+
+const customPartCat = getCategoryForPart(
+  { part_number: '999-00001', description: 'USB-C Diagnostic Cable', category_id: 'cat-custom-cables' },
+  mergedCats
+);
+assert.strictEqual(customPartCat.code, 'SERVICE_CABLES', 'getCategoryForPart must preserve explicit custom category assignment');
+console.log('  ✓ PASS: All 8 default categories (including TOOLS, CONSUMABLES, OTHER) and custom category helpers verified');
 
 // ----------------------------------------------------
 // 2. User Screenshot Parts Categorization

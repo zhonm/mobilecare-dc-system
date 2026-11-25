@@ -34,6 +34,7 @@
 import {
   uploadToGoogleDrive,
   listFilesInDriveFolder,
+  downloadFromGoogleDrive,
   downloadJsonFromGoogleDrive,
   trashFileInDrive,
   GOOGLE_DRIVE_CONFIG
@@ -1389,6 +1390,103 @@ export async function uploadBackupPackageToDrive(backupPackage, onProgress) {
 }
 
 /**
+ * Uploads an XLSX or CSV spreadsheet backup directly to Google Workspace Shared Drive (`backups` folder).
+ */
+export async function uploadSpreadsheetBackupToDrive(backupArtifact, currentUser = null, onProgress = null) {
+  const t0 = Date.now();
+  const {
+    bytes,
+    filename,
+    mimeType,
+    format = 'XLSX',
+    stats = {},
+    checksum = '',
+    label = ''
+  } = backupArtifact || {};
+
+  try {
+    const result = await uploadToGoogleDrive({
+      name: filename,
+      mimeType,
+      data: bytes,
+      folderType: 'backups',
+      useDateFolder: false,
+      appProperties: {
+        system: 'MDC-DC',
+        docType: 'system_backup',
+        format: String(format).toUpperCase(),
+        schemaVersion: `${String(format).toUpperCase()}-1.0`,
+        checksum: String(checksum || '').slice(0, 110),
+        totalRecords: String(stats.totalRecordsCount || 0),
+        unitsCount: String(stats.inventoryUnitsCount || 0),
+        dcStockCount: String(stats.dcStockCount || 0),
+        branchStockCount: String(stats.branchStockCount || 0),
+        shipmentsCount: String(stats.shipmentsCount || 0),
+        partsCount: String(stats.partsCount || 0),
+        sitesCount: String(stats.sitesCount || 0),
+        poCount: String(stats.purchaseOrdersCount || 0),
+        intakesCount: String(stats.dcIntakeRecordsCount || 0),
+        createdBy: String(currentUser?.fullName || 'Superadmin').slice(0, 60),
+        trigger: `${String(format).toUpperCase()}_DRIVE_BACKUP`,
+        label: String(label || '').slice(0, 50)
+      },
+      onProgress
+    });
+
+    if (!result.success) {
+      throw new Error(result.error || `Failed to upload ${format} backup to Google Drive`);
+    }
+
+    const durationMs = Date.now() - t0;
+    const size = bytes?.byteLength || bytes?.length || 0;
+    recordBackupExecutionLog({
+      status: 'SUCCESS',
+      operationType: `GOOGLE_DRIVE_${String(format).toUpperCase()}_BACKUP`,
+      filename,
+      label,
+      fileId: result.fileId,
+      webViewLink: result.webViewLink,
+      sizeBytes: size,
+      totalRecords: stats.totalRecordsCount || 0,
+      checksum,
+      durationMs,
+      actorName: currentUser?.fullName || 'Superadmin',
+      actorEmail: currentUser?.email || ''
+    });
+
+    return {
+      success: true,
+      fileId: result.fileId,
+      webViewLink: result.webViewLink,
+      filename,
+      format: String(format).toUpperCase(),
+      size,
+      checksum,
+      durationMs,
+      stats
+    };
+  } catch (err) {
+    console.error('[BackupService] uploadSpreadsheetBackupToDrive error:', err);
+    recordBackupExecutionLog({
+      status: 'FAILED',
+      operationType: `GOOGLE_DRIVE_${String(format).toUpperCase()}_BACKUP`,
+      filename: filename || `MDC_SYSTEM_BACKUP.${String(format).toLowerCase()}`,
+      label,
+      sizeBytes: 0,
+      totalRecords: stats.totalRecordsCount || 0,
+      durationMs: Date.now() - t0,
+      actorName: currentUser?.fullName || 'Superadmin',
+      actorEmail: currentUser?.email || '',
+      error: err.message
+    });
+    return {
+      success: false,
+      error: err.message
+    };
+  }
+}
+
+/**
  * Lists available system backup files stored in Google Drive with enriched metadata
  *
  * @param {number} [limit=50] - Number of items to retrieve
@@ -1403,6 +1501,8 @@ export async function listGoogleDriveBackups(limit = 50) {
     const filtered = (files || [])
       .filter(
         (f) =>
+          f.name?.endsWith('.xlsx') ||
+          f.name?.endsWith('.csv') ||
           f.name?.endsWith('.json') ||
           f.name?.includes('BACKUP') ||
           f.name?.startsWith('MDC_') ||
@@ -1411,16 +1511,23 @@ export async function listGoogleDriveBackups(limit = 50) {
       .map((f) => {
         const props = f.appProperties || {};
         const sizeNum = Number(f.size) || 0;
+        const lowerName = String(f.name || '').toLowerCase();
         const isCliBackup = f.name?.startsWith('mdc_dc_db_backup');
+        const detectedFormat =
+          props.format ||
+          (lowerName.endsWith('.xlsx') ? 'XLSX' : lowerName.endsWith('.csv') ? 'CSV' : 'JSON');
         return {
           ...f,
           size: sizeNum,
           isPinned: pinnedSet.has(f.id),
           meta: {
-            schemaVersion: props.schemaVersion || (isCliBackup ? 'CLI-1.0' : '2.0.0'),
+            format: detectedFormat,
+            schemaVersion: props.schemaVersion || (isCliBackup ? 'CLI-1.0' : detectedFormat === 'XLSX' ? 'XLSX-1.0' : detectedFormat === 'CSV' ? 'CSV-1.0' : '2.0.0'),
             checksum: props.checksum || null,
             totalRecords: props.totalRecords ? Number(props.totalRecords) : null,
             unitsCount: props.unitsCount ? Number(props.unitsCount) : null,
+            dcStockCount: props.dcStockCount ? Number(props.dcStockCount) : null,
+            branchStockCount: props.branchStockCount ? Number(props.branchStockCount) : null,
             shipmentsCount: props.shipmentsCount ? Number(props.shipmentsCount) : null,
             partsCount: props.partsCount ? Number(props.partsCount) : null,
             sitesCount: props.sitesCount ? Number(props.sitesCount) : null,
@@ -1444,19 +1551,32 @@ export async function listGoogleDriveBackups(limit = 50) {
 }
 
 /**
- * Fetches and parses a backup file directly from Google Drive
+ * Fetches and parses a backup file (.xlsx, .csv, or legacy .json) directly from Google Drive.
  *
  * @param {string} fileId - The Google Drive file ID
+ * @param {string} [fileName=''] - Optional filename to detect format (.xlsx / .csv / .json)
  * @returns {Promise<Object>} Parsed backup package
  */
-export async function fetchBackupPackageFromDrive(fileId) {
+export async function fetchBackupPackageFromDrive(fileId, fileName = '') {
+  const lower = String(fileName || '').toLowerCase();
+  if (lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.csv')) {
+    const res = await downloadFromGoogleDrive(fileId);
+    const { parseAndValidateBackupFile } = await import('./spreadsheetBackupService.js');
+    const payload = lower.endsWith('.csv') ? await res.text() : new Uint8Array(await res.arrayBuffer());
+    const parsed = await parseAndValidateBackupFile(payload, fileName);
+    if (!parsed.isValid) {
+      throw new Error(parsed.error || 'Failed to parse spreadsheet backup from Google Drive.');
+    }
+    return parsed.package;
+  }
   return await downloadJsonFromGoogleDrive(fileId);
 }
 
 /**
- * Verifies post-restore data integrity to confirm that 0 records were lost, corrupted, or duplicated.
+ * Verifies post-restore data integrity to confirm that 0 records were lost, corrupted, duplicated,
+ * or still blocked by deletion tombstones.
  */
-export function verifyRestoredStateIntegrity(expectedCleanData = {}, restoredSummary = {}) {
+export function verifyRestoredStateIntegrity(expectedCleanData = {}, restoredSummary = {}, extraContext = {}) {
   const expectedStats = computeBackupStats(expectedCleanData);
   const checks = [
     { domain: 'Parts Catalog', expected: expectedStats.partsCount, actual: restoredSummary.partsCount ?? expectedStats.partsCount },
@@ -1478,7 +1598,7 @@ export function verifyRestoredStateIntegrity(expectedCleanData = {}, restoredSum
   const unitSerials = new Set();
   let duplicateSerials = 0;
   (expectedCleanData.inventoryUnits || []).forEach((u) => {
-    const s = String(u?.serial_number || u?.id || '').trim().toUpperCase();
+    const s = String(u?.serial_number || u?.serialNumber || u?.id || '').trim().toUpperCase();
     if (s) {
       if (unitSerials.has(s)) duplicateSerials++;
       unitSerials.add(s);
@@ -1496,19 +1616,42 @@ export function verifyRestoredStateIntegrity(expectedCleanData = {}, restoredSum
     }
   });
 
+  // Check for any restored serial numbers that are still stuck in persisted deletion tombstones
+  const persistedDeletedSerials = Array.isArray(extraContext.persistedDeletedSerials)
+    ? extraContext.persistedDeletedSerials
+    : safeReadLocalJson('mdc_deleted_unit_serials', []);
+  const deletedSet = new Set(
+    (Array.isArray(persistedDeletedSerials) ? persistedDeletedSerials : [])
+      .map((s) => String(s || '').trim().toUpperCase())
+      .filter(Boolean)
+  );
+  let tombstoneConflicts = 0;
+  unitSerials.forEach((s) => {
+    if (deletedSet.has(s)) tombstoneConflicts++;
+  });
+
   const lostRecords = checks.reduce((sum, c) => sum + Math.max(0, c.expected - c.actual), 0);
   const duplicateRecords = duplicateSerials + duplicateShipments;
-  const verified = lostRecords === 0 && duplicateRecords === 0;
+  const cloudSyncReport = extraContext.cloudSyncReport || null;
+  const cloudWarnings = Array.isArray(cloudSyncReport?.warnings) ? cloudSyncReport.warnings : [];
+  const verified = lostRecords === 0 && duplicateRecords === 0 && tombstoneConflicts === 0;
 
   return {
     verified,
     lostRecords,
     duplicateRecords,
+    tombstoneConflicts,
+    recoveredDeletedUnits: Number(extraContext.recoveredDeletedUnits || 0),
+    cloudVerified: cloudSyncReport ? Boolean(cloudSyncReport.success && !cloudSyncReport.offlineOnly) : false,
+    cloudSyncReport,
+    cloudWarnings,
     totalVerifiedRecords: expectedStats.totalRecordsCount,
     checks,
     verifiedAt: new Date().toISOString()
   };
 }
+
+const yieldToUi = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 /**
  * Executes a full point-in-time system state restore from a verified backup package.
@@ -1536,16 +1679,57 @@ export async function executeSystemStateRestore(
     throw new Error(validation.error || 'Invalid backup package');
   }
 
+  // Normalize & deduplicate once (avoiding redundant heavy passes)
   const normalized = normalizeBackupPayload(backupPackage);
   const { cleanData, totalDuplicatesRemoved } = deduplicateAndSanitizeBackupData(normalized);
-  const computedStats = computeBackupStats(cleanData);
+  const computedStats = validation.computedStats || computeBackupStats(cleanData);
   const totalSteps = 6;
   const actorUser = options.currentUser || appActions.currentUser || null;
+
+  // Snapshot pre-restore inventory & tombstones to calculate exact recovered deleted units
+  const preRestoreLiveSerials = new Set(
+    (appActions.currentAppState?.inventoryUnits || [])
+      .map((u) => String(u?.serial_number || u?.serialNumber || '').trim().toUpperCase())
+      .filter(Boolean)
+  );
+  const preRestoreDeletedSerials = new Set(
+    (safeReadLocalJson('mdc_deleted_unit_serials', []) || [])
+      .map((s) => String(s || '').trim().toUpperCase())
+      .filter(Boolean)
+  );
+
+  const restoredSerialsSet = new Set(
+    cleanData.inventoryUnits
+      .map((u) => String(u?.serial_number || u?.serialNumber || '').trim().toUpperCase())
+      .filter(Boolean)
+  );
+
+  let recoveredDeletedUnits = 0;
+  restoredSerialsSet.forEach((s) => {
+    if (preRestoreDeletedSerials.has(s) || (preRestoreLiveSerials.size > 0 && !preRestoreLiveSerials.has(s))) {
+      recoveredDeletedUnits++;
+    }
+  });
+
+  // Guard against concurrent background/realtime Supabase refreshes while restore is in flight
+  if (typeof window !== 'undefined') {
+    window.__MDC_SYSTEM_RESTORE_IN_PROGRESS = true;
+  }
 
   // Capture Pre-Restore Safety Snapshot for automatic rollback if any critical step fails
   let preRestorePkg = null;
   if (options.createPreRestoreSnapshot !== false && appActions.currentAppState) {
     try {
+      if (onStepProgress) {
+        onStepProgress({
+          step: 1,
+          totalSteps,
+          title: 'Saving Pre-Restore Rollback Point',
+          description: 'Capturing current live state as an automatic safety snapshot...',
+          percent: 8
+        });
+        await yieldToUi();
+      }
       preRestorePkg = compileSystemBackupPackage(appActions.currentAppState, actorUser, {
         trigger: 'PRE_RESTORE_SAFETY',
         label: 'Auto Pre-Restore Rollback Point'
@@ -1556,7 +1740,7 @@ export async function executeSystemStateRestore(
         operationType: 'PRE_RESTORE_SNAPSHOT',
         filename: `PRE_RESTORE_SNAPSHOT_${preRestorePkg.formattedTimestamp}.json`,
         label: 'Auto Pre-Restore Rollback Point',
-        sizeBytes: safeJsonStringify(preRestorePkg).length,
+        sizeBytes: 0,
         totalRecords: preRestorePkg.stats?.totalRecordsCount || 0,
         checksum: preRestorePkg.integrity?.checksum || null,
         durationMs: Date.now() - t0,
@@ -1568,6 +1752,21 @@ export async function executeSystemStateRestore(
     }
   }
 
+  // Collect async IndexedDB persistence promises to await in parallel before cloud sync & verification
+  const idbPersistPromises = [];
+  const persistStore = (key, value, opts = {}) => {
+    if (!opts.skipLocalStorage) {
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.setItem(key, safeJsonStringify(value));
+        }
+      } catch (_) {}
+    }
+    idbPersistPromises.push(
+      dbStorage.setItem(key, value, { skipLocalStorage: true }).catch(() => {})
+    );
+  };
+
   try {
     // -------------------------------------------------------------------------
     // Step 1: Restore Parts Master Catalog & Categories
@@ -1577,22 +1776,23 @@ export async function executeSystemStateRestore(
         step: 1,
         totalSteps,
         title: 'Restoring Parts Master Catalog & Categories',
-        description: `Hydrating ${cleanData.parts.length} catalog parts and ${cleanData.categories.length} categories...`,
-        percent: 15
+        description: `Hydrating ${cleanData.parts.length.toLocaleString()} catalog parts and ${cleanData.categories.length} categories...`,
+        percent: 18
       });
+      await yieldToUi();
     }
 
     if (cleanData.categories.length > 0) {
       if (typeof appActions.setCategories === 'function') {
         appActions.setCategories(cleanData.categories);
       }
-      safeWritePersistentJson('mdc_categories', cleanData.categories);
+      persistStore('mdc_categories', cleanData.categories);
     }
 
     if (cleanData.parts.length > 0) {
       if (typeof appActions.setParts === 'function') {
         appActions.setParts(cleanData.parts);
-        safeWritePersistentJson('mdc_parts', cleanData.parts);
+        persistStore('mdc_parts', cleanData.parts);
       } else if (typeof appActions.savePart === 'function') {
         for (const part of cleanData.parts) {
           if (part && (part.part_number || part.description)) {
@@ -1613,12 +1813,13 @@ export async function executeSystemStateRestore(
         description: `Hydrating ${cleanData.sites.length} service branch locations...`,
         percent: 32
       });
+      await yieldToUi();
     }
 
     if (cleanData.sites.length > 0) {
       if (typeof appActions.setSites === 'function') {
         appActions.setSites(cleanData.sites);
-        safeWritePersistentJson('mdc_sites', cleanData.sites);
+        persistStore('mdc_sites', cleanData.sites);
       } else if (typeof appActions.saveSite === 'function') {
         for (const site of cleanData.sites) {
           if (site && (site.name || site.code)) {
@@ -1636,17 +1837,13 @@ export async function executeSystemStateRestore(
         step: 3,
         totalSteps,
         title: 'Restoring Inventory Stock, Serials & Deletion Registries',
-        description: `Hydrating ${cleanData.inventoryUnits.length} serialized units across Central DC and branch sites...`,
-        percent: 52
+        description: `Recovering ${cleanData.inventoryUnits.length.toLocaleString()} serialized units${recoveredDeletedUnits > 0 ? ` (${recoveredDeletedUnits.toLocaleString()} deleted unit(s) recovered)` : ''}...`,
+        percent: 50
       });
+      await yieldToUi();
     }
 
     // Reconcile deletion & cleared site registries so restored serials/shipments/intakes are NEVER hidden
-    const restoredSerialsSet = new Set(
-      cleanData.inventoryUnits
-        .map((u) => String(u?.serial_number || u?.serialNumber || '').trim().toUpperCase())
-        .filter(Boolean)
-    );
     const restoredShipmentIdsSet = new Set(
       cleanData.shipments
         .flatMap((s) => [s?.id, s?.invoice_ref, s?.shipment_number])
@@ -1695,27 +1892,27 @@ export async function executeSystemStateRestore(
       if (typeof window !== 'undefined' && window.localStorage) {
         window.localStorage.removeItem('mdc_is_cleared');
       }
-      dbStorage.removeItem('mdc_is_cleared').catch(() => {});
+      idbPersistPromises.push(dbStorage.removeItem('mdc_is_cleared').catch(() => {}));
     } catch (_) {}
 
-    safeWritePersistentJson('mdc_deleted_unit_serials', reconciledDeletedSerials);
-    safeWritePersistentJson('mdc_deleted_shipment_ids', reconciledDeletedShipments);
-    safeWritePersistentJson('mdc_deleted_intake_ids', reconciledDeletedIntakes);
-    safeWritePersistentJson('mdc_cleared_site_timestamps', reconciledClearedSites);
+    persistStore('mdc_deleted_unit_serials', reconciledDeletedSerials);
+    persistStore('mdc_deleted_shipment_ids', reconciledDeletedShipments);
+    persistStore('mdc_deleted_intake_ids', reconciledDeletedIntakes);
+    persistStore('mdc_cleared_site_timestamps', reconciledClearedSites);
 
     if (typeof appActions.setInventoryUnits === 'function') {
       appActions.setInventoryUnits(cleanData.inventoryUnits);
       try {
         saveInventoryToLocalStorage(cleanData.inventoryUnits);
       } catch (_) {}
-      safeWritePersistentJson('mdc_inventory', cleanData.inventoryUnits, { skipLocalStorage: true });
+      persistStore('mdc_inventory', cleanData.inventoryUnits, { skipLocalStorage: true });
 
       const branchUnits = cleanData.inventoryUnits.filter((u) => {
         const sId = String(u?.current_site_id || u?.site_id || '').toLowerCase();
         const sCode = String(u?.site_code || '').toUpperCase();
         return sId !== 'site-dc' && sCode !== 'DC-MDC' && sCode !== 'DC' && !u?.is_dc;
       });
-      safeWritePersistentJson('mdc_branch_inventory_units', branchUnits, { skipLocalStorage: true });
+      persistStore('mdc_branch_inventory_units', branchUnits, { skipLocalStorage: true });
     } else if (cleanData.inventoryUnits.length > 0 && typeof appActions.batchAddScanInUnits === 'function') {
       await appActions.batchAddScanInUnits(cleanData.inventoryUnits);
     }
@@ -1729,19 +1926,28 @@ export async function executeSystemStateRestore(
         totalSteps,
         title: 'Restoring Shipments, POs, Intakes, Requests & Forecasting',
         description: `Hydrating ${cleanData.shipments.length} shipments, ${cleanData.purchaseOrders.length} POs, ${cleanData.dcIntakeRecords.length} intake batches, and planning matrices...`,
-        percent: 72
+        percent: 66
       });
+      await yieldToUi();
     }
 
-    if (typeof appActions.setShipments === 'function') {
-      appActions.setShipments(cleanData.shipments);
-      safeWritePersistentJson('mdc_shipments', cleanData.shipments);
-    } else if (cleanData.shipments.length > 0) {
-      if (typeof appActions.batchImportShipments === 'function') {
-        await appActions.batchImportShipments(cleanData.shipments);
-      } else if (typeof appActions.saveShipment === 'function') {
-        for (const sh of cleanData.shipments) {
-          await appActions.saveShipment(sh);
+    // Guard against accidentally wiping populated live domains if a backup file has an empty sheet/section
+    const liveState = appActions.currentAppState || {};
+    const hasLiveShipments = Array.isArray(liveState.shipments) && liveState.shipments.length > 0;
+    const preserveLiveShipments = cleanData.shipments.length === 0 && hasLiveShipments;
+    const effectiveShipments = preserveLiveShipments ? liveState.shipments : cleanData.shipments;
+
+    if (!preserveLiveShipments) {
+      if (typeof appActions.setShipments === 'function') {
+        appActions.setShipments(cleanData.shipments);
+        persistStore('mdc_shipments', cleanData.shipments);
+      } else if (cleanData.shipments.length > 0) {
+        if (typeof appActions.batchImportShipments === 'function') {
+          await appActions.batchImportShipments(cleanData.shipments);
+        } else if (typeof appActions.saveShipment === 'function') {
+          for (const sh of cleanData.shipments) {
+            await appActions.saveShipment(sh);
+          }
         }
       }
     }
@@ -1749,7 +1955,7 @@ export async function executeSystemStateRestore(
     if (typeof appActions.setActivePackDraft === 'function') {
       appActions.setActivePackDraft(cleanData.activePackDraft || null);
       if (cleanData.activePackDraft) {
-        safeWritePersistentJson('mdc_active_pack_draft', cleanData.activePackDraft);
+        persistStore('mdc_active_pack_draft', cleanData.activePackDraft);
       } else {
         try {
           if (typeof window !== 'undefined' && window.localStorage) {
@@ -1759,50 +1965,53 @@ export async function executeSystemStateRestore(
       }
     }
 
-    if (typeof appActions.setPurchaseOrders === 'function') {
+    const preserveLivePos = cleanData.purchaseOrders.length === 0 && Array.isArray(liveState.purchaseOrders) && liveState.purchaseOrders.length > 0;
+    if (!preserveLivePos && typeof appActions.setPurchaseOrders === 'function') {
       appActions.setPurchaseOrders(cleanData.purchaseOrders);
-      safeWritePersistentJson('mdc_pos', cleanData.purchaseOrders);
+      persistStore('mdc_pos', cleanData.purchaseOrders);
     }
 
-    if (typeof appActions.setDcIntakeRecords === 'function') {
+    const preserveLiveIntakes = cleanData.dcIntakeRecords.length === 0 && Array.isArray(liveState.dcIntakeRecords) && liveState.dcIntakeRecords.length > 0;
+    if (!preserveLiveIntakes && typeof appActions.setDcIntakeRecords === 'function') {
       appActions.setDcIntakeRecords(cleanData.dcIntakeRecords);
-      safeWritePersistentJson('mdc_dc_intake_records', cleanData.dcIntakeRecords);
+      persistStore('mdc_dc_intake_records', cleanData.dcIntakeRecords);
     }
 
-    if (typeof appActions.setPartsRequests === 'function') {
+    const preserveLiveRequests = cleanData.partsRequests.length === 0 && Array.isArray(liveState.partsRequests) && liveState.partsRequests.length > 0;
+    if (!preserveLiveRequests && typeof appActions.setPartsRequests === 'function') {
       appActions.setPartsRequests(cleanData.partsRequests);
-      safeWritePersistentJson('mdc_parts_requests', cleanData.partsRequests);
+      persistStore('mdc_parts_requests', cleanData.partsRequests);
     }
 
     if (typeof appActions.setRepairUsageRecords === 'function') {
       appActions.setRepairUsageRecords(cleanData.repairUsageRecords);
-      safeWritePersistentJson('mdc_repair_usage', cleanData.repairUsageRecords, { skipLocalStorage: true });
+      persistStore('mdc_repair_usage', cleanData.repairUsageRecords, { skipLocalStorage: true });
     }
 
     if (cleanData.activePeriod && typeof appActions.setActivePeriod === 'function') {
       appActions.setActivePeriod(cleanData.activePeriod);
-      safeWritePersistentJson('mdc_active_period', cleanData.activePeriod);
+      persistStore('mdc_active_period', cleanData.activePeriod);
     }
 
     if (cleanData.forecastingModel && typeof appActions.setForecastingModel === 'function') {
       appActions.setForecastingModel(cleanData.forecastingModel);
-      safeWritePersistentJson('mdc_forecasting_model', cleanData.forecastingModel);
+      persistStore('mdc_forecasting_model', cleanData.forecastingModel);
     }
 
     if (typeof appActions.setForecastItems === 'function') {
       appActions.setForecastItems(cleanData.forecastItems);
-      safeWritePersistentJson('mdc_forecast', cleanData.forecastItems);
+      persistStore('mdc_forecast', cleanData.forecastItems);
     }
 
     if (typeof appActions.setAllocations === 'function') {
       appActions.setAllocations(cleanData.allocations);
-      safeWritePersistentJson('mdc_allocations', cleanData.allocations);
+      persistStore('mdc_allocations', cleanData.allocations);
     }
 
     if (cleanData.masterlistData !== undefined && typeof appActions.setMasterlistData === 'function') {
       appActions.setMasterlistData(cleanData.masterlistData);
       if (cleanData.masterlistData) {
-        safeWritePersistentJson('mdc_masterlist_data', cleanData.masterlistData, { skipLocalStorage: true });
+        persistStore('mdc_masterlist_data', cleanData.masterlistData, { skipLocalStorage: true });
       }
     }
 
@@ -1815,8 +2024,9 @@ export async function executeSystemStateRestore(
         totalSteps,
         title: 'Restoring Consumables & Tools, Traceability, Users & Security',
         description: 'Applying Consumables & Tools state, Transfer History, DC Monitoring, User Accounts, and Audit Logs...',
-        percent: 86
+        percent: 78
       });
+      await yieldToUi();
     }
 
     // Consumables & Tools restoration
@@ -1839,12 +2049,12 @@ export async function executeSystemStateRestore(
           shipments: cleanData.ctShipments
         });
       } else {
-        safeWritePersistentJson('mdc_ct_catalog', cleanData.ctCatalog);
-        safeWritePersistentJson('mdc_ct_orders', cleanData.ctOrders);
-        safeWritePersistentJson('mdc_ct_stock', cleanData.ctStock);
-        safeWritePersistentJson('mdc_ct_tool_assets', cleanData.ctToolAssets);
-        safeWritePersistentJson('mdc_ct_movements', cleanData.ctMovements);
-        safeWritePersistentJson('mdc_ct_shipments', cleanData.ctShipments);
+        persistStore('mdc_ct_catalog', cleanData.ctCatalog);
+        persistStore('mdc_ct_orders', cleanData.ctOrders);
+        persistStore('mdc_ct_stock', cleanData.ctStock);
+        persistStore('mdc_ct_tool_assets', cleanData.ctToolAssets);
+        persistStore('mdc_ct_movements', cleanData.ctMovements);
+        persistStore('mdc_ct_shipments', cleanData.ctShipments);
       }
     }
 
@@ -1856,26 +2066,32 @@ export async function executeSystemStateRestore(
     // Fixably Snapshot restoration
     if (cleanData.fixablySnapshot && typeof appActions.setFixablySnapshot === 'function') {
       appActions.setFixablySnapshot(cleanData.fixablySnapshot);
-      safeWritePersistentJson('mdc_fixably_snapshot', cleanData.fixablySnapshot, { skipLocalStorage: true });
+      persistStore('mdc_fixably_snapshot', cleanData.fixablySnapshot, { skipLocalStorage: true });
     }
 
-    // DC Stock Monitoring restoration
+    // Run async Step 5 persistence tasks (DC Monitoring, Supervisor Settings, Auto-Logout) in parallel
+    const step5AsyncTasks = [];
+
     if (cleanData.dcMonitoringState && typeof cleanData.dcMonitoringState === 'object') {
       const dcMon = cleanData.dcMonitoringState;
       if (dcMon.datasets && Object.keys(dcMon.datasets).length > 0) {
-        await saveDcMonitoringDatasets(dcMon.datasets, dcMon.validationLogs || {}, {
-          userName: actorUser?.fullName || 'Superadmin Restore',
-          slotMetaOverride: dcMon.slotMeta || null
-        }).catch(() => {});
+        step5AsyncTasks.push(
+          saveDcMonitoringDatasets(dcMon.datasets, dcMon.validationLogs || {}, {
+            userName: actorUser?.fullName || 'Superadmin Restore',
+            slotMetaOverride: dcMon.slotMeta || null
+          }).catch(() => {})
+        );
       }
       if (Array.isArray(dcMon.shippingCosts) && dcMon.shippingCosts.length > 0) {
-        await saveDcMonitoringLedger({
-          shippingCosts: dcMon.shippingCosts,
-          remarksMap: dcMon.remarksMap || {},
-          orderReportOrders: dcMon.orderReportOrders || null,
-          includeHistorical: dcMon.includeHistorical ?? null,
-          userName: actorUser?.fullName || 'Superadmin Restore'
-        }).catch(() => {});
+        step5AsyncTasks.push(
+          saveDcMonitoringLedger({
+            shippingCosts: dcMon.shippingCosts,
+            remarksMap: dcMon.remarksMap || {},
+            orderReportOrders: dcMon.orderReportOrders || null,
+            includeHistorical: dcMon.includeHistorical ?? null,
+            userName: actorUser?.fullName || 'Superadmin Restore'
+          }).catch(() => {})
+        );
       }
     }
 
@@ -1890,46 +2106,53 @@ export async function executeSystemStateRestore(
         }
       }
       appActions.setUsersList(restoredUsers);
-      safeWritePersistentJson('mdc_users', restoredUsers);
+      persistStore('mdc_users', restoredUsers);
     }
 
     if (cleanData.supervisorSettings && Object.keys(cleanData.supervisorSettings).length > 0) {
       if (typeof appActions.saveSupervisorSettings === 'function') {
-        await appActions.saveSupervisorSettings(cleanData.supervisorSettings);
+        step5AsyncTasks.push(
+          Promise.resolve(appActions.saveSupervisorSettings(cleanData.supervisorSettings)).catch(() => {})
+        );
       } else if (typeof appActions.setSupervisorSettings === 'function') {
         appActions.setSupervisorSettings(cleanData.supervisorSettings);
       }
-      safeWritePersistentJson('mdc_supervisor_settings', cleanData.supervisorSettings);
+      persistStore('mdc_supervisor_settings', cleanData.supervisorSettings);
     }
 
     if (cleanData.autoLogoutConfig && Object.keys(cleanData.autoLogoutConfig).length > 0) {
       if (typeof appActions.updateAutoLogoutConfig === 'function') {
-        await appActions.updateAutoLogoutConfig(cleanData.autoLogoutConfig);
+        step5AsyncTasks.push(
+          Promise.resolve(appActions.updateAutoLogoutConfig(cleanData.autoLogoutConfig)).catch(() => {})
+        );
       }
-      safeWritePersistentJson('mdc_auto_logout_settings', cleanData.autoLogoutConfig);
+      persistStore('mdc_auto_logout_settings', cleanData.autoLogoutConfig);
     }
 
     // Audit Logs restoration
     if (cleanData.systemAuditLogs.length > 0 && typeof appActions.setSystemAuditLogs === 'function') {
       appActions.setSystemAuditLogs(cleanData.systemAuditLogs);
-      safeWritePersistentJson('mdc_system_audit_logs', cleanData.systemAuditLogs);
+      persistStore('mdc_system_audit_logs', cleanData.systemAuditLogs);
     }
     if (cleanData.uploadAuditLogs.length > 0 && typeof appActions.setUploadAuditLogs === 'function') {
       appActions.setUploadAuditLogs(cleanData.uploadAuditLogs);
-      safeWritePersistentJson('mdc_upload_audit_logs', cleanData.uploadAuditLogs);
+      persistStore('mdc_upload_audit_logs', cleanData.uploadAuditLogs);
     }
     if (cleanData.deletionAuditLogs.length > 0 && typeof appActions.setDeletionAuditLogs === 'function') {
       appActions.setDeletionAuditLogs(cleanData.deletionAuditLogs);
-      safeWritePersistentJson('mdc_deletion_audit_logs', cleanData.deletionAuditLogs);
+      persistStore('mdc_deletion_audit_logs', cleanData.deletionAuditLogs);
     }
     if (cleanData.sessionAuditLogs.length > 0 && typeof appActions.setSessionAuditLogs === 'function') {
       appActions.setSessionAuditLogs(cleanData.sessionAuditLogs);
-      safeWritePersistentJson('mdc_session_audit_logs', cleanData.sessionAuditLogs);
+      persistStore('mdc_session_audit_logs', cleanData.sessionAuditLogs);
     }
     if (cleanData.scanLogs.length > 0 && typeof appActions.setScanLogs === 'function') {
       appActions.setScanLogs(cleanData.scanLogs);
-      safeWritePersistentJson('mdc_scan_logs', cleanData.scanLogs);
+      persistStore('mdc_scan_logs', cleanData.scanLogs);
     }
+
+    // Await all parallel IndexedDB & Step 5 writes so local storage is 100% committed before cloud sync
+    await Promise.allSettled([...idbPersistPromises, ...step5AsyncTasks]);
 
     // -------------------------------------------------------------------------
     // Step 6: Global Cloud Sync, Peer Cache Purge & Post-Restore Integrity Check
@@ -1939,24 +2162,70 @@ export async function executeSystemStateRestore(
         step: 6,
         totalSteps,
         title: 'Synchronizing to Cloud Database & Verifying Integrity',
-        description: 'Pushing restored point-in-time state to Supabase PostgreSQL and verifying 100% data integrity...',
-        percent: 96
+        description: 'Flushing deletion tombstones & pushing restored records to Supabase PostgreSQL in parallel batches...',
+        percent: 86
       });
+      await yieldToUi();
     }
 
     const overrideCloudPayload = {
       ...cleanData,
+      shipments: effectiveShipments,
+      ...(preserveLivePos ? { purchaseOrders: liveState.purchaseOrders } : {}),
+      ...(preserveLiveIntakes ? { dcIntakeRecords: liveState.dcIntakeRecords } : {}),
+      ...(preserveLiveRequests ? { partsRequests: liveState.partsRequests } : {}),
       registries: reconciledRegistries,
-      isSystemRestore: true
+      isSystemRestore: true,
+      onProgress: onStepProgress
+        ? (sub) => {
+            onStepProgress({
+              step: 6,
+              totalSteps,
+              title: 'Synchronizing to Cloud Database & Verifying Integrity',
+              description: sub.description || 'Synchronizing restored datasets to Supabase...',
+              percent: sub.percent || 94
+            });
+          }
+        : null
     };
 
+    let cloudSyncReport = null;
     if (typeof appActions.forceGlobalCloudSyncAndPurge === 'function') {
-      await appActions.forceGlobalCloudSyncAndPurge(overrideCloudPayload);
+      cloudSyncReport = await appActions.forceGlobalCloudSyncAndPurge(overrideCloudPayload);
     } else if (typeof appActions.syncAllDataToCloud === 'function') {
-      await appActions.syncAllDataToCloud(overrideCloudPayload);
+      cloudSyncReport = await appActions.syncAllDataToCloud(overrideCloudPayload);
     }
 
-    const verificationReport = verifyRestoredStateIntegrity(cleanData, computedStats);
+    // Real post-restore verification: read back persisted stores to confirm data matches backup
+    const persistedDeletedSerials = safeReadLocalJson('mdc_deleted_unit_serials', reconciledDeletedSerials);
+    const persistedInventory = await dbStorage.getItem('mdc_inventory').catch(() => null);
+    const persistedShipments = safeReadLocalJson('mdc_shipments', null);
+    const persistedParts = safeReadLocalJson('mdc_parts', null);
+    const persistedSites = safeReadLocalJson('mdc_sites', null);
+    const persistedPos = safeReadLocalJson('mdc_pos', null);
+    const persistedIntakes = safeReadLocalJson('mdc_dc_intake_records', null);
+    const persistedRequests = safeReadLocalJson('mdc_parts_requests', null);
+
+    const actualRestoredSummary = {
+      ...computedStats,
+      ...(Array.isArray(persistedInventory) ? { inventoryUnitsCount: persistedInventory.length } : {}),
+      ...(Array.isArray(persistedShipments) ? { shipmentsCount: persistedShipments.length } : {}),
+      ...(Array.isArray(persistedParts) ? { partsCount: persistedParts.length } : {}),
+      ...(Array.isArray(persistedSites) ? { sitesCount: persistedSites.length } : {}),
+      ...(Array.isArray(persistedPos) ? { purchaseOrdersCount: persistedPos.length } : {}),
+      ...(Array.isArray(persistedIntakes) ? { dcIntakeRecordsCount: persistedIntakes.length } : {}),
+      ...(Array.isArray(persistedRequests) ? { partsRequestsCount: persistedRequests.length } : {})
+    };
+
+    const verificationReport = verifyRestoredStateIntegrity(
+      cleanData,
+      actualRestoredSummary,
+      {
+        persistedDeletedSerials,
+        recoveredDeletedUnits,
+        cloudSyncReport
+      }
+    );
     const durationMs = Date.now() - t0;
 
     recordRestoreHistoryLog({
@@ -1983,12 +2252,14 @@ export async function executeSystemStateRestore(
         category: 'DISASTER_RECOVERY',
         entityType: 'System Database Backup',
         entityId: options.sourceFilename || backupPackage.formattedTimestamp || 'BACKUP_PACKAGE',
-        entityLabel: `Restored ${computedStats.totalRecordsCount} total records (${computedStats.inventoryUnitsCount} units, ${computedStats.shipmentsCount} shipments, ${computedStats.partsCount} parts)`,
+        entityLabel: `Restored ${computedStats.totalRecordsCount} total records (${computedStats.inventoryUnitsCount} units, ${recoveredDeletedUnits} deleted recovered, ${computedStats.shipmentsCount} shipments, ${computedStats.partsCount} parts)`,
         details: {
           sourceFilename: options.sourceFilename || 'Backup Package',
           backupCreatedAt: backupPackage.createdAt,
           checksum: validation.integrity?.computedChecksum,
           stats: computedStats,
+          recoveredDeletedUnits,
+          cloudSyncReport,
           verificationReport,
           durationMs
         },
@@ -2002,7 +2273,7 @@ export async function executeSystemStateRestore(
         step: 6,
         totalSteps,
         title: 'Restore Completed & Integrity Verified',
-        description: `Successfully restored ${computedStats.totalRecordsCount.toLocaleString()} records across all system modules with 0 data loss and 0 duplicates.`,
+        description: `Restored ${computedStats.totalRecordsCount.toLocaleString()} records in ${(durationMs / 1000).toFixed(1)}s${recoveredDeletedUnits > 0 ? ` (${recoveredDeletedUnits.toLocaleString()} deleted unit(s) recovered)` : ''} with 0 data loss.`,
         percent: 100
       });
     }
@@ -2012,6 +2283,8 @@ export async function executeSystemStateRestore(
       restoredStats: validation.stats || computedStats,
       computedStats,
       verificationReport,
+      recoveredDeletedUnits,
+      cloudSyncReport,
       duplicatesRemoved: totalDuplicatesRemoved,
       preRestoreSnapshotSaved: Boolean(preRestorePkg),
       durationMs
@@ -2058,5 +2331,9 @@ export async function executeSystemStateRestore(
     });
 
     throw err;
+  } finally {
+    if (typeof window !== 'undefined') {
+      window.__MDC_SYSTEM_RESTORE_IN_PROGRESS = false;
+    }
   }
 }

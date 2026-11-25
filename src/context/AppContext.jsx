@@ -872,6 +872,8 @@ export function AppProvider({ children }) {
         resetPartAllocation: forecastingAndAllocation.resetPartAllocation,
         resetAllAllocationsToCalculation: forecastingAndAllocation.resetAllAllocationsToCalculation,
         deletePart: catalogAndSites.deletePart,
+        saveCategory: catalogAndSites.saveCategory,
+        deleteCategory: catalogAndSites.deleteCategory,
         saveSite: catalogAndSites.saveSite,
         deleteSite: catalogAndSites.deleteSite,
         refreshSitesFromCloud: catalogAndSites.refreshSitesFromCloud,

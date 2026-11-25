@@ -4,6 +4,9 @@ import dbStorage from '../utils/dbStorage.js';
 import { isUUID } from '../utils/appContextHelpers.js';
 import {
   DEFAULT_PART_CATEGORIES,
+  isDefaultCategoryCode,
+  normalizeCategoryCode,
+  mergeWithDefaultCategories,
   resolvePartCategoryId,
   resolvePartCategoryUUID,
   getPartCategory
@@ -76,12 +79,7 @@ export function useCatalogAndSites({
       const saved = localStorage.getItem('mdc_categories');
       const parsed = saved ? JSON.parse(saved) : [];
       if (Array.isArray(parsed) && parsed.length > 0) {
-        const hasOther = parsed.some(c => String(c.code || '').toUpperCase() === 'OTHER');
-        if (!hasOther) {
-          const otherCat = DEFAULT_PART_CATEGORIES.find(c => c.code === 'OTHER');
-          if (otherCat) parsed.push(otherCat);
-        }
-        return parsed;
+        return mergeWithDefaultCategories(parsed);
       }
       return DEFAULT_PART_CATEGORIES;
     } catch {
@@ -187,9 +185,9 @@ export function useCatalogAndSites({
       }).catch(() => {});
 
       // Fetch authoritative categories from Supabase
-      supabase.from('part_categories').select('*').then(({ data: dbCats, error }) => {
+      supabase.from('part_categories').select('*').then(async ({ data: dbCats, error }) => {
         if (!error && dbCats && dbCats.length > 0) {
-          const authoritativeCats = dbCats.map(c => ({
+          const mappedDbCats = dbCats.map(c => ({
             id: c.id,
             code: c.code,
             name: c.name,
@@ -197,10 +195,31 @@ export function useCatalogAndSites({
             is_serialized: c.is_serialized ?? true,
             sort_order: c.sort_order || 1
           }));
-          if (!authoritativeCats.some(c => c.code === 'OTHER')) {
-            const otherCat = DEFAULT_PART_CATEGORIES.find(c => c.code === 'OTHER');
-            if (otherCat) authoritativeCats.push(otherCat);
+          const dbCodes = new Set(mappedDbCats.map(c => normalizeCategoryCode(c.code)));
+          const missingDefaults = DEFAULT_PART_CATEGORIES.filter(def => !dbCodes.has(def.code));
+          let authoritativeCats = mergeWithDefaultCategories(mappedDbCats);
+
+          if (missingDefaults.length > 0) {
+            try {
+              const rowsToSeed = missingDefaults.map(def => ({
+                code: def.code,
+                name: def.name,
+                has_imei: Boolean(def.has_imei),
+                is_serialized: Boolean(def.is_serialized),
+                sort_order: def.sort_order
+              }));
+              const { data: seededRows, error: seedErr } = await supabase
+                .from('part_categories')
+                .upsert(rowsToSeed, { onConflict: 'code' })
+                .select('*');
+              if (!seedErr && Array.isArray(seededRows) && seededRows.length > 0) {
+                authoritativeCats = mergeWithDefaultCategories([...mappedDbCats, ...seededRows]);
+              }
+            } catch (seedNote) {
+              console.warn('Silent default part_categories seed note:', seedNote);
+            }
           }
+
           setCategories(authoritativeCats);
           try { localStorage.setItem('mdc_categories', JSON.stringify(authoritativeCats)); } catch (e) {}
           dbStorage.setItem('mdc_categories', authoritativeCats);
@@ -311,17 +330,30 @@ export function useCatalogAndSites({
           applyCatalogMerge([]);
         }
 
-        // 2. Ensure Supabase public.parts (514 rows, 71 non-overlapping with GSX CSV) are also merged for 4,711 parity
+        // 2. Ensure ALL Supabase public.parts rows (paginated past PostgREST 1,000-row cap) are merged for full parity
         if (supabase && !hasAttemptedCloudPartsFetchRef.current) {
           hasAttemptedCloudPartsFetchRef.current = true;
-          const { data: dbParts, error } = await supabase
-            .from('parts')
-            .select('*')
-            .order('part_number', { ascending: true });
+          const allDbParts = [];
+          const pageSize = 1000;
+          let fetchErr = null;
+          for (let offset = 0; ; offset += pageSize) {
+            const { data: page, error } = await supabase
+              .from('parts')
+              .select('*')
+              .order('part_number', { ascending: true })
+              .range(offset, offset + pageSize - 1);
+            if (error) {
+              fetchErr = error;
+              break;
+            }
+            if (!page || page.length === 0) break;
+            allDbParts.push(...page);
+            if (page.length < pageSize) break;
+          }
           if (isUnmountedRef.current) return;
-          if (!error && Array.isArray(dbParts) && dbParts.length > 0) {
-            cloudDbPartsCacheRef.current = dbParts;
-            applyCatalogMerge(dbParts);
+          if (!fetchErr && allDbParts.length > 0) {
+            cloudDbPartsCacheRef.current = allDbParts;
+            applyCatalogMerge(allDbParts);
           }
         }
       } catch (e) {
@@ -1013,9 +1045,222 @@ export function useCatalogAndSites({
     return { success: true, addedCount, addedParts };
   };
 
+  const saveCategory = async (categoryData) => {
+    const activeUser = getCatalogUser(currentUser, getCurrentUser);
+    if (!canManagePartsCatalog(activeUser)) {
+      const error = 'Only administrators can create or modify part categories.';
+      showToast?.(error, 'error');
+      return { success: false, error };
+    }
+
+    const cleanName = String(categoryData?.name || '').trim();
+    if (!cleanName) {
+      const error = 'Category name is required.';
+      showToast?.(error, 'error');
+      return { success: false, error };
+    }
+
+    const activeList = Array.isArray(categoriesRef.current) ? categoriesRef.current : DEFAULT_PART_CATEGORIES;
+    const isEditing = Boolean(categoryData?.id);
+    const existingTarget = isEditing
+      ? activeList.find(c => c.id === categoryData.id || normalizeCategoryCode(c.code) === normalizeCategoryCode(categoryData.originalCode || categoryData.code))
+      : null;
+
+    const lockedDefaultCode = existingTarget && isDefaultCategoryCode(existingTarget.code)
+      ? normalizeCategoryCode(existingTarget.code)
+      : null;
+
+    const normalizedCode = lockedDefaultCode || normalizeCategoryCode(categoryData?.code || cleanName);
+    if (!normalizedCode) {
+      const error = 'Category code must contain letters or numbers.';
+      showToast?.(error, 'error');
+      return { success: false, error };
+    }
+
+    const duplicate = activeList.find(c =>
+      normalizeCategoryCode(c.code) === normalizedCode &&
+      (!existingTarget || c.id !== existingTarget.id)
+    );
+    if (duplicate) {
+      const error = `A category with code "${normalizedCode}" already exists (${duplicate.name}).`;
+      showToast?.(error, 'error');
+      return { success: false, error };
+    }
+
+    const maxSort = activeList.reduce((max, c) => Math.max(max, Number(c.sort_order) || 0), 0);
+    const parsedSort = Number(categoryData?.sort_order);
+    const sortOrder = Number.isFinite(parsedSort) && parsedSort > 0
+      ? Math.round(parsedSort)
+      : (existingTarget?.sort_order || maxSort + 1);
+
+    const savedCategory = {
+      id: existingTarget?.id || `cat-${normalizedCode.toLowerCase().replace(/_/g, '-')}-${Date.now().toString(36)}`,
+      code: normalizedCode,
+      name: cleanName,
+      is_serialized: Boolean(categoryData?.is_serialized),
+      has_imei: Boolean(categoryData?.has_imei),
+      sort_order: sortOrder
+    };
+
+    const nextList = mergeWithDefaultCategories(
+      existingTarget
+        ? activeList.map(c => (c.id === existingTarget.id ? savedCategory : c))
+        : [...activeList, savedCategory]
+    );
+
+    categoriesRef.current = nextList;
+    setCategories(nextList);
+    try { localStorage.setItem('mdc_categories', JSON.stringify(nextList)); } catch (e) {}
+    dbStorage.setItem('mdc_categories', nextList);
+
+    if (supabase) {
+      try {
+        const dbPayload = {
+          code: savedCategory.code,
+          name: savedCategory.name,
+          is_serialized: savedCategory.is_serialized,
+          has_imei: savedCategory.has_imei,
+          sort_order: savedCategory.sort_order
+        };
+        let dbResult = null;
+        if (existingTarget && isUUID(existingTarget.id)) {
+          const { data, error } = await supabase
+            .from('part_categories')
+            .update(dbPayload)
+            .eq('id', existingTarget.id)
+            .select('*')
+            .maybeSingle();
+          if (error) throw error;
+          dbResult = data;
+        } else {
+          const { data, error } = await supabase
+            .from('part_categories')
+            .upsert(dbPayload, { onConflict: 'code' })
+            .select('*')
+            .maybeSingle();
+          if (error) throw error;
+          dbResult = data;
+        }
+
+        if (dbResult && dbResult.id && dbResult.id !== savedCategory.id) {
+          const syncedCategory = { ...savedCategory, id: dbResult.id };
+          const syncedList = mergeWithDefaultCategories(
+            categoriesRef.current.map(c => (c.code === savedCategory.code ? syncedCategory : c))
+          );
+          categoriesRef.current = syncedList;
+          setCategories(syncedList);
+          try { localStorage.setItem('mdc_categories', JSON.stringify(syncedList)); } catch (e) {}
+          dbStorage.setItem('mdc_categories', syncedList);
+        }
+      } catch (err) {
+        console.warn('Supabase part_categories save note:', err);
+        if (enqueueOfflineAction) {
+          enqueueOfflineAction('UPSERT_CATEGORY', {
+            code: savedCategory.code,
+            name: savedCategory.name,
+            is_serialized: savedCategory.is_serialized,
+            has_imei: savedCategory.has_imei,
+            sort_order: savedCategory.sort_order
+          });
+        }
+      }
+    }
+
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('CATEGORY_SAVED', { code: savedCategory.code, name: savedCategory.name });
+    }
+    showToast?.(
+      existingTarget
+        ? `Updated category "${savedCategory.name}" (${savedCategory.code})`
+        : `Created custom category "${savedCategory.name}" (${savedCategory.code})`,
+      'success'
+    );
+    return { success: true, category: savedCategory };
+  };
+
+  const deleteCategory = async (categoryId, categoryCode) => {
+    const activeUser = getCatalogUser(currentUser, getCurrentUser);
+    if (!canManagePartsCatalog(activeUser)) {
+      const error = 'Only administrators can delete part categories.';
+      showToast?.(error, 'error');
+      return { success: false, error };
+    }
+
+    const activeList = Array.isArray(categoriesRef.current) ? categoriesRef.current : DEFAULT_PART_CATEGORIES;
+    const normCode = normalizeCategoryCode(categoryCode);
+    const target = activeList.find(c => c.id === categoryId || (normCode && normalizeCategoryCode(c.code) === normCode));
+    if (!target) {
+      return { success: false, error: 'Category not found.' };
+    }
+
+    if (isDefaultCategoryCode(target.code)) {
+      const error = `Default system category "${target.name}" (${target.code}) cannot be deleted.`;
+      showToast?.(error, 'error');
+      return { success: false, error };
+    }
+
+    const assignedPartsCount = (partsRef.current || []).filter(p =>
+      p.category_id === target.id ||
+      normalizeCategoryCode(p.category_code || p.category) === normalizeCategoryCode(target.code)
+    ).length;
+
+    if (assignedPartsCount > 0) {
+      const error = `Cannot delete "${target.name}" because ${assignedPartsCount} part${assignedPartsCount === 1 ? ' is' : 's are'} currently assigned to it. Reassign those parts first.`;
+      showToast?.(error, 'error');
+      return { success: false, error };
+    }
+
+    const nextList = activeList.filter(c => c.id !== target.id && normalizeCategoryCode(c.code) !== normalizeCategoryCode(target.code));
+    categoriesRef.current = nextList;
+    setCategories(nextList);
+    try { localStorage.setItem('mdc_categories', JSON.stringify(nextList)); } catch (e) {}
+    dbStorage.setItem('mdc_categories', nextList);
+
+    if (supabase) {
+      try {
+        if (isUUID(target.id)) {
+          await supabase.from('part_categories').delete().eq('id', target.id);
+        } else {
+          await supabase.from('part_categories').delete().eq('code', target.code);
+        }
+      } catch (err) {
+        console.warn('Supabase part_categories delete note:', err);
+      }
+    }
+
+    if (typeof logDeletionAudit === 'function') {
+      try {
+        await logDeletionAudit({
+          entityType: 'Part Category',
+          entityId: target.code,
+          entityLabel: `${target.name} (${target.code})`,
+          reason: 'Custom part category removed by administrator',
+          summary: {
+            category_id: target.id,
+            code: target.code,
+            name: target.name,
+            is_serialized: target.is_serialized,
+            has_imei: target.has_imei,
+            deleted_by: activeUser?.fullName || 'Administrator'
+          }
+        });
+      } catch (auditErr) {
+        console.warn('Category deletion audit note:', auditErr);
+      }
+    }
+
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('CATEGORY_DELETED', { code: target.code, id: target.id });
+    }
+    showToast?.(`Deleted custom category "${target.name}" (${target.code})`, 'success');
+    return { success: true };
+  };
+
   return {
     categories,
     setCategories,
+    saveCategory,
+    deleteCategory,
     sites,
     setSites,
     parts,

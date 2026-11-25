@@ -2783,16 +2783,16 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
 
 
       {/* Scanned Inventory Units Table - Both Central DC Superadmin & Retail Branch PMG */}
-      <div className="card" style={{ marginBottom: '24px', background: '#ffffff', border: '1px solid #e2e8f0', padding: '18px 20px' }}>
+      <div className="card scanin-inventory-card">
         {/* Table Header Controls */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
+        <div className="scanin-table-header-row">
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{ background: '#e0f2fe', color: '#0284c7', padding: '8px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Boxes size={20} />
+            <div style={{ background: '#e0f2fe', color: '#0284c7', padding: '7px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <Boxes size={19} />
             </div>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                <h3 style={{ margin: 0, fontSize: '15.5px', color: '#0f172a', fontWeight: 700 }}>
+                <h3 style={{ margin: 0, fontSize: '15px', color: '#0f172a', fontWeight: 700 }}>
                   {isPmgUser ? `${activeReceivingSite?.code || 'Branch'} Received Stock & Inventory Table` : 'Received DC Stock & Intake History'}
                 </h3>
                 <span className="badge badge-success" style={{ fontSize: '11.5px', padding: '2px 8px' }}>
@@ -2812,8 +2812,8 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <div style={{ position: 'relative', width: '260px' }}>
+          <div className="scanin-table-controls">
+            <div className="scanin-table-search">
               <Search size={13} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
               <input
                 type="text"
@@ -2981,7 +2981,7 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
 
         {/* 1b. Central DC Part Assignment Tabs (Superadmin Only) */}
         {!isPmgUser && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap', borderBottom: '1px solid #e2e8f0', paddingBottom: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', flexWrap: 'wrap', borderBottom: '1px solid #e2e8f0', paddingBottom: '10px' }}>
             <span style={{ fontSize: '11px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.4px', marginRight: '4px' }}>
               Inventory Tag:
             </span>
@@ -3164,7 +3164,7 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
         )}
 
         {/* 2. Sub-Category Filter Pills */}
-        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '12px', paddingBottom: '8px' }}>
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '10px', paddingBottom: '4px' }}>
           <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, marginRight: '2px' }}>Filter Part Type:</span>
           <button
             type="button"
@@ -3219,29 +3219,29 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
               </p>
             </div>
           ) : (
-            <div className="table-container" style={{ maxHeight: '420px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '6px' }}>
-              <table className="data-table" style={{ fontSize: '12px', width: '100%', borderCollapse: 'collapse' }}>
-                <thead style={{ position: 'sticky', top: 0, background: '#f8fafc', zIndex: 2 }}>
+            <div className="table-container scanin-table-container">
+              <table className="data-table scanin-data-table">
+                <thead>
                   <tr>
-                    <th style={{ width: '40px', textAlign: 'center' }}>#</th>
-                    <th style={{ width: '130px' }}>Part Number</th>
-                    <th>Description / Model</th>
-                    <th style={{ width: '130px' }}>Category</th>
-                    <th style={{ width: '140px' }}>Designated Site</th>
-                    <th style={{ width: '120px', textAlign: 'center' }}>Your Added Qty</th>
-                    <th style={{ width: '130px', textAlign: 'center' }}>Total Available Qty</th>
-                    <th style={{ width: '110px', textAlign: 'center' }}>Privacy Status</th>
+                    <th className="col-nowrap" style={{ width: '38px', textAlign: 'center' }}>#</th>
+                    <th className="col-nowrap">Part Number</th>
+                    <th className="col-desc">Description / Model</th>
+                    <th className="col-nowrap">Category</th>
+                    <th className="col-nowrap">Designated Site</th>
+                    <th className="col-nowrap" style={{ textAlign: 'center' }}>Your Added Qty</th>
+                    <th className="col-nowrap" style={{ textAlign: 'center' }}>Total Available Qty</th>
+                    <th className="col-nowrap" style={{ textAlign: 'center' }}>Privacy Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {pmgSiteSummaryRows.map((row, idx) => {
                     const catBadge = getCategoryBadgeStyle(row.category_code);
                     return (
-                      <tr key={`${row.part_number}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '11px' }}>
+                      <tr key={`${row.part_number}-${idx}`}>
+                        <td className="col-nowrap" style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '11px' }}>
                           {idx + 1}
                         </td>
-                        <td className="font-mono" style={{ fontWeight: 700, color: '#0f172a' }}>
+                        <td className="font-mono col-nowrap" style={{ fontWeight: 700, color: '#0f172a' }}>
                           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
                             <span>{row.part_number}</span>
                             <button
@@ -3258,13 +3258,13 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
                             </button>
                           </div>
                         </td>
-                        <td>
-                          <div style={{ fontWeight: 500, color: '#1e293b' }}>{row.description}</div>
+                        <td className="col-desc">
+                          <div className="desc-title">{row.description}</div>
                           {row.iphone_model && (
-                            <div style={{ fontSize: '11px', color: '#64748b' }}>Model: <strong>{row.iphone_model}</strong></div>
+                            <div className="desc-model">Model: <strong>{row.iphone_model}</strong></div>
                           )}
                         </td>
-                        <td>
+                        <td className="col-nowrap">
                           <span className="badge" style={{ ...catBadge, fontSize: '10px', padding: '1px 6px' }}>
                             {row.category_name}
                           </span>
@@ -3369,19 +3369,21 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
             )}
           </div>
         ) : (
-          <div className="table-container" style={{ maxHeight: '420px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '6px' }}>
-            <table className="data-table" style={{ fontSize: '12px', width: '100%', borderCollapse: 'collapse' }}>
-              <thead style={{ position: 'sticky', top: 0, background: '#f8fafc', zIndex: 2 }}>
+          <div className="table-container scanin-table-container">
+            <table className="data-table scanin-data-table">
+              <thead>
                 <tr>
-                  <th style={{ width: '36px', textAlign: 'center' }}>#</th>
-                  <th style={{ width: '110px' }}>Part Number</th>
-                  <th>Description / Model</th>
-                  <th style={{ width: '100px' }}>Category</th>
-                  <th style={{ width: '190px' }}>Serial Number</th>
-                  <th style={{ width: '160px' }}>{isPmgUser ? 'Receiving Branch' : 'Assignment (Click to switch)'}</th>
-                  <th style={{ width: '115px', whiteSpace: 'nowrap' }}>Date Received</th>
-                  <th style={{ width: '80px' }}>Status</th>
-                  <th style={{ textAlign: 'right', width: '80px' }}>Actions</th>
+                  <th className="col-nowrap" style={{ width: '36px', textAlign: 'center' }}>#</th>
+                  <th className="col-nowrap">Part Number</th>
+                  <th className="col-desc">Description / Model</th>
+                  <th className="col-nowrap">Category</th>
+                  <th className="col-nowrap">Serial Number</th>
+                  <th className="col-nowrap" title={isPmgUser ? undefined : 'Click any assignment badge to switch tags'}>
+                    {isPmgUser ? 'Receiving Branch' : 'Assignment'}
+                  </th>
+                  <th className="col-nowrap">Date Received</th>
+                  <th className="col-nowrap">Status</th>
+                  <th className="col-nowrap" style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -3398,25 +3400,25 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
                   const canSeeSerial = canViewUnitSerial(unit);
 
                   return (
-                    <tr key={unit.id || `${unit.serial_number}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                      <td style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '11px' }}>
+                    <tr key={unit.id || `${unit.serial_number}-${idx}`}>
+                      <td className="col-nowrap" style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '11px' }}>
                         {idx + 1}
                       </td>
-                      <td className="font-mono" style={{ fontWeight: 700, color: '#0f172a' }}>
+                      <td className="font-mono col-nowrap" style={{ fontWeight: 700, color: '#0f172a' }}>
                         {unit.part_number}
                       </td>
-                      <td>
-                        <div style={{ fontWeight: 500, color: '#1e293b' }}>{unit.description}</div>
+                      <td className="col-desc">
+                        <div className="desc-title">{unit.description}</div>
                         {unit.iphone_model && (
-                          <div style={{ fontSize: '11px', color: '#64748b' }}>Model: <strong>{unit.iphone_model}</strong></div>
+                          <div className="desc-model">Model: <strong>{unit.iphone_model}</strong></div>
                         )}
                       </td>
-                      <td>
+                      <td className="col-nowrap">
                         <span className="badge" style={{ ...catBadge, fontSize: '10px', padding: '1px 6px' }}>
                           {unit.category_name}
                         </span>
                       </td>
-                      <td className="font-mono" style={{ fontWeight: 600, color: '#0369a1', letterSpacing: '0.02em' }}>
+                      <td className="font-mono col-nowrap" style={{ fontWeight: 600, color: '#0369a1', letterSpacing: '0.02em' }}>
                         {isPmgUser && !canSeeSerial ? (
                           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
                             <span style={{ color: '#94a3b8', letterSpacing: '0.08em', fontSize: '11.5px' }}>
@@ -3457,7 +3459,7 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
                           </div>
                         )}
                       </td>
-                      <td>
+                      <td className="col-nowrap">
                         {isPmgUser ? (
                           <span
                             className="badge"
@@ -3519,13 +3521,13 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
                           </button>
                         )}
                       </td>
-                      <td className="font-mono" style={{ fontSize: '11.5px', color: '#475569', whiteSpace: 'nowrap' }}>
+                      <td className="font-mono col-nowrap" style={{ fontSize: '11.5px', color: '#475569' }}>
                         {formatPartDate(unit)}
                       </td>
-                      <td>
+                      <td className="col-nowrap">
                         <span className="badge badge-success" style={{ fontSize: '10.5px', padding: '1px 6px' }}>In Stock</span>
                       </td>
-                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <td className="col-nowrap" style={{ textAlign: 'right' }}>
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                           <button
                             type="button"
