@@ -120,7 +120,7 @@ async function runTests() {
   await lauWb.xlsx.load(lauBuf);
   assert.deepStrictEqual(
     lauWb.worksheets.map(w => w.name),
-    ['Summary', 'Tracked Tool Units', 'Consumables Stock']
+    ['Summary', 'Tracked Tool Units', 'Consumables Stock', 'Low-Stock Alerts', 'Usage & Audit Trail', 'Consumption Trends']
   );
   const lauToolsWs = lauWb.getWorksheet('Tracked Tool Units');
   assert.strictEqual(lauToolsWs.rowCount, 2, 'ASP LAU filter must include only 1 tool row + header');

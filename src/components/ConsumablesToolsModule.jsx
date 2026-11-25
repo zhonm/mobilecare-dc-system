@@ -19,9 +19,18 @@ import {
   FileSpreadsheet,
   Check,
   Building2,
-  MapPin
+  MapPin,
+  Package,
+  ClipboardList,
+  Layers,
+  Sliders,
+  TrendingUp,
+  Bell,
+  MinusCircle
 } from 'lucide-react';
+import './ConsumablesToolsModule.css';
 import { getSiteColorTheme } from '../utils/ctSpreadsheetImporter';
+import { resolveSite } from '../utils/appContextHelpers';
 import { useApp } from '../context/AppContext';
 import {
   getSitePackingCandidates,
@@ -29,7 +38,11 @@ import {
   parseSerialTokens,
   validateAndScanPackItem,
   isValidGsPoNumber,
-  generateNextGsPoNumber
+  generateNextGsPoNumber,
+  OWNERSHIP_TAG_CATEGORIES,
+  getOwnershipTagCategoryMeta,
+  getStockPackBreakdown,
+  computeConsumableUsageAnalytics
 } from '../utils/consumablesToolsEngine';
 import {
   exportCtCenterToExcel,
@@ -49,7 +62,6 @@ import CtSpreadsheetImportModal from './CtSpreadsheetImportModal';
 export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
   const {
     ctCatalog = [],
-    rawCtCatalog = [],
     ctOrders = [],
     ctStock = [],
     ctToolAssets = [],
@@ -60,10 +72,6 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
     currentUser,
     canEdit,
     showToast,
-    saveCtCatalogItem,
-    deleteCtCatalogItem,
-    clearCtCatalog,
-    updateCtStockRecord,
     addCtOrder,
     updateCtOrder,
     deleteCtOrder,
@@ -75,6 +83,7 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
     updateToolStatus,
     updateToolMetadata,
     consumeCtStock,
+    adjustCtStock,
     createCtShipment,
     confirmCtDelivery,
     attachCtShipmentDocument,
@@ -85,25 +94,52 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
   const [section, setSection] = useState(() => normalizeSection(initialSection));
   const [pdfImportModalOpen, setPdfImportModalOpen] = useState(false);
 
-  // Sub-tabs inside main Consumables & Tools page (Combined Multi-Site, Tool Assets, Consumables Stock, Complete Catalog)
-  const [assetsSubTab, setAssetsSubTab] = useState('combined'); // 'combined' | 'assets' | 'consumables' | 'catalog'
+  // Sub-tabs inside main Consumables & Tools page (Combined Multi-Site, Tool Assets, Consumables Stock)
+  // Catalog management is consolidated in Settings -> Parts Master Catalog
+  const [assetsSubTab, setAssetsSubTab] = useState('combined'); // 'combined' | 'assets' | 'consumables'
   const [centerRegionFilter, setCenterRegionFilter] = useState('ALL'); // 'ALL' | 'Metro Manila' | 'Province'
-  const [catalogKindFilter, setCatalogKindFilter] = useState('all'); // 'all' | 'tool' | 'consumable'
-  const [catalogSearch, setCatalogSearch] = useState('');
-  const [editingCatalogId, setEditingCatalogId] = useState(null);
-  const [editCatForm, setEditCatForm] = useState({ part_number: '', description: '', item_kind: 'tool', unit_cost: 0 });
-  const [addingCatalogItem, setAddingCatalogItem] = useState(false);
-  const [newCatForm, setNewCatForm] = useState({ part_number: '', description: '', item_kind: 'tool', unit_cost: 0 });
 
-  // Consumables stock inline editing
+  // Consumables stock search
   const [consumableSearch, setConsumableSearch] = useState('');
-  const [editingStockId, setEditingStockId] = useState(null);
-  const [editStockForm, setEditStockForm] = useState({ description: '', qty_on_hand: 0, min_stock_threshold: 2 });
   useEffect(() => {
     if (initialSection) setSection(normalizeSection(initialSection));
   }, [initialSection]);
 
-  const userCanEdit = typeof canEdit === 'function' ? canEdit() : true;
+  // Role & Assigned Site Scoping:
+  // - DC / Superadmin / Admin see all sites and have full multi-site controls + bulk exports.
+  // - PMG (parts_management) and Supervisor accounts are scoped strictly to their assigned site,
+  //   with full permission to manage, deduct (piece/pack), and adjust their site's tools & consumables.
+  const roleNorm = String(currentUser?.role || '').trim().toLowerCase();
+  const positionNorm = String(currentUser?.position || '').trim().toLowerCase();
+  const isDcAdmin = Boolean(
+    currentUser?.isSuperAdmin === true ||
+    roleNorm === 'superadmin' ||
+    roleNorm === 'super_admin' ||
+    roleNorm === 'admin' ||
+    roleNorm === 'dc_staff' ||
+    roleNorm === 'dc'
+  );
+  const assignedSiteObj = useMemo(
+    () => resolveSite(currentUser?.siteId || currentUser?.site_id || currentUser?.siteCode, sites),
+    [currentUser?.siteId, currentUser?.site_id, currentUser?.siteCode, sites]
+  );
+  const assignedSiteCode = useMemo(() => {
+    const raw = assignedSiteObj?.code || currentUser?.siteCode || '';
+    return String(raw || '').trim().toUpperCase();
+  }, [assignedSiteObj?.code, currentUser?.siteCode]);
+
+  const isPmgOrSupervisor = Boolean(
+    !isDcAdmin && (
+      roleNorm === 'parts_management' ||
+      roleNorm === 'pmg' ||
+      roleNorm === 'supervisor' ||
+      positionNorm.includes('supervisor') ||
+      positionNorm.includes('parts management') ||
+      Boolean(assignedSiteCode)
+    )
+  );
+  const lockedSiteCode = isPmgOrSupervisor && assignedSiteCode ? assignedSiteCode : null;
+  const userCanEdit = isDcAdmin || isPmgOrSupervisor || (typeof canEdit === 'function' ? canEdit() : Boolean(canEdit));
 
   // Check if Scan-In routed a consumable/tool PN here via localStorage handoff
   useEffect(() => {
@@ -121,14 +157,35 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
 
   // --- Shared Filters & Modals ---
   const [siteFilter, setSiteFilter] = useState('ALL');
+  const effectiveSiteFilter = lockedSiteCode || siteFilter;
   const [labelAssetsModal, setLabelAssetsModal] = useState([]);
 
-  // --- Quick Consume Form ---
+  // Keep site filters synchronized when lockedSiteCode resolves for PMG / Supervisor users
+  useEffect(() => {
+    if (lockedSiteCode) {
+      setSiteFilter(lockedSiteCode);
+      setConsumeSiteCode(lockedSiteCode);
+      setRecvSiteCode(lockedSiteCode);
+      setHistorySiteFilter(lockedSiteCode);
+    }
+  }, [lockedSiteCode]);
+
+  // --- Quick Consume Form (supports Piece & Pack level deduction) ---
   const [consumeModalOpen, setConsumeModalOpen] = useState(false);
   const [consumePn, setConsumePn] = useState('');
   const [consumeSiteCode, setConsumeSiteCode] = useState('DC-MDC');
   const [consumeQty, setConsumeQty] = useState('1');
+  const [consumeUnitMode, setConsumeUnitMode] = useState('piece'); // 'piece' | 'pack'
   const [consumeNotes, setConsumeNotes] = useState('');
+
+  // --- Stock Adjustment Modal State ---
+  const [adjustModalRow, setAdjustModalRow] = useState(null);
+  const [adjustQty, setAdjustQty] = useState('0');
+  const [adjustUnitMode, setAdjustUnitMode] = useState('piece'); // 'piece' | 'pack'
+  const [adjustPackSize, setAdjustPackSize] = useState('1');
+  const [adjustMinThreshold, setAdjustMinThreshold] = useState('2');
+  const [adjustReason, setAdjustReason] = useState('Physical Cycle Count');
+  const [adjustNotes, setAdjustNotes] = useState('');
 
   // --- Orders & Receiving State ---
   const [orderSearch, setOrderSearch] = useState('');
@@ -215,7 +272,7 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
 
   // --- Center Table Pagination (Hard limit: max 50 records per page to prevent endless scrolling) ---
   const MAX_RECORDS_PER_PAGE = 50;
-  const centerFilterKey = `${assetsSubTab}|${siteFilter}|${centerRegionFilter}|${assetStatusFilter}|${assetSearch}|${consumableSearch}|${catalogSearch}|${catalogKindFilter}`;
+  const centerFilterKey = `${assetsSubTab}|${siteFilter}|${centerRegionFilter}|${assetStatusFilter}|${assetSearch}|${consumableSearch}`;
   const [centerPagination, setCenterPagination] = useState({ key: '', page: 1 });
   const activeCenterPage = centerPagination.key === centerFilterKey ? centerPagination.page : 1;
   const setCenterPage = (nextPage) => setCenterPagination({ key: centerFilterKey, page: Math.max(1, nextPage) });
@@ -304,38 +361,88 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
     );
   };
 
+  // Site-scoped datasets (PMG & Supervisor see strictly their assigned site; DC/Admin see all sites)
+  const scopedCtOrders = useMemo(() => {
+    if (!lockedSiteCode) return ctOrders || [];
+    return (ctOrders || []).filter(o => String(o.site_code || '').trim().toUpperCase() === lockedSiteCode);
+  }, [ctOrders, lockedSiteCode]);
+
+  const scopedCtToolAssets = useMemo(() => {
+    if (!lockedSiteCode) return ctToolAssets || [];
+    return (ctToolAssets || []).filter(a => String(a.site_code || '').trim().toUpperCase() === lockedSiteCode);
+  }, [ctToolAssets, lockedSiteCode]);
+
+  const scopedCtStock = useMemo(() => {
+    if (!lockedSiteCode) return ctStock || [];
+    return (ctStock || []).filter(s => String(s.site_code || '').trim().toUpperCase() === lockedSiteCode);
+  }, [ctStock, lockedSiteCode]);
+
+  const scopedCtShipments = useMemo(() => {
+    if (!lockedSiteCode) return ctShipments || [];
+    return (ctShipments || []).filter(sh =>
+      String(sh.from_site_code || '').trim().toUpperCase() === lockedSiteCode ||
+      String(sh.to_site_code || '').trim().toUpperCase() === lockedSiteCode
+    );
+  }, [ctShipments, lockedSiteCode]);
+
+  const scopedCtMovements = useMemo(() => {
+    if (!lockedSiteCode) return ctMovements || [];
+    return (ctMovements || []).filter(m =>
+      String(m.from_site_code || '').trim().toUpperCase() === lockedSiteCode ||
+      String(m.to_site_code || '').trim().toUpperCase() === lockedSiteCode
+    );
+  }, [ctMovements, lockedSiteCode]);
+
+  // Consumption & Low-Stock Analytics (for current site filter / locked site)
+  const usageAnalytics = useMemo(() => {
+    return computeConsumableUsageAnalytics(scopedCtStock, scopedCtMovements, {
+      siteCode: effectiveSiteFilter,
+      days: 30
+    });
+  }, [scopedCtStock, scopedCtMovements, effectiveSiteFilter]);
+
   // --- Derived Metrics ---
   const kpis = useMemo(() => {
-    const openOrdersCount = ctOrders.filter(o => o.status !== 'received' && o.status !== 'closed').length;
-    const totalAssets = ctToolAssets.length;
-    const availableAssets = ctToolAssets.filter(a => a.status === 'available').length;
-    const inUseAssets = ctToolAssets.filter(a => a.status === 'in_use').length;
-    const consumablesOnHand = (ctStock || [])
+    const openOrdersCount = scopedCtOrders.filter(o => o.status !== 'received' && o.status !== 'closed').length;
+    const totalAssets = scopedCtToolAssets.length;
+    const availableAssets = scopedCtToolAssets.filter(a => a.status === 'available').length;
+    const inUseAssets = scopedCtToolAssets.filter(a => a.status === 'in_use').length;
+    let consumablesOnHand = 0;
+    let consumablesIndividualPieces = 0;
+    let lowStockCount = 0;
+    scopedCtStock
       .filter(r => r.item_kind !== 'tool')
-      .reduce((sum, r) => sum + (Number(r.qty_on_hand) || 0), 0);
+      .forEach(r => {
+        const bd = getStockPackBreakdown(r);
+        consumablesOnHand += Number(r.qty_on_hand) || 0;
+        consumablesIndividualPieces += bd.individualUnits;
+        if (bd.isLowStock || bd.isOutOfStock) lowStockCount += 1;
+      });
     return {
       openOrdersCount,
       totalAssets,
       availableAssets,
       inUseAssets,
-      consumablesOnHand,
-      shipmentsCount: ctShipments.length
+      consumablesOnHand: Number(consumablesOnHand.toFixed(2)),
+      consumablesIndividualPieces,
+      lowStockCount,
+      shipmentsCount: scopedCtShipments.length
     };
-  }, [ctOrders, ctToolAssets, ctStock, ctShipments]);
+  }, [scopedCtOrders, scopedCtToolAssets, scopedCtStock, scopedCtShipments]);
 
   const inStockConsumables = useMemo(
-    () => (ctStock || []).filter(r => (Number(r.qty_on_hand) || 0) > 0),
-    [ctStock]
+    () => scopedCtStock.filter(r => r.item_kind !== 'tool' && getStockPackBreakdown(r).individualUnits > 0),
+    [scopedCtStock]
   );
 
   const filteredOrders = useMemo(() => {
     const q = orderSearch.trim().toLowerCase();
-    return (ctOrders || []).filter(o => {
+    return scopedCtOrders.filter(o => {
       if (!q) return true;
       const itemsText = (o.items || []).map(it => `${it.part_number} ${it.description}`).join(' ');
       return `${o.po_number} ${o.order_number || ''} ${o.site_code || ''} ${itemsText}`.toLowerCase().includes(q);
     });
-  }, [ctOrders, orderSearch]);
+  }, [scopedCtOrders, orderSearch]);
 
   const activeReceivingOrder = useMemo(
     () => ctOrders.find(o => o.id === selectedOrderId) || null,
@@ -404,16 +511,16 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
 
   const filteredAssets = useMemo(() => {
     const q = assetSearch.trim().toLowerCase();
-    return (ctToolAssets || [])
+    return scopedCtToolAssets
       .filter(a => {
         if (assetStatusFilter !== 'ALL' && a.status !== assetStatusFilter) return false;
         const code = String(a.site_code || 'UNASSIGNED').trim().toUpperCase();
         const reg = siteRegionMap.get(code) === 'Metro Manila' ? 'Metro Manila' : 'Province';
-        if (centerRegionFilter !== 'ALL' && reg !== centerRegionFilter) return false;
-        if (siteFilter !== 'ALL' && code !== siteFilter.toUpperCase()) return false;
+        if (!lockedSiteCode && centerRegionFilter !== 'ALL' && reg !== centerRegionFilter) return false;
+        if (effectiveSiteFilter !== 'ALL' && code !== effectiveSiteFilter.toUpperCase()) return false;
         if (q) {
           const ownership = a.ownership_tag || 'Apple-Owned';
-          const hay = `${a.asset_tag} ${ownership} ${a.serial_number || ''} ${a.part_number} ${a.description} ${a.assigned_to || ''} ${code}`.toLowerCase();
+          const hay = `${a.asset_tag} ${ownership} ${a.ownership_tag_id || ''} ${a.serial_number || ''} ${a.part_number} ${a.description} ${a.assigned_to || ''} ${code}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
         return true;
@@ -425,7 +532,7 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
         if (pnCmp !== 0) return pnCmp;
         return String(a.asset_tag || '').localeCompare(String(b.asset_tag || ''));
       });
-  }, [ctToolAssets, assetStatusFilter, centerRegionFilter, siteFilter, assetSearch, siteRegionMap]);
+  }, [scopedCtToolAssets, assetStatusFilter, lockedSiteCode, centerRegionFilter, effectiveSiteFilter, assetSearch, siteRegionMap]);
 
   // Multi-Site Dashboard Rollup (sorted A -> Z by Site Code, split by Metro Manila vs Provincial)
   const multiSiteOverview = useMemo(() => {
@@ -445,18 +552,18 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
       return map.get(code);
     };
 
-    (ctToolAssets || []).forEach(a => {
+    scopedCtToolAssets.forEach(a => {
       const b = ensure(a.site_code);
       b.toolsCount += 1;
       b.totalUnits += 1;
     });
-    (ctStock || []).forEach(s => {
+    scopedCtStock.forEach(s => {
       if (s.item_kind === 'tool') return;
-      const qty = Number(s.qty_on_hand) || 0;
-      if (qty <= 0) return;
+      const bd = getStockPackBreakdown(s);
+      if (bd.individualUnits <= 0) return;
       const b = ensure(s.site_code);
-      b.consumablesQty += qty;
-      b.totalUnits += qty;
+      b.consumablesQty += bd.individualUnits;
+      b.totalUnits += bd.individualUnits;
     });
 
     const allSorted = Array.from(map.values()).sort((a, b) => a.code.localeCompare(b.code));
@@ -470,21 +577,21 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
       provincialUnits: provincial.reduce((sum, s) => sum + s.totalUnits, 0),
       totalUnits: allSorted.reduce((sum, s) => sum + s.totalUnits, 0)
     };
-  }, [ctToolAssets, ctStock, siteRegionMap]);
+  }, [scopedCtToolAssets, scopedCtStock, siteRegionMap]);
 
   // Unified Combined Single-View rows (Tools + Consumables sorted by Site A->Z, Tools first, then Part #)
   const combinedInventoryRows = useMemo(() => {
     const q = assetSearch.trim().toLowerCase();
     const rows = [];
 
-    (ctToolAssets || []).forEach(a => {
+    scopedCtToolAssets.forEach(a => {
       const code = String(a.site_code || 'UNASSIGNED').trim().toUpperCase();
       const reg = siteRegionMap.get(code) === 'Metro Manila' ? 'Metro Manila' : 'Province';
-      if (centerRegionFilter !== 'ALL' && reg !== centerRegionFilter) return;
-      if (siteFilter !== 'ALL' && code !== siteFilter.toUpperCase()) return;
+      if (!lockedSiteCode && centerRegionFilter !== 'ALL' && reg !== centerRegionFilter) return;
+      if (effectiveSiteFilter !== 'ALL' && code !== effectiveSiteFilter.toUpperCase()) return;
       const ownership = a.ownership_tag || 'Apple-Owned';
       if (q) {
-        const hay = `${code} ${a.part_number || ''} ${a.description || ''} ${a.asset_tag || ''} ${a.serial_number || ''} ${ownership} ${a.source_pdf_ref || ''}`.toLowerCase();
+        const hay = `${code} ${a.part_number || ''} ${a.description || ''} ${a.asset_tag || ''} ${a.serial_number || ''} ${ownership} ${a.ownership_tag_id || ''} ${a.source_pdf_ref || ''}`.toLowerCase();
         if (!hay.includes(q)) return;
       }
       rows.push({
@@ -495,6 +602,7 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
         description: a.description,
         asset_tag: a.asset_tag,
         ownership_tag: ownership,
+        ownership_tag_id: a.ownership_tag_id || null,
         serial_number: a.serial_number || '—',
         qty: 1,
         status: a.status || 'available',
@@ -503,17 +611,17 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
       });
     });
 
-    (ctStock || []).forEach(s => {
+    scopedCtStock.forEach(s => {
       if (s.item_kind === 'tool') return;
-      const qty = Number(s.qty_on_hand) || 0;
-      if (qty <= 0) return;
+      const bd = getStockPackBreakdown(s);
+      if (bd.individualUnits <= 0) return;
       const code = String(s.site_code || 'UNASSIGNED').trim().toUpperCase();
       const reg = siteRegionMap.get(code) === 'Metro Manila' ? 'Metro Manila' : 'Province';
-      if (centerRegionFilter !== 'ALL' && reg !== centerRegionFilter) return;
-      if (siteFilter !== 'ALL' && code !== siteFilter.toUpperCase()) return;
+      if (!lockedSiteCode && centerRegionFilter !== 'ALL' && reg !== centerRegionFilter) return;
+      if (effectiveSiteFilter !== 'ALL' && code !== effectiveSiteFilter.toUpperCase()) return;
       const ownership = s.ownership_tag || 'Apple-Owned';
       if (q) {
-        const hay = `${code} ${s.part_number || ''} ${s.description || ''} consumable ${ownership} ${s.last_source_pdf_ref || ''}`.toLowerCase();
+        const hay = `${code} ${s.part_number || ''} ${s.description || ''} consumable ${ownership} ${s.ownership_tag_id || ''} ${s.last_source_pdf_ref || ''}`.toLowerCase();
         if (!hay.includes(q)) return;
       }
       rows.push({
@@ -524,8 +632,12 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
         description: s.description,
         asset_tag: null,
         ownership_tag: ownership,
+        ownership_tag_id: s.ownership_tag_id || null,
         serial_number: '—',
-        qty,
+        qty: bd.individualUnits,
+        pack_size: bd.packSize,
+        full_packs: bd.fullPacks,
+        loose_units: bd.looseUnits,
         status: 'in_stock',
         source_ref: s.last_source_pdf_ref || null,
         source_import_id: s.last_source_pdf_import_id || null
@@ -538,7 +650,7 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
       if (a.item_kind !== b.item_kind) return a.item_kind === 'tool' ? -1 : 1;
       return String(a.part_number || '').localeCompare(String(b.part_number || ''));
     });
-  }, [ctToolAssets, ctStock, siteRegionMap, centerRegionFilter, siteFilter, assetSearch]);
+  }, [scopedCtToolAssets, scopedCtStock, siteRegionMap, lockedSiteCode, centerRegionFilter, effectiveSiteFilter, assetSearch]);
 
   const formatMovementDate = (iso) => {
     if (!iso) return '—';
@@ -640,21 +752,64 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
   }, [sites]);
 
   // --- Handlers ---
+  const openConsumeForRow = (row) => {
+    const bd = getStockPackBreakdown(row);
+    setConsumePn(row.part_number);
+    setConsumeSiteCode(lockedSiteCode || row.site_code || 'DC-MDC');
+    setConsumeQty('1');
+    setConsumeUnitMode('piece');
+    setConsumeNotes('');
+    setConsumeModalOpen(true);
+    return bd;
+  };
+
   const handleConfirmConsume = (e) => {
     e.preventDefault();
     const targetPn = normalizePartNumber(consumePn);
     if (!targetPn) return;
     const res = consumeCtStock({
       partNumber: targetPn,
-      siteCode: consumeSiteCode,
+      siteCode: lockedSiteCode || consumeSiteCode,
       quantity: parseInt(consumeQty, 10) || 1,
+      unitMode: consumeUnitMode,
       notes: consumeNotes
     });
     if (res.ok) {
       setConsumeModalOpen(false);
       setConsumePn('');
       setConsumeQty('1');
+      setConsumeUnitMode('piece');
       setConsumeNotes('');
+    }
+  };
+
+  const openAdjustModal = (row) => {
+    const bd = getStockPackBreakdown(row);
+    setAdjustModalRow(row);
+    setAdjustUnitMode('piece');
+    setAdjustQty(String(bd.individualUnits));
+    setAdjustPackSize(String(bd.packSize));
+    setAdjustMinThreshold(String(bd.minThresholdUnits));
+    setAdjustReason('Physical Cycle Count');
+    setAdjustNotes('');
+  };
+
+  const handleConfirmAdjust = (e) => {
+    e.preventDefault();
+    if (!adjustModalRow || typeof adjustCtStock !== 'function') return;
+    const res = adjustCtStock({
+      stockId: adjustModalRow.id,
+      partNumber: adjustModalRow.part_number,
+      siteCode: lockedSiteCode || adjustModalRow.site_code,
+      newQty: Number(adjustQty),
+      unitMode: adjustUnitMode,
+      packSize: Math.max(1, parseInt(adjustPackSize, 10) || 1),
+      minStockThreshold: Math.max(0, parseInt(adjustMinThreshold, 10) || 0),
+      reason: adjustReason,
+      notes: adjustNotes
+    });
+    if (res?.ok) {
+      setAdjustModalRow(null);
     }
   };
 
@@ -865,10 +1020,11 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
     setIsExportingExcel(true);
     try {
       const fileName = await exportCtCenterToExcel({
-        toolAssets: ctToolAssets,
-        consumablesStock: ctStock,
+        toolAssets: scopedCtToolAssets,
+        consumablesStock: scopedCtStock,
+        movements: scopedCtMovements,
         catalog: ctCatalog,
-        siteFilter,
+        siteFilter: effectiveSiteFilter,
         statusFilter: assetStatusFilter,
         searchQuery: assetSearch,
         generatedBy: currentUser?.fullName || currentUser?.email || 'Admin'
@@ -1284,26 +1440,106 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
     return found?.full_address || found?.address || '';
   };
 
+  // Compact multi-value static reference pill renderer (non-clickable, prevents long comma-separated refs from stretching rows)
+  const renderCompactRefPills = (rawRef, maxVisible = 1) => {
+    const tokens = String(rawRef || '')
+      .split(/[,;\n]+/)
+      .map(t => t.trim())
+      .filter(Boolean);
+    if (tokens.length === 0) return <span style={{ color: '#94a3b8' }}>—</span>;
+    const shown = tokens.slice(0, maxVisible);
+    const remaining = tokens.length - shown.length;
+    const fullTitle = tokens.join(', ');
+
+    return (
+      <div className="ct-ref-group" title={fullTitle}>
+        {shown.map((tok, idx) => (
+          <span key={`${tok}-${idx}`} className="ct-ref-pill font-mono" title={fullTitle}>
+            <FileText size={11} style={{ flexShrink: 0, color: '#64748b' }} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{tok}</span>
+          </span>
+        ))}
+        {remaining > 0 && (
+          <span className="ct-ref-more font-mono" title={fullTitle}>
+            +{remaining} more
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  const renderCompactSitePills = (rawSites, maxVisible = 3) => {
+    const tokens = String(rawSites || '')
+      .split(/[,;\n]+/)
+      .map(t => t.trim())
+      .filter(Boolean);
+    if (tokens.length === 0) return <span style={{ color: '#94a3b8' }}>—</span>;
+    const shown = tokens.slice(0, maxVisible);
+    const remaining = tokens.length - shown.length;
+    const fullTitle = tokens.join(', ');
+    return (
+      <div className="ct-ref-group" title={fullTitle}>
+        {shown.map((code, idx) => (
+          <span
+            key={`${code}-${idx}`}
+            className="font-mono"
+            style={{
+              display: 'inline-block',
+              padding: '2px 7px',
+              borderRadius: '6px',
+              fontSize: '11px',
+              fontWeight: 700,
+              background: '#f1f5f9',
+              color: '#0f172a',
+              border: '1px solid #e2e8f0',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            {code}
+          </span>
+        ))}
+        {remaining > 0 && (
+          <span className="ct-ref-more font-mono" title={fullTitle}>
+            +{remaining} sites
+          </span>
+        )}
+      </div>
+    );
+  };
+
   return (
-    <div className="consumables-tools-module" style={{ maxWidth: '1320px', margin: '0 auto', paddingBottom: '44px' }}>
-      {/* Header Banner */}
-      <div className="card" style={{ marginBottom: '16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: '#ffffff' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ background: '#0f172a', color: '#38bdf8', padding: '10px', borderRadius: '10px', display: 'flex' }}>
+    <div className="consumables-tools-module">
+      {/* Executive Header Banner & KPI Strip */}
+      <div className="ct-hero-card">
+        <div className="ct-hero-top">
+          <div className="ct-hero-identity">
+            <div className="ct-hero-icon">
               <Wrench size={22} />
             </div>
             <div>
-              <h2 style={{ margin: 0, fontSize: '19px', fontWeight: 800, color: '#0f172a' }}>
-                Consumables & Service Tools Center
-              </h2>
-              <p style={{ margin: '2px 0 0', fontSize: '12.5px', color: '#64748b' }}>
-                Dedicated tracking for consumables (qty-based) and service tools (individual/serialized assets) — completely separate from Repair Parts.
+              <div className="ct-hero-title-row">
+                <h2 className="ct-hero-title">Consumables &amp; Service Tools Center</h2>
+                {lockedSiteCode ? (
+                  <span className="ct-hero-badge" style={{ background: '#eff6ff', color: '#1d4ed8', borderColor: '#93c5fd' }}>
+                    <Building2 size={11} />
+                    <span>Assigned Site: {lockedSiteCode}{assignedSiteObj?.name ? ` — ${assignedSiteObj.name}` : ''}</span>
+                  </span>
+                ) : (
+                  <span className="ct-hero-badge">
+                    <Layers size={11} />
+                    <span>{multiSiteOverview.allSorted.length} Active Sites</span>
+                  </span>
+                )}
+              </div>
+              <p className="ct-hero-subtitle">
+                {lockedSiteCode
+                  ? `Site-scoped tools & consumables management for ${lockedSiteCode}. Deduct consumables by individual piece or pack, adjust stock, and track usage history.`
+                  : 'Dedicated operational tracking for pack/piece consumables and serialized service tools across all branches. Catalog definitions are managed centrally in Settings → Parts Master Catalog.'}
               </p>
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <div className="ct-hero-actions">
             {userCanEdit && inStockConsumables.length > 0 && (
               <button
                 type="button"
@@ -1314,7 +1550,7 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                   setConsumeSiteCode(first?.site_code || 'DC-MDC');
                   setConsumeModalOpen(true);
                 }}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', height: '36px', borderRadius: '9px', fontWeight: 700 }}
               >
                 <ArrowRightLeft size={14} />
                 <span>Log Consumable Usage</span>
@@ -1332,118 +1568,136 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
           ))}
         </datalist>
 
-        {/* KPI Cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '10px', marginTop: '16px' }}>
-          <div style={{ background: '#fefce8', border: '1px solid #fef08a', borderRadius: '10px', padding: '10px 12px' }}>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: '#854d0e', textTransform: 'uppercase' }}>Open Orders</div>
-            <div className="font-mono" style={{ fontSize: '20px', fontWeight: 800, color: '#a16207' }}>{kpis.openOrdersCount}</div>
-          </div>
-          <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '10px 12px' }}>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>Consumables On Hand</div>
-            <div className="font-mono" style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a' }}>{kpis.consumablesOnHand}</div>
-          </div>
-          <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '10px', padding: '10px 12px' }}>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: '#1e40af', textTransform: 'uppercase' }}>Tracked Tool Units</div>
-            <div className="font-mono" style={{ fontSize: '20px', fontWeight: 800, color: '#1d4ed8' }}>
-              {kpis.totalAssets} <span style={{ fontSize: '11.5px', color: '#3b82f6', fontWeight: 500 }}>({kpis.availableAssets} avail)</span>
+        {/* 4 Modern KPI Metric Cards */}
+        <div className="ct-kpi-grid">
+          <div className="ct-kpi-card">
+            <div>
+              <div className="ct-kpi-label">Open Orders</div>
+              <div className="ct-kpi-value" style={{ color: '#b45309' }}>{kpis.openOrdersCount}</div>
+              <div className="ct-kpi-sub">Pending PO deliveries</div>
+            </div>
+            <div className="ct-kpi-icon" style={{ background: '#fef3c7', color: '#b45309' }}>
+              <ClipboardList size={18} />
             </div>
           </div>
-          <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '10px', padding: '10px 12px' }}>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: '#166534', textTransform: 'uppercase' }}>Dedicated Shipments</div>
-            <div className="font-mono" style={{ fontSize: '20px', fontWeight: 800, color: '#15803d' }}>{kpis.shipmentsCount}</div>
+
+          <div className="ct-kpi-card">
+            <div>
+              <div className="ct-kpi-label">Consumables On Hand</div>
+              <div className="ct-kpi-value">{kpis.consumablesIndividualPieces.toLocaleString()} <span style={{ fontSize: '13px', fontWeight: 700, color: '#64748b' }}>pcs</span></div>
+              <div className="ct-kpi-sub">
+                {kpis.consumablesOnHand.toLocaleString()} packs eq.{kpis.lowStockCount > 0 ? ` · ${kpis.lowStockCount} low stock` : ''}
+              </div>
+            </div>
+            <div className="ct-kpi-icon" style={{ background: kpis.lowStockCount > 0 ? '#fef2f2' : '#ecfdf5', color: kpis.lowStockCount > 0 ? '#dc2626' : '#047857' }}>
+              <Package size={18} />
+            </div>
+          </div>
+
+          <div className="ct-kpi-card">
+            <div>
+              <div className="ct-kpi-label">Tracked Tool Units</div>
+              <div className="ct-kpi-value" style={{ color: '#1d4ed8' }}>{kpis.totalAssets.toLocaleString()}</div>
+              <div className="ct-kpi-sub">{kpis.availableAssets} available for deployment</div>
+            </div>
+            <div className="ct-kpi-icon" style={{ background: '#eff6ff', color: '#1d4ed8' }}>
+              <Wrench size={18} />
+            </div>
+          </div>
+
+          <div className="ct-kpi-card">
+            <div>
+              <div className="ct-kpi-label">Dedicated Shipments</div>
+              <div className="ct-kpi-value" style={{ color: '#15803d' }}>{kpis.shipmentsCount}</div>
+              <div className="ct-kpi-sub">CT packing list dispatches</div>
+            </div>
+            <div className="ct-kpi-icon" style={{ background: '#f0fdf4', color: '#15803d' }}>
+              <Truck size={18} />
+            </div>
           </div>
         </div>
       </div>
 
-      {/* SECTION 1: CONSUMABLES & TOOLS MULTI-SITE DASHBOARD (ALL SITES COMBINED · TOOLS · CONSUMABLES · CATALOG) */}
+      {/* SECTION 1: CONSUMABLES & TOOLS MULTI-SITE DASHBOARD (ALL SITES COMBINED · TOOLS · CONSUMABLES) */}
       {section === 'assets' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {/* Multi-Site Dashboard Region & Sorted Site Selector (matches Multi-Site Inventory Dashboard UX) */}
-          <div className="card" style={{ borderRadius: '12px', border: '1px solid #e2e8f0', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {/* Cross-Site Instant Search */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* Multi-Site Filter & Search Hub */}
+          <div className="ct-panel ct-panel-padded" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
               <div>
-                <div style={{ fontSize: '13.5px', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Search size={15} color="#0284c7" />
+                <h3 className="ct-panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Search size={16} color="#0284c7" />
                   <span>Search Tools &amp; Consumables Across All Sites</span>
-                </div>
-                <div style={{ fontSize: '11.5px', color: '#64748b' }}>
-                  Filter by Part Number, Description, Asset Tag, Serial #, Ownership Tag (Apple-Owned), or Site
-                </div>
+                </h3>
+                <p className="ct-panel-desc">
+                  Filter instantly by Part Number, Description, Asset Tag, Serial #, Ownership Tag (Apple-Owned), or Site
+                </p>
               </div>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  onClick={() => setPdfImportModalOpen(true)}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', height: '34px' }}
-                >
-                  <FileSpreadsheet size={14} />
-                  <span>Import CSV / Excel</span>
-                </button>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                {isDcAdmin && (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => setPdfImportModalOpen(true)}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', height: '36px', padding: '0 14px', borderRadius: '9px', fontWeight: 700 }}
+                  >
+                    <FileSpreadsheet size={14} />
+                    <span>Import CSV / Excel</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
                   disabled={isExportingExcel}
                   onClick={handleExportCenterExcel}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', height: '34px' }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', height: '36px', padding: '0 14px', borderRadius: '9px', fontWeight: 700 }}
                 >
-                  <FileSpreadsheet size={14} color="#059669" />
-                  <span>{isExportingExcel ? 'Exporting...' : `Export Excel (${siteFilter === 'ALL' ? 'All Sites' : siteFilter})`}</span>
+                  <Download size={14} color="#059669" />
+                  <span>{isExportingExcel ? 'Exporting...' : `Export Excel (${effectiveSiteFilter === 'ALL' ? 'All Sites' : effectiveSiteFilter})`}</span>
                 </button>
               </div>
             </div>
 
-            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-              <Search size={15} color="#94a3b8" style={{ position: 'absolute', left: '12px', pointerEvents: 'none' }} />
+            <div className="ct-search-input-wrap">
+              <Search size={16} color="#94a3b8" style={{ position: 'absolute', left: '14px', pointerEvents: 'none' }} />
               <input
                 type="text"
-                className="form-input"
-                placeholder="Type or scan Part # (e.g. 077-01158), Description, Asset Tag, or Site..."
+                className="ct-search-input"
+                placeholder="Type or scan Part # (e.g. 077-01158), Description, Asset Tag, Serial #, or Site..."
                 value={assetSearch}
                 onChange={(e) => setAssetSearch(e.target.value)}
-                style={{ width: '100%', height: '38px', paddingLeft: '36px', fontSize: '13px', borderRadius: '9px' }}
               />
               {assetSearch && (
                 <button
                   type="button"
                   onClick={() => setAssetSearch('')}
-                  style={{ position: 'absolute', right: '10px', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+                  style={{ position: 'absolute', right: '12px', background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', display: 'flex' }}
+                  title="Clear search"
                 >
                   <X size={15} />
                 </button>
               )}
             </div>
 
-            {/* Region Selector Cards (Metro Manila vs Provincial) */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px' }}>
+            {/* Region Selector Cards (DC / Admin Multi-Site View Only) */}
+            {!lockedSiteCode && (
+            <div className="ct-region-grid">
               <button
                 type="button"
                 onClick={() => {
                   setCenterRegionFilter('ALL');
                   setSiteFilter('ALL');
                 }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '10px 14px',
-                  borderRadius: '10px',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  border: centerRegionFilter === 'ALL' && siteFilter === 'ALL' ? '2px solid #0f172a' : '1px solid #e2e8f0',
-                  background: centerRegionFilter === 'ALL' && siteFilter === 'ALL' ? '#0f172a' : '#f8fafc',
-                  color: centerRegionFilter === 'ALL' && siteFilter === 'ALL' ? '#ffffff' : '#0f172a'
-                }}
+                className={`ct-region-card ${centerRegionFilter === 'ALL' && siteFilter === 'ALL' ? 'active-all' : ''}`}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Building2 size={16} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <Building2 size={17} />
                   <div>
-                    <div style={{ fontSize: '13px', fontWeight: 800 }}>All Combined Sites</div>
-                    <div style={{ fontSize: '11px', opacity: 0.8 }}>{multiSiteOverview.allSorted.length} Active Service Points</div>
+                    <div style={{ fontSize: '13.5px', fontWeight: 800 }}>All Combined Sites</div>
+                    <div style={{ fontSize: '11.5px', opacity: 0.78 }}>{multiSiteOverview.allSorted.length} Active Service Points</div>
                   </div>
                 </div>
-                <span style={{ padding: '2px 8px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 800, background: centerRegionFilter === 'ALL' && siteFilter === 'ALL' ? 'rgba(255,255,255,0.2)' : '#e2e8f0' }}>
+                <span style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 800, background: centerRegionFilter === 'ALL' && siteFilter === 'ALL' ? 'rgba(255,255,255,0.18)' : '#e2e8f0' }}>
                   {multiSiteOverview.totalUnits} units
                 </span>
               </button>
@@ -1454,27 +1708,16 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                   setCenterRegionFilter('Metro Manila');
                   setSiteFilter('ALL');
                 }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '10px 14px',
-                  borderRadius: '10px',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  border: centerRegionFilter === 'Metro Manila' ? '2px solid #0284c7' : '1px solid #e2e8f0',
-                  background: centerRegionFilter === 'Metro Manila' ? '#0284c7' : '#f8fafc',
-                  color: centerRegionFilter === 'Metro Manila' ? '#ffffff' : '#0f172a'
-                }}
+                className={`ct-region-card ${centerRegionFilter === 'Metro Manila' ? 'active-metro' : ''}`}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Building2 size={16} color={centerRegionFilter === 'Metro Manila' ? '#fff' : '#0284c7'} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <Building2 size={17} color={centerRegionFilter === 'Metro Manila' ? '#fff' : '#0284c7'} />
                   <div>
-                    <div style={{ fontSize: '13px', fontWeight: 800 }}>Metro Manila Sites</div>
-                    <div style={{ fontSize: '11px', opacity: 0.8 }}>{multiSiteOverview.metroManila.length} Authorized Service Points</div>
+                    <div style={{ fontSize: '13.5px', fontWeight: 800 }}>Metro Manila Sites</div>
+                    <div style={{ fontSize: '11.5px', opacity: 0.78 }}>{multiSiteOverview.metroManila.length} Authorized Service Points</div>
                   </div>
                 </div>
-                <span style={{ padding: '2px 8px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 800, background: centerRegionFilter === 'Metro Manila' ? 'rgba(255,255,255,0.2)' : '#e0f2fe', color: centerRegionFilter === 'Metro Manila' ? '#fff' : '#0369a1' }}>
+                <span style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 800, background: centerRegionFilter === 'Metro Manila' ? 'rgba(255,255,255,0.2)' : '#e0f2fe', color: centerRegionFilter === 'Metro Manila' ? '#fff' : '#0369a1' }}>
                   {multiSiteOverview.metroUnits} units
                 </span>
               </button>
@@ -1485,34 +1728,24 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                   setCenterRegionFilter('Province');
                   setSiteFilter('ALL');
                 }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '10px 14px',
-                  borderRadius: '10px',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  border: centerRegionFilter === 'Province' ? '2px solid #d97706' : '1px solid #e2e8f0',
-                  background: centerRegionFilter === 'Province' ? '#d97706' : '#f8fafc',
-                  color: centerRegionFilter === 'Province' ? '#ffffff' : '#0f172a'
-                }}
+                className={`ct-region-card ${centerRegionFilter === 'Province' ? 'active-prov' : ''}`}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <MapPin size={16} color={centerRegionFilter === 'Province' ? '#fff' : '#d97706'} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <MapPin size={17} color={centerRegionFilter === 'Province' ? '#fff' : '#d97706'} />
                   <div>
-                    <div style={{ fontSize: '13px', fontWeight: 800 }}>Provincial Sites</div>
-                    <div style={{ fontSize: '11px', opacity: 0.8 }}>{multiSiteOverview.provincial.length} Regional Service Points</div>
+                    <div style={{ fontSize: '13.5px', fontWeight: 800 }}>Provincial Sites</div>
+                    <div style={{ fontSize: '11.5px', opacity: 0.78 }}>{multiSiteOverview.provincial.length} Regional Service Points</div>
                   </div>
                 </div>
-                <span style={{ padding: '2px 8px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 800, background: centerRegionFilter === 'Province' ? 'rgba(255,255,255,0.2)' : '#fef3c7', color: centerRegionFilter === 'Province' ? '#fff' : '#92400e' }}>
+                <span style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 800, background: centerRegionFilter === 'Province' ? 'rgba(255,255,255,0.2)' : '#fef3c7', color: centerRegionFilter === 'Province' ? '#fff' : '#92400e' }}>
                   {multiSiteOverview.provincialUnits} units
                 </span>
               </button>
             </div>
+            )}
 
-            {/* Alphabetically Sorted Site Chips (A -> Z) */}
-            {(() => {
+            {/* Clean Uniform Site Filter Pills (Sorted A–Z — DC / Admin Multi-Site View Only) */}
+            {!lockedSiteCode && (() => {
               const visibleSites =
                 centerRegionFilter === 'Metro Manila'
                   ? multiSiteOverview.metroManila
@@ -1521,38 +1754,48 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                     : multiSiteOverview.allSorted;
               if (visibleSites.length === 0) return null;
               return (
-                <div>
-                  <div style={{ fontSize: '10.5px', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '7px' }}>
-                    Select Site to Filter (Sorted A–Z):
+                <div style={{ paddingTop: '4px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      Filter by Service Point (A–Z)
+                    </span>
+                    {siteFilter !== 'ALL' && (
+                      <button
+                        type="button"
+                        onClick={() => setSiteFilter('ALL')}
+                        style={{ background: 'none', border: 'none', color: '#0284c7', fontSize: '12px', fontWeight: 700, cursor: 'pointer', padding: 0 }}
+                      >
+                        Reset site filter
+                      </button>
+                    )}
                   </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '7px' }}>
+                  <div className="ct-site-chips">
                     {visibleSites.map(s => {
                       const active = siteFilter.toUpperCase() === s.code;
-                      const theme = getSiteColorTheme(s.code);
                       return (
                         <button
                           key={s.code}
                           type="button"
                           onClick={() => setSiteFilter(active ? 'ALL' : s.code)}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            padding: '5px 10px',
-                            borderRadius: '8px',
-                            cursor: 'pointer',
-                            background: active ? theme.text : theme.bg,
-                            color: active ? '#ffffff' : theme.text,
-                            border: active ? `2px solid ${theme.text}` : `1px solid ${theme.border}`,
-                            fontSize: '12px',
-                            fontWeight: 800
-                          }}
+                          className={`ct-site-chip ${active ? 'active' : ''}`}
                         >
-                          <span>{s.code}</span>
-                          <span style={{ padding: '1px 6px', borderRadius: '999px', fontSize: '10.5px', background: active ? 'rgba(255,255,255,0.22)' : '#dbeafe', color: active ? '#fff' : '#1e40af' }}>
+                          <span className="font-mono">{s.code}</span>
+                          <span
+                            className="ct-site-chip-stat"
+                            style={{
+                              background: active ? 'rgba(255,255,255,0.18)' : '#eff6ff',
+                              color: active ? '#ffffff' : '#1d4ed8'
+                            }}
+                          >
                             {s.toolsCount}T
                           </span>
-                          <span style={{ padding: '1px 6px', borderRadius: '999px', fontSize: '10.5px', background: active ? 'rgba(255,255,255,0.22)' : '#d1fae5', color: active ? '#fff' : '#065f46' }}>
+                          <span
+                            className="ct-site-chip-stat"
+                            style={{
+                              background: active ? 'rgba(255,255,255,0.18)' : '#ecfdf5',
+                              color: active ? '#ffffff' : '#047857'
+                            }}
+                          >
                             {s.consumablesQty}C
                           </span>
                         </button>
@@ -1564,33 +1807,70 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
             })()}
           </div>
 
-          {/* Sub-Tab Switcher */}
+          {/* Low-Stock & Reorder Alert Banner */}
+          {usageAnalytics.lowStockAlerts.length > 0 && (
+            <div
+              style={{
+                background: '#fef2f2',
+                border: '1px solid #fecaca',
+                borderRadius: '12px',
+                padding: '12px 16px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '10px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#fee2e2', color: '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <Bell size={16} />
+                </div>
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: 800, color: '#991b1b' }}>
+                    Low-Stock Reorder Alert: {usageAnalytics.lowStockAlerts.length} consumable item{usageAnalytics.lowStockAlerts.length === 1 ? '' : 's'} at or below threshold
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#b91c1c' }}>
+                    {usageAnalytics.lowStockAlerts.slice(0, 3).map(a => `${a.part_number} (${a.site_code}: ${a.breakdown.individualUnits} pcs)`).join(' · ')}
+                    {usageAnalytics.lowStockAlerts.length > 3 ? ` · +${usageAnalytics.lowStockAlerts.length - 3} more` : ''}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setAssetsSubTab('usage')}
+                style={{ borderColor: '#fca5a5', color: '#991b1b', background: '#ffffff', fontWeight: 700, borderRadius: '8px' }}
+              >
+                View Reorder Queue →
+              </button>
+            </div>
+          )}
+
+          {/* Sub-Tab Switcher (Catalog consolidated into Settings -> Parts Master Catalog) */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-            <div style={{ display: 'inline-flex', gap: '6px', background: '#f1f5f9', padding: '4px', borderRadius: '10px', border: '1px solid #e2e8f0', flexWrap: 'wrap' }}>
+            <div className="ct-subtab-bar">
               {[
-                { key: 'combined', label: `All Sites Combined (${combinedInventoryRows.length})` },
-                { key: 'assets', label: `Tracked Tool Units (${ctToolAssets.length})` },
-                { key: 'consumables', label: `Consumables Stock (${ctStock.filter(s => s.item_kind !== 'tool' && (Number(s.qty_on_hand) || 0) > 0).length})` },
-                { key: 'catalog', label: `Complete Catalog (${rawCtCatalog.length})` }
-              ].map(tab => (
-                <button
-                  key={tab.key}
-                  type="button"
-                  onClick={() => setAssetsSubTab(tab.key)}
-                  style={{
-                    border: 'none',
-                    borderRadius: '8px',
-                    padding: '7px 14px',
-                    fontSize: '12.5px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    background: assetsSubTab === tab.key ? '#0f172a' : 'transparent',
-                    color: assetsSubTab === tab.key ? '#ffffff' : '#475569'
-                  }}
-                >
-                  {tab.label}
-                </button>
-              ))}
+                { key: 'combined', label: lockedSiteCode ? `${lockedSiteCode} Overview` : 'All Sites Combined', count: combinedInventoryRows.length, icon: Layers },
+                { key: 'assets', label: 'Tracked Tool Units', count: scopedCtToolAssets.length, icon: Wrench },
+                { key: 'consumables', label: 'Consumables Stock', count: scopedCtStock.filter(s => s.item_kind !== 'tool').length, icon: Package },
+                { key: 'usage', label: 'Usage & Trends', count: usageAnalytics.auditLog.length, icon: TrendingUp }
+              ].map(tab => {
+                const Icon = tab.icon;
+                const isActive = assetsSubTab === tab.key;
+                return (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setAssetsSubTab(tab.key)}
+                    className={`ct-subtab-btn ${isActive ? 'active' : ''}`}
+                  >
+                    <Icon size={14} />
+                    <span>{tab.label}</span>
+                    <span className="ct-subtab-count">{tab.count}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -1672,23 +1952,35 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                               </span>
                             </td>
                             <td>
-                              <span
-                                style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '4px',
-                                  padding: '2px 8px',
-                                  borderRadius: '999px',
-                                  fontSize: '11px',
-                                  fontWeight: 800,
-                                  background: (row.ownership_tag || 'Apple-Owned') === 'Apple-Owned' ? '#0f172a' : '#f0f9ff',
-                                  color: (row.ownership_tag || 'Apple-Owned') === 'Apple-Owned' ? '#ffffff' : '#0369a1',
-                                  border: (row.ownership_tag || 'Apple-Owned') === 'Apple-Owned' ? '1px solid #0f172a' : '1px solid #bae6fd',
-                                  whiteSpace: 'nowrap'
-                                }}
-                              >
-                                {row.ownership_tag || 'Apple-Owned'}
-                              </span>
+                              {(() => {
+                                const tagMeta = getOwnershipTagCategoryMeta(row.ownership_tag || 'Apple-Owned');
+                                return (
+                                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '3px' }}>
+                                    <span
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '4px',
+                                        padding: '2px 8px',
+                                        borderRadius: '999px',
+                                        fontSize: '11px',
+                                        fontWeight: 800,
+                                        background: tagMeta.bg,
+                                        color: tagMeta.color,
+                                        border: `1px solid ${tagMeta.border}`,
+                                        whiteSpace: 'nowrap'
+                                      }}
+                                    >
+                                      {row.ownership_tag || 'Apple-Owned'}
+                                    </span>
+                                    {row.ownership_tag_id && (
+                                      <span className="font-mono" style={{ fontSize: '10.5px', fontWeight: 700, color: '#475569', letterSpacing: '0.02em', whiteSpace: 'nowrap' }}>
+                                        {row.ownership_tag_id}
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                             </td>
                             <td className="font-mono" style={{ fontWeight: 700 }}>{row.part_number}</td>
                             <td>{row.description}</td>
@@ -1697,28 +1989,7 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                               {isTool ? (row.serial_number !== '—' ? row.serial_number : row.asset_tag) : '—'}
                             </td>
                             <td>
-                              {row.source_ref ? (
-                                <button
-                                  type="button"
-                                  onClick={() => openCtSourcePdf?.(row.source_import_id || row.source_ref)}
-                                  style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '3px',
-                                    padding: '2px 7px',
-                                    borderRadius: '999px',
-                                    background: '#eff6ff',
-                                    border: '1px solid #bfdbfe',
-                                    color: '#1d4ed8',
-                                    fontSize: '10.5px',
-                                    fontWeight: 700,
-                                    cursor: 'pointer'
-                                  }}
-                                >
-                                  <FileText size={10} />
-                                  <span>{row.source_ref}</span>
-                                </button>
-                              ) : '—'}
+                              {renderCompactRefPills(row.source_ref, 1)}
                             </td>
                           </tr>
                         );
@@ -1833,16 +2104,13 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                   {paginateCenterRows(filteredAssets).pageRows.map(asset => {
                     const isEditingRow = editingAssetId === asset.id;
                     const ownershipLabel = asset.ownership_tag || 'Apple-Owned';
-                    const isAppleOwned = ownershipLabel === 'Apple-Owned';
                     const siteTheme = getSiteColorTheme(asset.site_code);
                     return (
                     <tr key={asset.id}>
                       <td className="font-mono" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
                         <div>{asset.asset_tag}</div>
                         {asset.source_pdf_ref && (
-                          <button
-                            type="button"
-                            onClick={() => openCtSourcePdf?.(asset.source_pdf_import_id || asset.source_pdf_ref)}
+                          <span
                             title={`Imported from ${asset.source_pdf_filename || asset.source_pdf_ref}`}
                             style={{
                               marginTop: '3px',
@@ -1850,56 +2118,75 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                               alignItems: 'center',
                               gap: '3px',
                               padding: '1px 6px',
-                              borderRadius: '999px',
-                              background: '#eff6ff',
-                              border: '1px solid #bfdbfe',
-                              color: '#1d4ed8',
+                              borderRadius: '6px',
+                              background: '#f1f5f9',
+                              border: '1px solid #e2e8f0',
+                              color: '#475569',
                               fontSize: '10px',
-                              fontWeight: 700,
-                              cursor: 'pointer'
+                              fontWeight: 700
                             }}
                           >
-                            <FileText size={10} />
+                            <FileText size={10} style={{ color: '#64748b' }} />
                             <span>Ref: {asset.source_pdf_ref}</span>
-                          </button>
+                          </span>
                         )}
                       </td>
-                      <td style={{ minWidth: '145px' }}>
+                      <td style={{ minWidth: '175px' }}>
                         {isEditingRow ? (
                           <select
                             className="form-select"
                             value={editAdminTag || 'Apple-Owned'}
                             onChange={(e) => setEditAdminTag(e.target.value)}
                             autoFocus
-                            style={{ height: '28px', fontSize: '12px', padding: '2px 7px', width: '150px' }}
+                            style={{ height: '30px', fontSize: '12px', padding: '2px 8px', width: '165px' }}
                           >
-                            <option value="Apple-Owned">Apple-Owned</option>
-                            <option value="MobileCare-Owned">MobileCare-Owned</option>
-                            <option value="Cable / Admin-Tagged">Cable / Admin-Tagged</option>
+                            {OWNERSHIP_TAG_CATEGORIES.map(cat => (
+                              <option key={cat.value} value={cat.value}>{cat.value}</option>
+                            ))}
                           </select>
-                        ) : (
-                          <span
-                            onClick={() => userCanEdit && startEditAsset(asset)}
-                            title={userCanEdit ? 'Click to update Ownership Tag or Assigned Person' : ownershipLabel}
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                              padding: '3px 9px',
-                              borderRadius: '999px',
-                              fontSize: '11px',
-                              fontWeight: 700,
-                              background: isAppleOwned ? '#0f172a' : '#f0f9ff',
-                              color: isAppleOwned ? '#ffffff' : '#0369a1',
-                              border: isAppleOwned ? '1px solid #0f172a' : '1px solid #bae6fd',
-                              cursor: userCanEdit ? 'pointer' : 'default',
-                              whiteSpace: 'nowrap'
-                            }}
-                          >
-                            <span>{ownershipLabel}</span>
-                            {userCanEdit && <Pencil size={10} style={{ opacity: 0.7 }} />}
-                          </span>
-                        )}
+                        ) : (() => {
+                          const tagMeta = getOwnershipTagCategoryMeta(ownershipLabel);
+                          return (
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '3px' }}>
+                              <span
+                                onClick={() => userCanEdit && startEditAsset(asset)}
+                                title={userCanEdit ? 'Click to update Ownership Tag or Assigned Person' : ownershipLabel}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  padding: '3px 9px',
+                                  borderRadius: '999px',
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  background: tagMeta.bg,
+                                  color: tagMeta.color,
+                                  border: `1px solid ${tagMeta.border}`,
+                                  cursor: userCanEdit ? 'pointer' : 'default',
+                                  whiteSpace: 'nowrap'
+                                }}
+                              >
+                                <span>{ownershipLabel}</span>
+                                {userCanEdit && <Pencil size={10} style={{ opacity: 0.7 }} />}
+                              </span>
+                              {asset.ownership_tag_id && (
+                                <span
+                                  className="font-mono"
+                                  style={{
+                                    fontSize: '10.5px',
+                                    fontWeight: 700,
+                                    color: '#475569',
+                                    letterSpacing: '0.02em',
+                                    whiteSpace: 'nowrap'
+                                  }}
+                                  title={`System-generated Ownership Tag ID (${ownershipLabel})`}
+                                >
+                                  {asset.ownership_tag_id}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="font-mono">{asset.serial_number || '—'}</td>
                       <td className="font-mono">{asset.part_number}</td>
@@ -2006,12 +2293,12 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                                   Check Out
                                 </button>
                               )}
-                              {(asset.status === 'in_use' || asset.status === 'missing') && (
+                              {(asset.status === 'in_use' || (isDcAdmin && asset.status === 'missing')) && (
                                 <button type="button" className="btn btn-secondary btn-sm" onClick={() => checkinTool({ assetId: asset.id })}>
                                   Check In
                                 </button>
                               )}
-                              {asset.status === 'available' && (
+                              {isDcAdmin && asset.status === 'available' && (
                                 <button type="button" className="btn btn-secondary btn-sm" onClick={() => updateToolStatus({ assetId: asset.id, newStatus: 'missing' })}>
                                   Missing
                                 </button>
@@ -2034,200 +2321,189 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
         </div>
           )}
 
-          {/* SUB-TAB B: CONSUMABLES STOCK (EDITABLE) */}
+          {/* SUB-TAB B: CONSUMABLES STOCK (PACK & PIECE TRACKING, DEDUCTION & ADJUSTMENT) */}
           {assetsSubTab === 'consumables' && (() => {
             const q = consumableSearch.trim().toLowerCase();
-            const consumableRows = (ctStock || []).filter(s => {
+            const consumableRows = scopedCtStock.filter(s => {
               if (s.item_kind === 'tool') return false;
-              if (siteFilter !== 'ALL' && String(s.site_code || '').toUpperCase() !== siteFilter.toUpperCase()) return false;
+              if (effectiveSiteFilter !== 'ALL' && String(s.site_code || '').toUpperCase() !== effectiveSiteFilter.toUpperCase()) return false;
               if (q) {
-                const hay = `${s.part_number || ''} ${s.description || ''} ${s.site_code || ''} ${s.last_source_pdf_ref || ''}`.toLowerCase();
+                const hay = `${s.part_number || ''} ${s.description || ''} ${s.site_code || ''} ${s.ownership_tag_id || ''} ${s.last_source_pdf_ref || ''}`.toLowerCase();
                 if (!hay.includes(q)) return false;
               }
               return true;
             });
 
             return (
-              <div className="card" style={{ borderRadius: '12px', border: '1px solid #e2e8f0', padding: 0, overflow: 'hidden' }}>
-                <div style={{ padding: '14px 18px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+              <div className="ct-panel" style={{ overflow: 'hidden' }}>
+                <div className="ct-panel-header">
                   <div>
-                    <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 800 }}>Consumables Stock ({consumableRows.length})</h3>
-                    <div style={{ fontSize: '12px', color: '#64748b' }}>Quantity-tracked consumables by site — click Edit to correct description, stock qty, or threshold</div>
+                    <h3 className="ct-panel-title">Consumables Stock ({consumableRows.length})</h3>
+                    <p className="ct-panel-desc">Track pack &amp; individual piece quantities — deduct usage per piece/pack or adjust stock discrepancies</p>
                   </div>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                    <select
-                      className="form-select"
-                      value={siteFilter}
-                      onChange={(e) => setSiteFilter(e.target.value)}
-                      style={{ height: '36px', fontSize: '12.5px', minWidth: '175px' }}
-                    >
-                      <option value="ALL">All Sites ({siteChoices.length})</option>
-                      {siteChoices.map(s => (
-                        <option key={s.code} value={s.code}>{s.code} — {s.name}</option>
-                      ))}
-                    </select>
+                    {!lockedSiteCode && (
+                      <select
+                        className="form-select"
+                        value={siteFilter}
+                        onChange={(e) => setSiteFilter(e.target.value)}
+                        style={{ height: '36px', fontSize: '12.5px', minWidth: '175px', borderRadius: '8px' }}
+                      >
+                        <option value="ALL">All Sites ({siteChoices.length})</option>
+                        {siteChoices.map(s => (
+                          <option key={s.code} value={s.code}>{s.code} — {s.name}</option>
+                        ))}
+                      </select>
+                    )}
                     <input
                       type="text"
                       className="form-input"
-                      placeholder="Search PN, description, site, PDF ref..."
+                      placeholder="Search PN, description, tag, ref..."
                       value={consumableSearch}
                       onChange={(e) => setConsumableSearch(e.target.value)}
-                      style={{ height: '36px', fontSize: '12.5px', width: '230px' }}
+                      style={{ height: '36px', fontSize: '12.5px', width: '230px', borderRadius: '8px' }}
                     />
                   </div>
                 </div>
 
                 {consumableRows.length === 0 ? (
-                  <div style={{ padding: '40px 20px', textAlign: 'center', color: '#64748b' }}>
-                    No consumable stock records found. Import a scanned Apple PDF or receive consumables under <strong>CT Receiving &amp; Scan-In</strong>.
+                  <div className="ct-empty-state" style={{ margin: '18px' }}>
+                    <Package size={28} color="#94a3b8" />
+                    <div style={{ fontSize: '14px', fontWeight: 700, color: '#334155' }}>No consumable stock records found</div>
+                    <div style={{ fontSize: '12.5px' }}>
+                      {lockedSiteCode
+                        ? `No consumables currently on hand for ${lockedSiteCode}.`
+                        : 'Import a CSV/Excel report or receive consumables under CT Receiving & Scan-In.'}
+                    </div>
                   </div>
                 ) : (
                   <>
                   <div className="table-container" style={{ overflowX: 'auto' }}>
-                    <table className="data-table" style={{ width: '100%', fontSize: '12.5px' }}>
+                    <table className="data-table" style={{ width: '100%', fontSize: '12.5px', minWidth: '1020px' }}>
                       <thead>
                         <tr>
                           <th>Part Number</th>
                           <th>Ownership Tag</th>
                           <th>Description</th>
                           <th>Site</th>
-                          <th style={{ textAlign: 'center' }}>On Hand</th>
-                          <th style={{ textAlign: 'center' }}>Min Threshold</th>
+                          <th style={{ textAlign: 'center' }}>Pack Qty</th>
+                          <th style={{ textAlign: 'center' }}>Individual Pieces</th>
+                          <th style={{ textAlign: 'center' }}>Threshold &amp; Status</th>
                           <th>Source Ref</th>
                           <th style={{ textAlign: 'right' }}>Actions</th>
                         </tr>
                       </thead>
                       <tbody>
                         {paginateCenterRows(consumableRows).pageRows.map(row => {
-                          const isEditing = editingStockId === row.id;
                           const ownershipLabel = row.ownership_tag || 'Apple-Owned';
-                          const isAppleOwned = ownershipLabel === 'Apple-Owned';
+                          const bd = getStockPackBreakdown(row);
                           return (
-                            <tr key={row.id}>
+                            <tr key={row.id} style={bd.isOutOfStock ? { background: '#fef2f2' } : bd.isLowStock ? { background: '#fffbeb' } : undefined}>
                               <td className="font-mono" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{row.part_number}</td>
                               <td>
-                                <span
-                                  style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    padding: '2px 8px',
-                                    borderRadius: '999px',
-                                    fontSize: '11px',
-                                    fontWeight: 800,
-                                    background: isAppleOwned ? '#0f172a' : '#f0f9ff',
-                                    color: isAppleOwned ? '#ffffff' : '#0369a1',
-                                    border: isAppleOwned ? '1px solid #0f172a' : '1px solid #bae6fd',
-                                    whiteSpace: 'nowrap'
-                                  }}
-                                >
-                                  {ownershipLabel}
+                                {(() => {
+                                  const tagMeta = getOwnershipTagCategoryMeta(ownershipLabel);
+                                  return (
+                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '3px' }}>
+                                      <span
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          padding: '2px 8px',
+                                          borderRadius: '999px',
+                                          fontSize: '11px',
+                                          fontWeight: 800,
+                                          background: tagMeta.bg,
+                                          color: tagMeta.color,
+                                          border: `1px solid ${tagMeta.border}`,
+                                          whiteSpace: 'nowrap'
+                                        }}
+                                      >
+                                        {ownershipLabel}
+                                      </span>
+                                      {row.ownership_tag_id && (
+                                        <span className="font-mono" style={{ fontSize: '10.5px', fontWeight: 700, color: '#475569', letterSpacing: '0.02em', whiteSpace: 'nowrap' }}>
+                                          {row.ownership_tag_id}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
+                              </td>
+                              <td>
+                                <div style={{ fontWeight: 500, color: '#1e293b' }}>{row.description || '—'}</div>
+                              </td>
+                              <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{row.site_code}</td>
+                              <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                {bd.packSize > 1 ? (
+                                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+                                    <span className="font-mono" style={{ fontWeight: 800, color: '#0f172a', fontSize: '12.5px' }}>
+                                      {bd.fullPacks} pk{bd.looseUnits > 0 ? ` + ${bd.looseUnits} pc` : ''}
+                                    </span>
+                                    <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#0369a1', background: '#e0f2fe', padding: '1px 6px', borderRadius: '999px' }}>
+                                      {bd.packSize} pcs/pk
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <span className="font-mono" style={{ fontSize: '12px', color: '#64748b' }}>Single unit</span>
+                                )}
+                              </td>
+                              <td className="font-mono" style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                <span style={{ fontSize: '14px', fontWeight: 800, color: bd.isOutOfStock ? '#dc2626' : bd.isLowStock ? '#d97706' : '#0f172a' }}>
+                                  {bd.individualUnits.toLocaleString()}
                                 </span>
+                                <span style={{ fontSize: '11px', color: '#64748b', marginLeft: '3px' }}>pcs</span>
                               </td>
-                              <td>
-                                {isEditing ? (
-                                  <input
-                                    type="text"
-                                    className="form-input"
-                                    value={editStockForm.description}
-                                    onChange={(e) => setEditStockForm(f => ({ ...f, description: e.target.value }))}
-                                    style={{ height: '30px', fontSize: '12.5px', width: '100%', minWidth: '220px' }}
-                                  />
-                                ) : (
-                                  row.description || '—'
-                                )}
-                              </td>
-                              <td style={{ fontWeight: 700 }}>{row.site_code}</td>
-                              <td className="font-mono" style={{ textAlign: 'center', fontWeight: 800 }}>
-                                {isEditing ? (
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    className="form-input"
-                                    value={editStockForm.qty_on_hand}
-                                    onChange={(e) => setEditStockForm(f => ({ ...f, qty_on_hand: Math.max(0, parseInt(e.target.value, 10) || 0) }))}
-                                    style={{ height: '30px', fontSize: '12.5px', width: '72px', textAlign: 'center' }}
-                                  />
-                                ) : (
-                                  row.qty_on_hand
-                                )}
-                              </td>
-                              <td className="font-mono" style={{ textAlign: 'center' }}>
-                                {isEditing ? (
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    className="form-input"
-                                    value={editStockForm.min_stock_threshold}
-                                    onChange={(e) => setEditStockForm(f => ({ ...f, min_stock_threshold: Math.max(0, parseInt(e.target.value, 10) || 0) }))}
-                                    style={{ height: '30px', fontSize: '12.5px', width: '72px', textAlign: 'center' }}
-                                  />
-                                ) : (
-                                  row.min_stock_threshold ?? 2
-                                )}
-                              </td>
-                              <td>
-                                {row.last_source_pdf_ref ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => openCtSourcePdf?.(row.last_source_pdf_import_id || row.last_source_pdf_ref)}
+                              <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px' }}>
+                                  <span
                                     style={{
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '4px',
-                                      padding: '2px 7px',
+                                      display: 'inline-block',
+                                      padding: '2px 8px',
                                       borderRadius: '999px',
-                                      background: '#eff6ff',
-                                      border: '1px solid #bfdbfe',
-                                      color: '#1d4ed8',
-                                      fontSize: '11px',
-                                      fontWeight: 700,
-                                      cursor: 'pointer'
+                                      fontSize: '10.5px',
+                                      fontWeight: 800,
+                                      background: bd.isOutOfStock ? '#fee2e2' : bd.isLowStock ? '#fef3c7' : '#dcfce7',
+                                      color: bd.isOutOfStock ? '#991b1b' : bd.isLowStock ? '#92400e' : '#166534'
                                     }}
                                   >
-                                    <FileText size={11} />
-                                    <span>PDF: {row.last_source_pdf_ref}</span>
-                                  </button>
-                                ) : '—'}
+                                    {bd.isOutOfStock ? 'OUT OF STOCK' : bd.isLowStock ? 'LOW STOCK' : 'IN STOCK'}
+                                  </span>
+                                  <span className="font-mono" style={{ fontSize: '10.5px', color: '#64748b' }}>
+                                    Min: {bd.minThresholdUnits} pcs
+                                  </span>
+                                </div>
                               </td>
-                              <td style={{ textAlign: 'right' }}>
+                              <td>
+                                {renderCompactRefPills(row.last_source_pdf_ref, 1)}
+                              </td>
+                              <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                                 <div style={{ display: 'inline-flex', gap: '6px' }}>
-                                  {isEditing ? (
+                                  {userCanEdit && (
                                     <>
                                       <button
                                         type="button"
                                         className="btn btn-primary btn-sm"
-                                        onClick={() => {
-                                          updateCtStockRecord?.(row.id, editStockForm);
-                                          setEditingStockId(null);
-                                        }}
+                                        disabled={bd.individualUnits <= 0}
+                                        onClick={() => openConsumeForRow(row)}
+                                        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 9px', fontSize: '11.5px', borderRadius: '7px' }}
+                                        title="Deduct consumable pieces or packs used"
                                       >
-                                        <Check size={13} /> Save
+                                        <MinusCircle size={12} />
+                                        <span>Deduct</span>
                                       </button>
                                       <button
                                         type="button"
                                         className="btn btn-secondary btn-sm"
-                                        onClick={() => setEditingStockId(null)}
+                                        onClick={() => openAdjustModal(row)}
+                                        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 9px', fontSize: '11.5px', borderRadius: '7px' }}
+                                        title="Adjust stock count, pack size, or low-stock threshold"
                                       >
-                                        Cancel
+                                        <Sliders size={12} />
+                                        <span>Adjust</span>
                                       </button>
                                     </>
-                                  ) : userCanEdit ? (
-                                    <button
-                                      type="button"
-                                      className="btn btn-secondary btn-sm"
-                                      onClick={() => {
-                                        setEditingStockId(row.id);
-                                        setEditStockForm({
-                                          description: row.description || '',
-                                          qty_on_hand: Number(row.qty_on_hand) || 0,
-                                          min_stock_threshold: Number(row.min_stock_threshold ?? 2)
-                                        });
-                                      }}
-                                      style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                                    >
-                                      <Pencil size={12} /> Edit
-                                    </button>
-                                  ) : null}
+                                  )}
                                 </div>
                               </td>
                             </tr>
@@ -2243,373 +2519,229 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
             );
           })()}
 
-          {/* SUB-TAB C: COMPLETE TOOLS & CONSUMABLES CATALOG (EDITABLE, PDF-SOURCED) */}
-          {assetsSubTab === 'catalog' && (() => {
-            const q = catalogSearch.trim().toLowerCase();
-            const filteredCatalog = (rawCtCatalog || []).filter(item => {
-              if (catalogKindFilter !== 'all' && item.item_kind !== catalogKindFilter) return false;
-              if (q) {
-                const hay = `${item.part_number || ''} ${item.description || ''} ${item.category || ''} ${item.source_pdf_ref || ''}`.toLowerCase();
-                if (!hay.includes(q)) return false;
-              }
-              return true;
-            });
-            const toolsCount = (rawCtCatalog || []).filter(i => i.item_kind === 'tool').length;
-            const consCount = (rawCtCatalog || []).filter(i => i.item_kind !== 'tool').length;
-
-            return (
-              <div className="card" style={{ borderRadius: '12px', border: '1px solid #e2e8f0', padding: 0, overflow: 'hidden' }}>
-                <div style={{ padding: '14px 18px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 800 }}>
-                      Complete Tools &amp; Consumables Catalog ({rawCtCatalog.length})
-                    </h3>
-                    <div style={{ fontSize: '12px', color: '#64748b' }}>
-                      Sourced directly from scanned Apple PDFs · Fully editable so you can update or correct any record
+          {/* SUB-TAB C: CONSUMABLE USAGE HISTORY, TRENDS & REPLENISHMENT FORECAST */}
+          {assetsSubTab === 'usage' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div className="ct-two-col-grid">
+                {/* Top Consumed Items & Replenishment Forecast */}
+                <div className="ct-panel" style={{ overflow: 'hidden' }}>
+                  <div className="ct-panel-header">
+                    <div>
+                      <h3 className="ct-panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <TrendingUp size={16} color="#0284c7" />
+                        <span>Consumption Trends &amp; Forecast (30d)</span>
+                      </h3>
+                      <p className="ct-panel-desc">
+                        Total used: <strong>{usageAnalytics.totalPiecesConsumed.toLocaleString()} pcs</strong> · Helps guide branch replenishment
+                      </p>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                    <div style={{ display: 'inline-flex', gap: '4px', background: '#f1f5f9', padding: '3px', borderRadius: '8px' }}>
-                      {[
-                        { key: 'all', label: `All (${rawCtCatalog.length})` },
-                        { key: 'tool', label: `Tools (${toolsCount})` },
-                        { key: 'consumable', label: `Consumables (${consCount})` }
-                      ].map(f => (
-                        <button
-                          key={f.key}
-                          type="button"
-                          onClick={() => setCatalogKindFilter(f.key)}
-                          style={{
-                            border: 'none',
-                            borderRadius: '6px',
-                            padding: '4px 10px',
-                            fontSize: '11.5px',
-                            fontWeight: 700,
-                            cursor: 'pointer',
-                            background: catalogKindFilter === f.key ? '#0f172a' : 'transparent',
-                            color: catalogKindFilter === f.key ? '#fff' : '#475569'
-                          }}
-                        >
-                          {f.label}
-                        </button>
-                      ))}
+                  {usageAnalytics.topConsumed.length === 0 ? (
+                    <div className="ct-empty-state" style={{ margin: '16px' }}>
+                      <TrendingUp size={26} color="#94a3b8" />
+                      <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#334155' }}>No consumption recorded yet</div>
+                      <div style={{ fontSize: '12px' }}>Use the <strong>Deduct</strong> button on any consumable item to start tracking usage trends.</div>
                     </div>
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder="Search catalog PN or description..."
-                      value={catalogSearch}
-                      onChange={(e) => setCatalogSearch(e.target.value)}
-                      style={{ height: '34px', fontSize: '12.5px', width: '215px' }}
-                    />
-                    {userCanEdit && (
-                      <>
-                        <button
-                          type="button"
-                          className="btn btn-primary btn-sm"
-                          onClick={() => setAddingCatalogItem(v => !v)}
-                          style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', height: '34px' }}
-                        >
-                          <Plus size={14} /> Add Item
-                        </button>
-                        {rawCtCatalog.length > 0 && (
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => {
-                              if (window.confirm(`Clear all ${rawCtCatalog.length} items from the Tools & Consumables Catalog so you can rebuild cleanly from scanned Apple PDFs?`)) {
-                                clearCtCatalog?.();
-                              }
-                            }}
-                            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', height: '34px', color: '#dc2626', borderColor: '#fecaca' }}
-                          >
-                            <Trash2 size={13} /> Clear Catalog
-                          </button>
-                        )}
-                      </>
-                    )}
-                  </div>
+                  ) : (
+                    <div className="table-container" style={{ overflowX: 'auto' }}>
+                      <table className="data-table" style={{ width: '100%', fontSize: '12px' }}>
+                        <thead>
+                          <tr>
+                            <th>Part Number</th>
+                            <th>Description</th>
+                            <th style={{ textAlign: 'right' }}>Used (Pcs)</th>
+                            <th style={{ textAlign: 'right' }}>On Hand</th>
+                            <th style={{ textAlign: 'right' }}>Est. Days Left</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {usageAnalytics.topConsumed.slice(0, 12).map(item => (
+                            <tr key={item.part_number}>
+                              <td className="font-mono" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{item.part_number}</td>
+                              <td style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.description}>
+                                {item.description}
+                              </td>
+                              <td className="font-mono" style={{ textAlign: 'right', fontWeight: 800, color: '#0369a1' }}>
+                                {item.total_pieces_used.toLocaleString()}
+                                {item.pack_size > 1 && <span style={{ fontSize: '10.5px', color: '#64748b', display: 'block' }}>{item.total_packs_used} pk</span>}
+                              </td>
+                              <td className="font-mono" style={{ textAlign: 'right', fontWeight: 700 }}>
+                                {item.current_pieces_on_hand.toLocaleString()} pcs
+                              </td>
+                              <td className="font-mono" style={{ textAlign: 'right', fontWeight: 800, color: item.est_days_remaining !== null && item.est_days_remaining <= 14 ? '#dc2626' : '#059669' }}>
+                                {item.est_days_remaining !== null ? `${item.est_days_remaining}d` : '—'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
 
-                {addingCatalogItem && (
-                  <div style={{ padding: '12px 18px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'grid', gridTemplateColumns: '150px 1fr 140px 110px auto', gap: '8px', alignItems: 'end' }}>
+                {/* Low-Stock & Reorder Queue */}
+                <div className="ct-panel" style={{ overflow: 'hidden' }}>
+                  <div className="ct-panel-header">
                     <div>
-                      <label className="form-label" style={{ fontSize: '11px', marginBottom: '3px' }}>Part Number *</label>
-                      <input
-                        type="text"
-                        className="form-input font-mono"
-                        placeholder="e.g. 077-01158"
-                        value={newCatForm.part_number}
-                        onChange={(e) => setNewCatForm(f => ({ ...f, part_number: e.target.value }))}
-                        style={{ height: '34px', width: '100%' }}
-                      />
-                    </div>
-                    <div>
-                      <label className="form-label" style={{ fontSize: '11px', marginBottom: '3px' }}>Description *</label>
-                      <input
-                        type="text"
-                        className="form-input"
-                        placeholder="Exact Apple description..."
-                        value={newCatForm.description}
-                        onChange={(e) => setNewCatForm(f => ({ ...f, description: e.target.value }))}
-                        style={{ height: '34px', width: '100%' }}
-                      />
-                    </div>
-                    <div>
-                      <label className="form-label" style={{ fontSize: '11px', marginBottom: '3px' }}>Type</label>
-                      <select
-                        className="form-select"
-                        value={newCatForm.item_kind}
-                        onChange={(e) => setNewCatForm(f => ({ ...f, item_kind: e.target.value }))}
-                        style={{ height: '34px', width: '100%' }}
-                      >
-                        <option value="tool">Tool</option>
-                        <option value="consumable">Consumable</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="form-label" style={{ fontSize: '11px', marginBottom: '3px' }}>USD Price</label>
-                      <input
-                        type="number"
-                        min={0}
-                        step="0.01"
-                        className="form-input font-mono"
-                        value={newCatForm.unit_cost}
-                        onChange={(e) => setNewCatForm(f => ({ ...f, unit_cost: Math.max(0, parseFloat(e.target.value) || 0) }))}
-                        style={{ height: '34px', width: '100%', textAlign: 'right' }}
-                      />
-                    </div>
-                    <div style={{ display: 'flex', gap: '6px' }}>
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-sm"
-                        style={{ height: '34px' }}
-                        onClick={() => {
-                          const res = saveCtCatalogItem?.(newCatForm);
-                          if (res?.ok) {
-                            setNewCatForm({ part_number: '', description: '', item_kind: 'tool', unit_cost: 0 });
-                            setAddingCatalogItem(false);
-                          }
-                        }}
-                      >
-                        Save
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        style={{ height: '34px' }}
-                        onClick={() => setAddingCatalogItem(false)}
-                      >
-                        Cancel
-                      </button>
+                      <h3 className="ct-panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Bell size={16} color="#dc2626" />
+                        <span>Low-Stock &amp; Reorder Alerts ({usageAnalytics.lowStockAlerts.length})</span>
+                      </h3>
+                      <p className="ct-panel-desc">Consumables at or below their configured reorder threshold</p>
                     </div>
                   </div>
-                )}
+                  {usageAnalytics.lowStockAlerts.length === 0 ? (
+                    <div className="ct-empty-state" style={{ margin: '16px', background: '#f0fdf4', borderColor: '#bbf7d0' }}>
+                      <CheckCircle2 size={26} color="#16a34a" />
+                      <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#166534' }}>All consumables are above threshold</div>
+                      <div style={{ fontSize: '12px', color: '#15803d' }}>No immediate replenishment alerts for the current view.</div>
+                    </div>
+                  ) : (
+                    <div className="table-container" style={{ overflowX: 'auto' }}>
+                      <table className="data-table" style={{ width: '100%', fontSize: '12px' }}>
+                        <thead>
+                          <tr>
+                            <th>Site</th>
+                            <th>Part Number</th>
+                            <th style={{ textAlign: 'right' }}>Remaining</th>
+                            <th style={{ textAlign: 'right' }}>Min</th>
+                            <th style={{ textAlign: 'right' }}>Reorder</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {usageAnalytics.lowStockAlerts.map(alert => (
+                            <tr key={alert.id}>
+                              <td className="font-mono" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{alert.site_code}</td>
+                              <td>
+                                <div className="font-mono" style={{ fontWeight: 700 }}>{alert.part_number}</div>
+                                <div style={{ fontSize: '11px', color: '#64748b', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{alert.description}</div>
+                              </td>
+                              <td className="font-mono" style={{ textAlign: 'right', fontWeight: 800, color: alert.breakdown.isOutOfStock ? '#dc2626' : '#d97706' }}>
+                                {alert.breakdown.individualUnits} pcs
+                              </td>
+                              <td className="font-mono" style={{ textAlign: 'right', color: '#64748b' }}>
+                                {alert.breakdown.minThresholdUnits} pcs
+                              </td>
+                              <td className="font-mono" style={{ textAlign: 'right', fontWeight: 800, color: '#0369a1' }}>
+                                +{alert.suggested_reorder_packs} {alert.breakdown.packSize > 1 ? `pk (${alert.breakdown.packSize}/pk)` : 'pcs'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
 
-                {filteredCatalog.length === 0 ? (
-                  <div style={{ padding: '40px 20px', textAlign: 'center', color: '#64748b' }}>
-                    No catalog items yet. Click <strong>Import CSV / Excel</strong> to populate the catalog directly from your Gemini-extracted CSV/XLSX files, or click <strong>+ Add Item</strong>.
+              {/* Usage & Adjustment Audit Trail */}
+              <div className="ct-panel" style={{ overflow: 'hidden' }}>
+                <div className="ct-panel-header">
+                  <div>
+                    <h3 className="ct-panel-title">Consumables Usage &amp; Adjustment Audit Trail ({usageAnalytics.auditLog.length})</h3>
+                    <p className="ct-panel-desc">Complete accountability log showing who deducted or adjusted stock, when, and why</p>
+                  </div>
+                </div>
+                {usageAnalytics.auditLog.length === 0 ? (
+                  <div className="ct-empty-state" style={{ margin: '16px' }}>
+                    <ClipboardList size={26} color="#94a3b8" />
+                    <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#334155' }}>No usage or adjustment logs yet</div>
+                    <div style={{ fontSize: '12px' }}>All consumable deductions and discrepancy adjustments will be logged here automatically.</div>
                   </div>
                 ) : (
-                  <>
-                  <div className="table-container" style={{ overflowX: 'auto' }}>
-                    <table className="data-table" style={{ width: '100%', fontSize: '12.5px' }}>
+                  <div className="table-container" style={{ overflowX: 'auto', maxHeight: '420px', overflowY: 'auto' }}>
+                    <table className="data-table" style={{ width: '100%', fontSize: '12px' }}>
                       <thead>
                         <tr>
-                          <th style={{ width: '140px' }}>Part Number</th>
-                          <th>Description</th>
-                          <th style={{ width: '125px' }}>Type</th>
-                          <th style={{ width: '110px', textAlign: 'right' }}>USD Price</th>
-                          <th style={{ width: '150px' }}>Source Ref</th>
-                          <th style={{ width: '130px', textAlign: 'right' }}>Actions</th>
+                          <th>Date &amp; Time</th>
+                          <th>Action</th>
+                          <th>Site</th>
+                          <th>Part Number</th>
+                          <th style={{ textAlign: 'right' }}>Quantity (Pcs)</th>
+                          <th>Performed By</th>
+                          <th>Reason / Notes</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {paginateCenterRows(filteredCatalog).pageRows.map(item => {
-                          const isEditing = editingCatalogId === item.id;
+                        {usageAnalytics.auditLog.slice(0, 100).map(ev => {
+                          const isAdj = ev.action === 'adjusted';
                           return (
-                            <tr key={item.id}>
-                              <td className="font-mono" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
-                                {isEditing ? (
-                                  <input
-                                    type="text"
-                                    className="form-input font-mono"
-                                    value={editCatForm.part_number}
-                                    onChange={(e) => setEditCatForm(f => ({ ...f, part_number: e.target.value }))}
-                                    style={{ height: '30px', width: '125px', fontSize: '12px' }}
-                                  />
-                                ) : (
-                                  item.part_number
-                                )}
+                            <tr key={ev.id}>
+                              <td style={{ whiteSpace: 'nowrap', fontSize: '11.5px', color: '#475569' }}>
+                                <div>{ev.created_at ? new Date(ev.created_at).toLocaleDateString() : '—'}</div>
+                                <div style={{ fontSize: '10.5px', color: '#94a3b8' }}>{ev.created_at ? formatTo12HourTime(ev.created_at) : ''}</div>
                               </td>
                               <td>
-                                {isEditing ? (
-                                  <input
-                                    type="text"
-                                    className="form-input"
-                                    value={editCatForm.description}
-                                    onChange={(e) => setEditCatForm(f => ({ ...f, description: e.target.value }))}
-                                    style={{ height: '30px', width: '100%', minWidth: '220px', fontSize: '12px' }}
-                                  />
-                                ) : (
-                                  item.description
-                                )}
+                                <span
+                                  style={{
+                                    display: 'inline-block',
+                                    padding: '2px 8px',
+                                    borderRadius: '999px',
+                                    fontSize: '10.5px',
+                                    fontWeight: 800,
+                                    background: isAdj ? '#eef2ff' : '#fef3c7',
+                                    color: isAdj ? '#4338ca' : '#92400e'
+                                  }}
+                                >
+                                  {isAdj ? 'ADJUSTED' : 'DEDUCTED'}
+                                </span>
                               </td>
+                              <td className="font-mono" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{ev.from_site_code || '—'}</td>
                               <td>
-                                {isEditing ? (
-                                  <select
-                                    className="form-select"
-                                    value={editCatForm.item_kind}
-                                    onChange={(e) => setEditCatForm(f => ({ ...f, item_kind: e.target.value }))}
-                                    style={{ height: '30px', width: '115px', fontSize: '12px' }}
-                                  >
-                                    <option value="tool">Tool</option>
-                                    <option value="consumable">Consumable</option>
-                                  </select>
-                                ) : (
-                                  <span
-                                    style={{
-                                      display: 'inline-block',
-                                      padding: '2px 8px',
-                                      borderRadius: '999px',
-                                      fontSize: '11px',
-                                      fontWeight: 700,
-                                      background: item.item_kind === 'tool' ? '#eff6ff' : '#ecfdf5',
-                                      color: item.item_kind === 'tool' ? '#1d4ed8' : '#047857'
-                                    }}
-                                  >
-                                    {item.item_kind === 'tool' ? 'Tool' : 'Consumable'}
-                                  </span>
+                                <div className="font-mono" style={{ fontWeight: 700 }}>{ev.part_number}</div>
+                                <div style={{ fontSize: '11px', color: '#64748b', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.description}</div>
+                              </td>
+                              <td className="font-mono" style={{ textAlign: 'right', fontWeight: 800, color: isAdj ? '#4338ca' : '#b45309', whiteSpace: 'nowrap' }}>
+                                {isAdj
+                                  ? `${(ev.delta_units ?? 0) >= 0 ? '+' : ''}${ev.delta_units ?? ev.quantity} pcs`
+                                  : `-${ev.quantity} pcs`}
+                                {ev.pack_size > 1 && ev.packs_equivalent !== undefined && (
+                                  <div style={{ fontSize: '10.5px', color: '#64748b', fontWeight: 600 }}>
+                                    ({ev.packs_equivalent} pk of {ev.pack_size})
+                                  </div>
                                 )}
                               </td>
-                              <td className="font-mono" style={{ textAlign: 'right', fontWeight: 700 }}>
-                                {isEditing ? (
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    step="0.01"
-                                    className="form-input font-mono"
-                                    value={editCatForm.unit_cost}
-                                    onChange={(e) => setEditCatForm(f => ({ ...f, unit_cost: Math.max(0, parseFloat(e.target.value) || 0) }))}
-                                    style={{ height: '30px', width: '90px', textAlign: 'right', fontSize: '12px' }}
-                                  />
-                                ) : (
-                                  `$${(Number(item.unit_cost) || 0).toFixed(2)}`
-                                )}
-                              </td>
-                              <td>
-                                {item.source_pdf_ref ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => openCtSourcePdf?.(item.source_pdf_import_id || item.source_pdf_ref)}
-                                    style={{
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '4px',
-                                      padding: '2px 7px',
-                                      borderRadius: '999px',
-                                      background: '#eff6ff',
-                                      border: '1px solid #bfdbfe',
-                                      color: '#1d4ed8',
-                                      fontSize: '11px',
-                                      fontWeight: 700,
-                                      cursor: 'pointer'
-                                    }}
-                                  >
-                                    <FileText size={11} />
-                                    <span>{item.source_pdf_ref}</span>
-                                  </button>
-                                ) : (
-                                  <span style={{ fontSize: '11px', color: '#94a3b8' }}>Manual / Legacy</span>
-                                )}
-                              </td>
-                              <td style={{ textAlign: 'right' }}>
-                                <div style={{ display: 'inline-flex', gap: '5px' }}>
-                                  {isEditing ? (
-                                    <>
-                                      <button
-                                        type="button"
-                                        className="btn btn-primary btn-sm"
-                                        onClick={() => {
-                                          const res = saveCtCatalogItem?.({ id: item.id, ...editCatForm });
-                                          if (res?.ok) setEditingCatalogId(null);
-                                        }}
-                                      >
-                                        <Check size={12} /> Save
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="btn btn-secondary btn-sm"
-                                        onClick={() => setEditingCatalogId(null)}
-                                      >
-                                        Cancel
-                                      </button>
-                                    </>
-                                  ) : userCanEdit ? (
-                                    <>
-                                      <button
-                                        type="button"
-                                        className="btn btn-secondary btn-sm"
-                                        onClick={() => {
-                                          setEditingCatalogId(item.id);
-                                          setEditCatForm({
-                                            part_number: item.part_number,
-                                            description: item.description,
-                                            item_kind: item.item_kind === 'tool' ? 'tool' : 'consumable',
-                                            unit_cost: Number(item.unit_cost) || 0
-                                          });
-                                        }}
-                                        title="Edit catalog item"
-                                      >
-                                        <Pencil size={12} />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="btn btn-secondary btn-sm"
-                                        onClick={() => deleteCtCatalogItem?.(item.id)}
-                                        style={{ color: '#dc2626' }}
-                                        title="Remove from catalog"
-                                      >
-                                        <Trash2 size={12} />
-                                      </button>
-                                    </>
-                                  ) : null}
-                                </div>
-                              </td>
+                              <td style={{ fontWeight: 600, color: '#0f172a', whiteSpace: 'nowrap' }}>{ev.performed_by_name || '—'}</td>
+                              <td style={{ color: '#475569' }}>{ev.notes || '—'}</td>
                             </tr>
                           );
                         })}
                       </tbody>
                     </table>
                   </div>
-                  {renderCenterPaginationBar(paginateCenterRows(filteredCatalog))}
-                  </>
                 )}
               </div>
-            );
-          })()}
+            </div>
+          )}
+
+          {/* Catalog management has been consolidated into Settings -> Parts Master Catalog */}
         </div>
       )}
 
       {/* SECTION 3: ORDERS & RECEIVING */}
       {section === 'orders_receiving' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '16px', alignItems: 'start' }}>
+        <div className="ct-two-col-grid">
           {/* Receiving Scanner & Validation Form */}
-          <div className="card" style={{ borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <ScanLine size={18} color="#0284c7" />
-                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Receive Consumables & Tools</h3>
+          <div className="ct-panel ct-panel-padded">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '14px', borderBottom: '1px solid #f1f5f9', flexWrap: 'wrap', gap: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: '#e0f2fe', color: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <ScanLine size={18} />
+                </div>
+                <div>
+                  <h3 className="ct-panel-title">Receive Consumables &amp; Tools</h3>
+                  <p className="ct-panel-desc">Scan incoming stock against a PO or record an ad-hoc receipt</p>
+                </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <button
                   type="button"
                   className="btn btn-primary btn-sm"
                   onClick={() => setPdfImportModalOpen(true)}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', height: '36px', padding: '0 14px', borderRadius: '9px', fontWeight: 700 }}
                 >
                   <FileSpreadsheet size={14} />
-                  <span>Import CSV / Excel (XLSX)</span>
+                  <span>Import CSV / Excel</span>
                 </button>
               </div>
             </div>
@@ -2896,11 +3028,22 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
               </div>
 
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <label className="form-label" style={{ marginBottom: '4px' }}>
-                    Serial Number(s) (if applicable — one per line / comma-separated)
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                  <label className="form-label" style={{ marginBottom: 0 }}>
+                    Serial Number(s) <span style={{ fontWeight: 500, color: '#64748b', textTransform: 'none', letterSpacing: 0 }}>(optional · one per line or comma-separated)</span>
                   </label>
-                  <span className="font-mono" style={{ fontSize: '11px', color: '#475569' }}>
+                  <span
+                    className="font-mono"
+                    style={{
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      padding: '2px 8px',
+                      borderRadius: '999px',
+                      background: parsedRecvSerialPreview.serials.length > 0 ? '#e0f2fe' : '#f1f5f9',
+                      color: parsedRecvSerialPreview.serials.length > 0 ? '#0369a1' : '#64748b',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
                     {parsedRecvSerialPreview.serials.length} scanned
                   </span>
                 </div>
@@ -2910,7 +3053,7 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                   value={recvSerials}
                   onChange={(e) => setRecvSerials(e.target.value)}
                   placeholder="Scan or enter serial number(s) whenever the part has one (leave blank for non-serialized items)..."
-                  style={{ fontSize: '12px' }}
+                  style={{ fontSize: '12.5px', borderRadius: '9px' }}
                 />
               </div>
 
@@ -2926,18 +3069,26 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
             </form>
           </div>
 
-          {/* Orders List (40 Priority Orders + Custom POs) */}
-          <div className="card" style={{ borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Purchase Orders ({filteredOrders.length})</h3>
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          {/* Orders List (Priority Orders + Custom POs) */}
+          <div className="ct-panel ct-panel-padded">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', paddingBottom: '14px', borderBottom: '1px solid #f1f5f9', flexWrap: 'wrap', gap: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: '#fef3c7', color: '#b45309', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <ClipboardList size={18} />
+                </div>
+                <div>
+                  <h3 className="ct-panel-title">Purchase Orders ({filteredOrders.length})</h3>
+                  <p className="ct-panel-desc">Select a PO to autofill receiving line items</p>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 {userCanEdit && (
                   <>
-                    <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer', marginBottom: 0 }}>
+                    <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer', marginBottom: 0, height: '34px', display: 'inline-flex', alignItems: 'center', borderRadius: '8px', fontWeight: 700 }}>
                       <span>Import Priority CSV</span>
                       <input type="file" accept=".csv" onChange={handlePriorityReimport} style={{ display: 'none' }} />
                     </label>
-                    <button type="button" className="btn btn-primary btn-sm" onClick={openNewPoModal}>
+                    <button type="button" className="btn btn-primary btn-sm" onClick={openNewPoModal} style={{ height: '34px', borderRadius: '8px', fontWeight: 700 }}>
                       + New PO
                     </button>
                   </>
@@ -2945,15 +3096,32 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
               </div>
             </div>
 
-            <input
-              type="text"
-              className="form-input"
-              placeholder="Filter PO#, site, part number..."
-              value={orderSearch}
-              onChange={(e) => setOrderSearch(e.target.value)}
-              style={{ marginBottom: '10px', height: '36px', fontSize: '12.5px' }}
-            />
+            <div className="ct-search-input-wrap" style={{ marginBottom: '12px' }}>
+              <Search size={15} color="#94a3b8" style={{ position: 'absolute', left: '12px', pointerEvents: 'none' }} />
+              <input
+                type="text"
+                className="ct-search-input"
+                placeholder="Filter PO#, site, part number..."
+                value={orderSearch}
+                onChange={(e) => setOrderSearch(e.target.value)}
+                style={{ height: '38px', fontSize: '13px', paddingLeft: '36px' }}
+              />
+            </div>
 
+            {filteredOrders.length === 0 ? (
+              <div className="ct-empty-state" style={{ padding: '44px 20px' }}>
+                <ClipboardList size={30} color="#94a3b8" />
+                <div style={{ fontSize: '14px', fontWeight: 700, color: '#334155' }}>No Purchase Orders yet</div>
+                <div style={{ fontSize: '12.5px', maxWidth: '300px', lineHeight: 1.45 }}>
+                  Create a new PO or import a Priority CSV to track expected consumables and tools deliveries.
+                </div>
+                {userCanEdit && (
+                  <button type="button" className="btn btn-primary btn-sm" onClick={openNewPoModal} style={{ marginTop: '6px', borderRadius: '8px' }}>
+                    + Create First PO
+                  </button>
+                )}
+              </div>
+            ) : (
             <div style={{ maxHeight: '520px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {filteredOrders.map(ord => {
                 const orderedSum = (ord.items || []).reduce((s, it) => s + (it.quantity_ordered || 0), 0);
@@ -3020,27 +3188,30 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                 );
               })}
             </div>
+            )}
           </div>
 
           {/* CSV / Excel Import History Log */}
-          <div className="card" style={{ gridColumn: '1 / -1', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <FileSpreadsheet size={18} color="#059669" />
+          <div className="ct-panel" style={{ gridColumn: '1 / -1', overflow: 'hidden' }}>
+            <div className="ct-panel-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: '#ecfdf5', color: '#059669', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <FileSpreadsheet size={18} />
+                </div>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 800 }}>
+                  <h3 className="ct-panel-title">
                     CSV / Excel Import History Log ({ctPdfImports.length})
                   </h3>
-                  <div style={{ fontSize: '12px', color: '#64748b' }}>
+                  <p className="ct-panel-desc">
                     Audit trail of all structured CSV &amp; Excel (XLSX) reports imported into Consumables &amp; Tools
-                  </div>
+                  </p>
                 </div>
               </div>
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
                 onClick={() => setPdfImportModalOpen(true)}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', height: '36px', padding: '0 14px', borderRadius: '9px', fontWeight: 700 }}
               >
                 <FileSpreadsheet size={14} />
                 <span>Import CSV / Excel</span>
@@ -3085,12 +3256,14 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                             </div>
                           </td>
                           <td>
-                            <div className="font-mono" style={{ fontWeight: 700, color: '#0f172a' }}>
-                              {imp.report_ref || '—'}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              {renderCompactRefPills(imp.report_ref, 2)}
+                              <div style={{ fontSize: '11.5px', color: '#64748b', maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={imp.filename}>
+                                {imp.filename}
+                              </div>
                             </div>
-                            <div style={{ fontSize: '11.5px', color: '#64748b' }}>{imp.filename}</div>
                           </td>
-                          <td style={{ fontWeight: 700 }}>{imp.site_code || '—'}</td>
+                          <td>{renderCompactSitePills(imp.site_code, 3)}</td>
                           <td style={{ fontSize: '11.5px', color: '#475569', textTransform: 'uppercase', fontWeight: 700 }}>
                             {imp.extraction_method || 'XLSX'}
                           </td>
@@ -3145,13 +3318,15 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
 
       {/* SECTION 4: DEDICATED SHIPPING & PACKING LIST */}
       {section === 'shipping' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '16px', alignItems: 'start' }}>
-          <div className="card" style={{ borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-              <Truck size={18} color="#0284c7" />
+        <div className="ct-two-col-grid">
+          <div className="ct-panel ct-panel-padded">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px', paddingBottom: '14px', borderBottom: '1px solid #f1f5f9' }}>
+              <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: '#e0f2fe', color: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Truck size={18} />
+              </div>
               <div>
-                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Create Consumables & Tools Shipment</h3>
-                <p style={{ margin: 0, fontSize: '11.5px', color: '#64748b' }}>Generates a dedicated CT Packing List separate from Repair Parts shipments.</p>
+                <h3 className="ct-panel-title">Create Consumables &amp; Tools Shipment</h3>
+                <p className="ct-panel-desc">Generates a dedicated CT Packing List separate from Repair Parts shipments.</p>
               </div>
             </div>
 
@@ -3756,40 +3931,43 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
 
       {/* SECTION 5: CONSOLIDATED MOVEMENT HISTORY & SHIPMENT ARCHIVE */}
       {section === 'history' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {/* Archive Header & Filters */}
-          <div className="card" style={{ borderRadius: '12px', border: '1px solid #e2e8f0', padding: '16px 18px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+          <div className="ct-panel ct-panel-padded">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '14px' }}>
               <div>
-                <h2 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#0f172a' }}>
+                <h2 className="ct-panel-title" style={{ fontSize: '17px' }}>
                   Consumables &amp; Tools Movement &amp; Shipment Archive
                 </h2>
-                <p style={{ margin: '3px 0 0', fontSize: '12.5px', color: '#64748b' }}>
+                <p className="ct-panel-desc">
                   Consolidated all-sites movement history, packing list dispatches, and delivery confirmations ({ctShipments.length} shipments · {ctMovements.length} movements)
                 </p>
               </div>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="Search PL #, TS #, PO #, PN, serial, site..."
-                  value={historySearch}
-                  onChange={(e) => setHistorySearch(e.target.value)}
-                  style={{ height: '34px', fontSize: '12.5px', width: '250px' }}
-                />
+                <div className="ct-search-input-wrap" style={{ width: '260px' }}>
+                  <Search size={14} color="#94a3b8" style={{ position: 'absolute', left: '12px', pointerEvents: 'none' }} />
+                  <input
+                    type="text"
+                    className="ct-search-input"
+                    placeholder="Search PL #, TS #, PO #, PN, serial, site..."
+                    value={historySearch}
+                    onChange={(e) => setHistorySearch(e.target.value)}
+                    style={{ height: '36px', fontSize: '12.5px', paddingLeft: '34px' }}
+                  />
+                </div>
                 <button
                   type="button"
                   className="btn btn-primary btn-sm"
                   disabled={isExportingExcel}
                   onClick={handleExportMovementsExcel}
                   title="Download formatted Excel (.xlsx) report of filtered movements & shipments"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', height: '36px', borderRadius: '9px', fontWeight: 700 }}
                 >
-                  <FileSpreadsheet size={13} />
+                  <FileSpreadsheet size={14} />
                   <span>{isExportingExcel ? 'Exporting...' : 'Export Excel (.xlsx)'}</span>
                 </button>
-                <button type="button" className="btn btn-secondary btn-sm" onClick={handleExportMovementsCsv} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
-                  <Download size={13} />
+                <button type="button" className="btn btn-secondary btn-sm" onClick={handleExportMovementsCsv} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', height: '36px', borderRadius: '9px', fontWeight: 700 }}>
+                  <Download size={14} />
                   <span>Export CSV</span>
                 </button>
               </div>
@@ -3895,26 +4073,46 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
             </div>
 
             {/* 4 KPI Summary Cards */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))', gap: '10px', marginTop: '12px' }}>
-              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '10px 14px' }}>
-                <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>Total Movements</div>
-                <div style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>{historyStats.totalMovements}</div>
-                <div style={{ fontSize: '11px', color: '#64748b' }}>Across all filtered sites</div>
+            <div className="ct-kpi-grid" style={{ marginTop: '14px', paddingTop: '14px' }}>
+              <div className="ct-kpi-card">
+                <div>
+                  <div className="ct-kpi-label">Total Movements</div>
+                  <div className="ct-kpi-value">{historyStats.totalMovements}</div>
+                  <div className="ct-kpi-sub">Across all filtered sites</div>
+                </div>
+                <div className="ct-kpi-icon" style={{ background: '#f1f5f9', color: '#475569' }}>
+                  <ArrowRightLeft size={17} />
+                </div>
               </div>
-              <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '10px', padding: '10px 14px' }}>
-                <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase' }}>Shipped / In Transit</div>
-                <div style={{ fontSize: '20px', fontWeight: 800, color: '#92400e', marginTop: '2px' }}>{historyStats.shippedCount}</div>
-                <div style={{ fontSize: '11px', color: '#b45309' }}>{historyStats.shippedUnits} units in transit</div>
+              <div className="ct-kpi-card">
+                <div>
+                  <div className="ct-kpi-label">Shipped / In Transit</div>
+                  <div className="ct-kpi-value" style={{ color: '#b45309' }}>{historyStats.shippedCount}</div>
+                  <div className="ct-kpi-sub">{historyStats.shippedUnits} units in transit</div>
+                </div>
+                <div className="ct-kpi-icon" style={{ background: '#fef3c7', color: '#b45309' }}>
+                  <Truck size={17} />
+                </div>
               </div>
-              <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '10px', padding: '10px 14px' }}>
-                <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#15803d', textTransform: 'uppercase' }}>Delivered Confirmed</div>
-                <div style={{ fontSize: '20px', fontWeight: 800, color: '#166534', marginTop: '2px' }}>{historyStats.deliveredCount}</div>
-                <div style={{ fontSize: '11px', color: '#15803d' }}>{historyStats.deliveredUnits} units branch verified</div>
+              <div className="ct-kpi-card">
+                <div>
+                  <div className="ct-kpi-label">Delivered Confirmed</div>
+                  <div className="ct-kpi-value" style={{ color: '#15803d' }}>{historyStats.deliveredCount}</div>
+                  <div className="ct-kpi-sub">{historyStats.deliveredUnits} units branch verified</div>
+                </div>
+                <div className="ct-kpi-icon" style={{ background: '#f0fdf4', color: '#15803d' }}>
+                  <CheckCircle2 size={17} />
+                </div>
               </div>
-              <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '10px', padding: '10px 14px' }}>
-                <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#1d4ed8', textTransform: 'uppercase' }}>Today&apos;s Activity</div>
-                <div style={{ fontSize: '20px', fontWeight: 800, color: '#1e40af', marginTop: '2px' }}>{historyStats.todayCount}</div>
-                <div style={{ fontSize: '11px', color: '#1d4ed8' }}>Movements logged today</div>
+              <div className="ct-kpi-card">
+                <div>
+                  <div className="ct-kpi-label">Today&apos;s Activity</div>
+                  <div className="ct-kpi-value" style={{ color: '#1d4ed8' }}>{historyStats.todayCount}</div>
+                  <div className="ct-kpi-sub">Movements logged today</div>
+                </div>
+                <div className="ct-kpi-icon" style={{ background: '#eff6ff', color: '#1d4ed8' }}>
+                  <PackageCheck size={17} />
+                </div>
               </div>
             </div>
           </div>
@@ -4135,27 +4333,24 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                         <td className="font-mono">{[...(m.serial_numbers || []), ...(m.asset_tags || [])].join(', ') || '—'}</td>
                         <td className="font-mono">
                           {m.source_pdf_import_id || m.source_pdf_ref ? (
-                            <button
-                              type="button"
-                              onClick={() => openCtSourcePdf?.(m.source_pdf_import_id || m.source_pdf_ref)}
-                              title={`Open source PDF: ${m.source_pdf_filename || m.source_pdf_ref || m.reference_number}`}
+                            <span
+                              title={m.source_pdf_filename || m.source_pdf_ref || m.reference_number}
                               style={{
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 gap: '4px',
                                 padding: '2px 7px',
-                                borderRadius: '999px',
-                                background: '#eff6ff',
-                                border: '1px solid #bfdbfe',
-                                color: '#1d4ed8',
+                                borderRadius: '6px',
+                                background: '#f1f5f9',
+                                border: '1px solid #e2e8f0',
+                                color: '#334155',
                                 fontSize: '11px',
-                                fontWeight: 700,
-                                cursor: 'pointer'
+                                fontWeight: 700
                               }}
                             >
-                              <FileText size={11} />
+                              <FileText size={11} style={{ color: '#64748b' }} />
                               <span>{m.reference_number || m.source_pdf_ref}</span>
-                            </button>
+                            </span>
                           ) : (
                             m.reference_number || '—'
                           )}
@@ -4192,52 +4387,173 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
         <ToolLabelPrintModal assets={labelAssetsModal} onClose={() => setLabelAssetsModal([])} />
       )}
 
-      {/* Quick Consume Modal */}
-      {consumeModalOpen && (
+      {/* Quick Consume Modal (Supports Individual Piece & Pack Deduction) */}
+      {consumeModalOpen && (() => {
+        const activeConsumeRow = inStockConsumables.find(
+          r => normalizePartNumber(r.part_number) === normalizePartNumber(consumePn) &&
+            String(r.site_code || '').toUpperCase() === String(lockedSiteCode || consumeSiteCode || '').toUpperCase()
+        ) || inStockConsumables.find(r => normalizePartNumber(r.part_number) === normalizePartNumber(consumePn));
+        const activeBd = activeConsumeRow ? getStockPackBreakdown(activeConsumeRow) : null;
+        const requestedNum = Math.max(1, parseInt(consumeQty, 10) || 1);
+        const deductPiecesPreview = activeBd ? (consumeUnitMode === 'pack' ? requestedNum * activeBd.packSize : requestedNum) : requestedNum;
+        const remainingPreview = activeBd ? activeBd.individualUnits - deductPiecesPreview : null;
+
+        return (
         <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setConsumeModalOpen(false); }}>
-          <div className="modal-content" style={{ maxWidth: '430px', width: '94%' }}>
+          <div className="modal-content" style={{ maxWidth: '470px', width: '94%' }}>
             <div className="modal-header" style={{ background: '#0f172a' }}>
-              <h3 style={{ color: '#fff', fontSize: '15px', margin: 0 }}>Log Consumable Usage</h3>
+              <div>
+                <h3 style={{ color: '#fff', fontSize: '15.5px', margin: 0 }}>Deduct / Log Consumable Usage</h3>
+                <p style={{ color: '#94a3b8', fontSize: '11.5px', margin: '2px 0 0' }}>Deduct by individual piece or full pack with automatic conversion</p>
+              </div>
               <button type="button" onClick={() => setConsumeModalOpen(false)} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}><X size={18} /></button>
             </div>
             <form onSubmit={handleConfirmConsume}>
-              <div className="modal-body" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div className="modal-body" style={{ padding: '18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div>
                   <label className="form-label">In-Stock Consumable *</label>
                   <select
                     className="form-select font-mono"
-                    value={consumePn}
-                    onChange={(e) => setConsumePn(e.target.value)}
+                    value={`${consumePn}::${lockedSiteCode || consumeSiteCode}`}
+                    onChange={(e) => {
+                      const [pn, sc] = e.target.value.split('::');
+                      setConsumePn(pn || '');
+                      if (!lockedSiteCode && sc) setConsumeSiteCode(sc);
+                    }}
                     required
                   >
                     {inStockConsumables.map(row => {
+                      const bd = getStockPackBreakdown(row);
                       const desc = row.description || catalogByPnMap.get(normalizePartNumber(row.part_number))?.description || '';
                       return (
-                        <option key={`${row.part_number}-${row.site_code}`} value={row.part_number}>
-                          {row.part_number}{desc ? ` — ${desc}` : ''} ({row.site_code}: {row.qty_on_hand} avail)
+                        <option key={`${row.part_number}-${row.site_code}`} value={`${row.part_number}::${row.site_code}`}>
+                          {row.part_number}{desc ? ` — ${desc}` : ''} ({row.site_code}: {bd.individualUnits} pcs{bd.packSize > 1 ? ` / ${bd.packSize}PK` : ''})
                         </option>
                       );
                     })}
                   </select>
                 </div>
+
+                {activeBd && (
+                  <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '9px', padding: '10px 12px', fontSize: '12px', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                    <span>
+                      Current Stock: <strong className="font-mono">{activeBd.individualUnits} pcs</strong>
+                      {activeBd.packSize > 1 && <span style={{ color: '#64748b' }}> ({activeBd.fullPacks} pk + {activeBd.looseUnits} loose · {activeBd.packSize}/pk)</span>}
+                    </span>
+                    <span className="font-mono" style={{ fontWeight: 700, color: '#0369a1' }}>{activeConsumeRow?.site_code}</span>
+                  </div>
+                )}
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <div>
+                    <label className="form-label">Deduct By</label>
+                    <select className="form-select" value={consumeUnitMode} onChange={(e) => setConsumeUnitMode(e.target.value)}>
+                      <option value="piece">Individual Pieces (pcs)</option>
+                      {(!activeBd || activeBd.packSize > 1) && (
+                        <option value="pack">Full Packs ({activeBd?.packSize || 1} pcs/pk)</option>
+                      )}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="form-label">Quantity ({consumeUnitMode === 'pack' ? 'Packs' : 'Pieces'}) *</label>
+                    <input type="number" min="1" className="form-control font-mono" value={consumeQty} onChange={(e) => setConsumeQty(e.target.value)} required />
+                  </div>
+                </div>
+
+                {activeBd && (
+                  <div
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      background: remainingPreview < 0 ? '#fef2f2' : remainingPreview <= activeBd.minThresholdUnits ? '#fffbeb' : '#f0fdf4',
+                      border: `1px solid ${remainingPreview < 0 ? '#fecaca' : remainingPreview <= activeBd.minThresholdUnits ? '#fde68a' : '#bbf7d0'}`,
+                      color: remainingPreview < 0 ? '#991b1b' : remainingPreview <= activeBd.minThresholdUnits ? '#92400e' : '#166534'
+                    }}
+                  >
+                    {remainingPreview < 0
+                      ? `Exceeds available stock (${activeBd.individualUnits} pcs available vs ${deductPiecesPreview} pcs requested).`
+                      : `Deducting ${deductPiecesPreview} pc${deductPiecesPreview === 1 ? '' : 's'} → ${remainingPreview} pc${remainingPreview === 1 ? '' : 's'} remaining${remainingPreview <= activeBd.minThresholdUnits ? ' (Low-stock alert)' : ''}.`}
+                  </div>
+                )}
+
                 <div>
-                  <label className="form-label">Site</label>
-                  <select className="form-select" value={consumeSiteCode} onChange={(e) => setConsumeSiteCode(e.target.value)}>
-                    {siteChoices.map(s => <option key={s.code} value={s.code}>{s.code}</option>)}
+                  <label className="form-label">Notes / Repair Ticket / Technician</label>
+                  <input type="text" className="form-control" value={consumeNotes} onChange={(e) => setConsumeNotes(e.target.value)} placeholder="e.g. Issued to Tech / GSX repair #" />
+                </div>
+              </div>
+              <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', padding: '12px 18px' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setConsumeModalOpen(false)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={remainingPreview !== null && remainingPreview < 0}>
+                  Deduct &amp; Record Usage
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+        );
+      })()}
+
+      {/* Stock Adjustment Modal (Discrepancy Correction, Pack Size & Threshold Config) */}
+      {adjustModalRow && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setAdjustModalRow(null); }}>
+          <div className="modal-content" style={{ maxWidth: '470px', width: '94%' }}>
+            <div className="modal-header" style={{ background: '#0f172a' }}>
+              <div>
+                <h3 style={{ color: '#fff', fontSize: '15.5px', margin: 0 }}>Adjust Consumable Stock</h3>
+                <p style={{ color: '#94a3b8', fontSize: '11.5px', margin: '2px 0 0' }}>
+                  {adjustModalRow.part_number} · {adjustModalRow.site_code}
+                </p>
+              </div>
+              <button type="button" onClick={() => setAdjustModalRow(null)} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}><X size={18} /></button>
+            </div>
+            <form onSubmit={handleConfirmAdjust}>
+              <div className="modal-body" style={{ padding: '18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ fontSize: '12.5px', fontWeight: 600, color: '#1e293b', background: '#f8fafc', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                  {adjustModalRow.description || adjustModalRow.part_number}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <div>
+                    <label className="form-label">Adjustment Unit</label>
+                    <select className="form-select" value={adjustUnitMode} onChange={(e) => setAdjustUnitMode(e.target.value)}>
+                      <option value="piece">Individual Pieces (pcs)</option>
+                      <option value="pack">Packs</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="form-label">New Stock Count *</label>
+                    <input type="number" min="0" step={adjustUnitMode === 'pack' ? '0.1' : '1'} className="form-control font-mono" value={adjustQty} onChange={(e) => setAdjustQty(e.target.value)} required />
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <div>
+                    <label className="form-label">Pack Size (pcs / pack)</label>
+                    <input type="number" min="1" className="form-control font-mono" value={adjustPackSize} onChange={(e) => setAdjustPackSize(e.target.value)} required />
+                  </div>
+                  <div>
+                    <label className="form-label">Low-Stock Alert Threshold (pcs)</label>
+                    <input type="number" min="0" className="form-control font-mono" value={adjustMinThreshold} onChange={(e) => setAdjustMinThreshold(e.target.value)} required />
+                  </div>
+                </div>
+                <div>
+                  <label className="form-label">Adjustment Reason *</label>
+                  <select className="form-select" value={adjustReason} onChange={(e) => setAdjustReason(e.target.value)}>
+                    <option value="Physical Cycle Count">Physical Cycle Count</option>
+                    <option value="Damaged / Expired Stock">Damaged / Expired Stock</option>
+                    <option value="Initial Pack-to-Piece Conversion">Initial Pack-to-Piece Conversion</option>
+                    <option value="Transfer / Receiving Discrepancy">Transfer / Receiving Discrepancy</option>
+                    <option value="Other">Other</option>
                   </select>
                 </div>
                 <div>
-                  <label className="form-label">Quantity Consumed</label>
-                  <input type="number" min="1" className="form-control font-mono" value={consumeQty} onChange={(e) => setConsumeQty(e.target.value)} required />
-                </div>
-                <div>
-                  <label className="form-label">Notes / Repair Ticket</label>
-                  <input type="text" className="form-control" value={consumeNotes} onChange={(e) => setConsumeNotes(e.target.value)} placeholder="e.g. Bench usage / GSX repair #" />
+                  <label className="form-label">Remarks</label>
+                  <input type="text" className="form-control" value={adjustNotes} onChange={(e) => setAdjustNotes(e.target.value)} placeholder="Optional audit note..." />
                 </div>
               </div>
-              <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', padding: '12px 16px' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setConsumeModalOpen(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Record Consumption</button>
+              <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', padding: '12px 18px' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setAdjustModalRow(null)}>Cancel</button>
+                <button type="submit" className="btn btn-primary">Save Stock Adjustment</button>
               </div>
             </form>
           </div>

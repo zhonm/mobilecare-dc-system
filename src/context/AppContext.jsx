@@ -540,6 +540,7 @@ export function AppProvider({ children }) {
     getCurrentUser: () => auth.currentUser,
     parts: catalogAndSites.parts,
     savePart: catalogAndSites.savePart,
+    autoRegisterPartsToCatalog: catalogAndSites.autoRegisterPartsToCatalog,
     showToast,
     logAuditEvent: auditLogs.logAuditEvent
   });
@@ -734,6 +735,7 @@ export function AppProvider({ children }) {
         parts: catalogAndSites.parts,
         setParts: catalogAndSites.setParts,
         savePart: catalogAndSites.savePart,
+        autoRegisterPartsToCatalog: catalogAndSites.autoRegisterPartsToCatalog,
         refreshGsxCatalogFromCsv: catalogAndSites.refreshGsxCatalogFromCsv,
         supervisorSettings: catalogAndSites.supervisorSettings,
         setSupervisorSettings: catalogAndSites.setSupervisorSettings,
@@ -856,6 +858,7 @@ export function AppProvider({ children }) {
         updateToolStatus: consumablesToolsDomain.updateToolStatus,
         updateToolMetadata: consumablesToolsDomain.updateToolMetadata,
         consumeCtStock: consumablesToolsDomain.consumeCtStock,
+        adjustCtStock: consumablesToolsDomain.adjustCtStock,
         createCtShipment: consumablesToolsDomain.createCtShipment,
         confirmCtDelivery: consumablesToolsDomain.confirmCtDelivery,
         importPriorityCsvText: consumablesToolsDomain.importPriorityCsvText,

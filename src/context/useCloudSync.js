@@ -42,6 +42,7 @@ import {
 } from '../utils/allocationEngine';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { clearStoredUserSession } from '../utils/security';
+import { ensureSavedRecordPeriodFields } from '../utils/savedRecordsQueue.js';
 import { scanMasterlistData, setActiveScannedMasterlist, getActiveMasterlist } from '../utils/rawMasterlistScanner.js';
 import { resolvePartCategoryId, resolvePartCategoryUUID, getPartCategory, DEFAULT_PART_CATEGORIES } from '../utils/categoryFilter';
 import {
@@ -420,15 +421,19 @@ export function useCloudSync({
           } else if (item.actionType === 'SITE_UPSERT') {
             await supabase.from('sites').upsert(item.payload, { onConflict: 'code' });
           } else if (item.actionType === 'SAVED_RECORD_UPSERT') {
-            await supabase.from('saved_records').upsert(item.payload, { onConflict: 'id' });
+            await supabase.from('saved_records').upsert(ensureSavedRecordPeriodFields(item.payload), { onConflict: 'id' });
           } else if (item.actionType === 'SAVED_RECORD_DELETE') {
             await supabase.from('saved_records').delete().eq('id', item.payload.id);
           } else if (item.actionType === 'INTAKE_UPSERT') {
             await supabase.from('dc_intake_records').upsert(item.payload, { onConflict: 'id' });
+            const intakeDate = item.payload?.created_at ? new Date(item.payload.created_at) : new Date();
+            const safeIntakeDate = Number.isNaN(intakeDate.getTime()) ? new Date() : intakeDate;
             await supabase.from('saved_records').upsert({
               id: item.payload.id,
               record_type: 'intake_batch',
-              period_label: item.payload.record_name,
+              period_label: item.payload.record_name || 'DC Intake Batch',
+              period_year: safeIntakeDate.getFullYear(),
+              period_month: safeIntakeDate.getMonth() + 1,
               snapshot_data: item.payload,
               updated_at: new Date().toISOString()
             }, { onConflict: 'id' });
@@ -440,6 +445,7 @@ export function useCloudSync({
               try { await supabase.from('saved_records').delete().eq('id', cleanRecId); } catch (e) {}
             }
           } else if (item.actionType === 'SHIPMENT_UPSERT') {
+            item.payload = ensureSavedRecordPeriodFields(item.payload);
             const { error: recErr } = await supabase.from('saved_records').upsert(item.payload, { onConflict: 'id' });
             if (recErr) throw recErr;
             const snap = item.payload?.snapshot_data;

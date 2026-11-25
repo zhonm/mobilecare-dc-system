@@ -1067,8 +1067,8 @@ export default function Dashboard() {
             await applyParsedDataset(parsed, {
               period: periodLabel,
               target_month: periodLabel,
-              period_month: detectedPeriod.month,
-              period_year: detectedPeriod.year,
+              period_month: detectedPeriod?.month || (new Date().getMonth() + 1),
+              period_year: detectedPeriod?.year || new Date().getFullYear(),
               filename: file.name
             });
           } catch (syncErr) {

@@ -18,6 +18,7 @@ import {
   GSX_CATALOG_MIN_EXPECTED_PARTS,
   FULL_MERGED_CATALOG_MIN_PARTS
 } from '../utils/gsxCatalogImporter.js';
+import { buildAutoRegisteredParts } from '../utils/partsCatalogAutoRegister.js';
 
 export const DEFAULT_SUPERVISOR_SETTINGS = {
   supervisor_name: 'Anjo Alcazar',
@@ -229,6 +230,11 @@ export function useCatalogAndSites({
   useEffect(() => {
     categoriesRef.current = categories;
   }, [categories]);
+
+  const partsRef = useRef(parts);
+  useEffect(() => {
+    partsRef.current = parts;
+  }, [parts]);
 
   const isUnmountedRef = useRef(false);
   useEffect(() => {
@@ -953,6 +959,60 @@ export function useCatalogAndSites({
     };
   };
 
+  const autoRegisterPartsToCatalog = async (candidateItems = [], options = {}) => {
+    const { silent = false } = options || {};
+    if (!Array.isArray(candidateItems) || candidateItems.length === 0) {
+      return { success: true, addedCount: 0, addedParts: [] };
+    }
+
+    const activeCategories = categoriesRef.current || categories;
+    const { nextParts, addedParts, addedCount } = buildAutoRegisteredParts(
+      partsRef.current || parts,
+      candidateItems,
+      activeCategories
+    );
+
+    if (addedCount === 0) {
+      return { success: true, addedCount: 0, addedParts: [] };
+    }
+
+    partsRef.current = nextParts;
+    setParts(nextParts);
+    persistPartsCatalog(nextParts, dbStorage);
+
+    // Best-effort cloud sync (non-blocking so CSV uploads always succeed even offline or for non-admin uploaders)
+    if (supabase) {
+      try {
+        const dbRows = addedParts.map(p => ({
+          part_number: p.part_number,
+          description: p.description,
+          iphone_model: p.iphone_model || 'iPhone',
+          stocking_price: parseFloat(p.stocking_price) || 0,
+          is_active: true,
+          category_id: resolvePartCategoryUUID(p, activeCategories),
+          updated_at: p.updated_at || new Date().toISOString()
+        }));
+        const { error } = await supabase.from('parts').upsert(dbRows, { onConflict: 'part_number' });
+        if (!error && broadcastCloudEvent) {
+          broadcastCloudEvent('PART_SAVED', { count: addedCount, autoRegistered: true });
+        }
+      } catch (cloudErr) {
+        console.warn('[PartsCatalog] Non-blocking cloud upsert note for auto-registered parts:', cloudErr?.message || cloudErr);
+      }
+    } else if (broadcastCloudEvent) {
+      broadcastCloudEvent('PART_SAVED', { count: addedCount, autoRegistered: true });
+    }
+
+    if (!silent && showToast) {
+      showToast(
+        `Auto-registered ${addedCount} new part number${addedCount === 1 ? '' : 's'} to the Parts Catalog.`,
+        'info'
+      );
+    }
+
+    return { success: true, addedCount, addedParts };
+  };
+
   return {
     categories,
     setCategories,
@@ -964,6 +1024,7 @@ export function useCatalogAndSites({
     setSupervisorSettings,
     saveSupervisorSettings,
     savePart,
+    autoRegisterPartsToCatalog,
     deletePart,
     saveSite,
     deleteSite,

@@ -38,7 +38,9 @@ import {
   Globe,
   Activity,
   Clock,
-  MessageSquare
+  MessageSquare,
+  Wrench,
+  Package
 } from 'lucide-react';
 import Feedback from './Feedback';
 
@@ -54,6 +56,8 @@ import BackupRestoreSettings from './BackupRestoreSettings';
 
 const getCategoryBadgeStyle = (catName = '') => {
   const name = String(catName || '').toUpperCase();
+  if (name === 'TOOL' || name === 'SERVICE TOOL' || name.includes('TOOL')) return { bg: '#eff6ff', text: '#1d4ed8', border: '#93c5fd' };
+  if (name === 'CONSUMABLE' || name.includes('CONSUMABLE')) return { bg: '#ecfdf5', text: '#047857', border: '#6ee7b7' };
   if (name.includes('BATTERY')) return { bg: '#ecfdf5', text: '#065f46', border: '#a7f3d0' };
   if (name.includes('DISPLAY')) return { bg: '#eff6ff', text: '#1d4ed8', border: '#bfdbfe' };
   if (name.includes('CAMERA')) return { bg: '#faf5ff', text: '#7e22ce', border: '#e9d5ff' };
@@ -78,6 +82,9 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
     savePart,
     deletePart,
     refreshGsxCatalogFromCsv,
+    rawCtCatalog = [],
+    saveCtCatalogItem,
+    deleteCtCatalogItem,
     saveSite,
     deleteSite,
     refreshSitesFromCloud,
@@ -184,12 +191,14 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
   // Search & Filter State
   const [partSearch, setPartSearch] = useState('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('ALL');
+  const [catalogTypeFilter, setCatalogTypeFilter] = useState('ALL'); // 'ALL' | 'repair_part' | 'tool' | 'consumable'
 
   // New Part Form State
   const [newPn, setNewPn] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [newModel, setNewModel] = useState('iPhone 15');
   const [newCatId, setNewCatId] = useState(categories[0]?.id || 'cat-battery');
+  const [newCatalogType, setNewCatalogType] = useState('repair_part'); // 'repair_part' | 'tool' | 'consumable'
   const [newStockPrice, setNewStockPrice] = useState(150);
   const [showAddPartCard, setShowAddPartCard] = useState(true);
 
@@ -306,14 +315,82 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
   };
 
 
+  // Unified Master Parts Catalog (Repair Parts + Consolidated Tools & Consumables)
+  const ctByPnMap = useMemo(() => {
+    const map = new Map();
+    (rawCtCatalog || []).forEach(ct => {
+      const pn = String(ct.part_number || '').trim().toUpperCase();
+      if (pn) map.set(pn, ct);
+    });
+    return map;
+  }, [rawCtCatalog]);
+
+  const otherCategoryId = useMemo(() => {
+    const otherCat = (categories || []).find(c => String(c.code || '').toUpperCase() === 'OTHER');
+    return otherCat?.id || 'cat-other';
+  }, [categories]);
+
+  const unifiedPartsCatalog = useMemo(() => {
+    const seenPns = new Set();
+    const list = (parts || []).map(p => {
+      const pn = String(p.part_number || '').trim().toUpperCase();
+      if (pn) seenPns.add(pn);
+      const ctMatch = pn ? ctByPnMap.get(pn) : null;
+      const explicitKind = p.item_kind === 'tool' || p.item_kind === 'consumable'
+        ? p.item_kind
+        : (ctMatch ? (ctMatch.item_kind === 'tool' ? 'tool' : 'consumable') : null);
+      return {
+        ...p,
+        catalog_type: explicitKind || 'repair_part',
+        stocking_price: Number(p.stocking_price ?? ctMatch?.unit_cost ?? ctMatch?.stocking_price ?? 0) || 0,
+        _ctItem: ctMatch || null,
+        _ctOnly: false
+      };
+    });
+
+    (rawCtCatalog || []).forEach(ct => {
+      const pn = String(ct.part_number || '').trim().toUpperCase();
+      if (!pn || seenPns.has(pn)) return;
+      seenPns.add(pn);
+      const kind = ct.item_kind === 'tool' ? 'tool' : 'consumable';
+      list.push({
+        id: ct.id || `ct-${pn}`,
+        part_number: pn,
+        description: ct.description || pn,
+        iphone_model: kind === 'tool' ? 'Service Tool' : 'Consumable',
+        category_id: otherCategoryId,
+        stocking_price: Number(ct.unit_cost ?? ct.stocking_price ?? 0) || 0,
+        is_active: ct.is_active !== false,
+        item_kind: kind,
+        catalog_type: kind,
+        _ctItem: ct,
+        _ctOnly: true
+      });
+    });
+
+    return list.sort((a, b) => String(a.part_number || '').localeCompare(String(b.part_number || '')));
+  }, [parts, rawCtCatalog, ctByPnMap, otherCategoryId]);
+
+  const catalogTypeCounts = useMemo(() => {
+    let repair = 0;
+    let tools = 0;
+    let consumables = 0;
+    unifiedPartsCatalog.forEach(p => {
+      if (p.catalog_type === 'tool') tools++;
+      else if (p.catalog_type === 'consumable') consumables++;
+      else repair++;
+    });
+    return { all: unifiedPartsCatalog.length, repair, tools, consumables };
+  }, [unifiedPartsCatalog]);
+
   const partNumberCounts = useMemo(() => {
     const counts = {};
-    (parts || []).forEach(p => {
+    unifiedPartsCatalog.forEach(p => {
       const pn = p.part_number?.trim().toUpperCase();
       if (pn) counts[pn] = (counts[pn] || 0) + 1;
     });
     return counts;
-  }, [parts]);
+  }, [unifiedPartsCatalog]);
 
   const handleAddPart = (e) => {
     e.preventDefault();
@@ -325,7 +402,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
     }
 
     // Validate BOTH Part Number and Description
-    const exactExists = (parts || []).some(p =>
+    const exactExists = unifiedPartsCatalog.some(p =>
       p.part_number?.trim().toUpperCase() === cleanPn &&
       p.description?.trim().toLowerCase() === cleanDesc.toLowerCase()
     );
@@ -334,16 +411,32 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
       return;
     }
 
-    const pnCount = (parts || []).filter(p => p.part_number?.trim().toUpperCase() === cleanPn).length;
+    const pnCount = unifiedPartsCatalog.filter(p => p.part_number?.trim().toUpperCase() === cleanPn).length;
+    const isToolOrConsumable = newCatalogType === 'tool' || newCatalogType === 'consumable';
+    const parsedPrice = parseFloat(newStockPrice) || 0;
 
     savePart({
       part_number: cleanPn,
       description: cleanDesc,
-      iphone_model: newModel.trim() || 'iPhone',
-      category_id: newCatId,
-      stocking_price: parseFloat(newStockPrice) || 0,
+      iphone_model: newModel.trim() || (newCatalogType === 'tool' ? 'Service Tool' : newCatalogType === 'consumable' ? 'Consumable' : 'iPhone'),
+      category_id: isToolOrConsumable ? otherCategoryId : newCatId,
+      stocking_price: parsedPrice,
+      item_kind: isToolOrConsumable ? newCatalogType : null,
       is_active: true
     });
+
+    if (isToolOrConsumable && typeof saveCtCatalogItem === 'function') {
+      saveCtCatalogItem({
+        part_number: cleanPn,
+        description: cleanDesc,
+        item_kind: newCatalogType,
+        unit_cost: parsedPrice,
+        stocking_price: parsedPrice,
+        unit_of_measure: newCatalogType === 'tool' ? 'unit' : 'pcs',
+        is_active: true
+      });
+    }
+
     setNewPn('');
     setNewDesc('');
 
@@ -362,7 +455,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
     const cleanDesc = editingPart.description.trim();
 
     // Check if another part has both identical part number and identical description
-    const duplicate = (parts || []).some(p =>
+    const duplicate = unifiedPartsCatalog.some(p =>
       p.id !== editingPart.id &&
       p.part_number?.trim().toUpperCase() === cleanPn &&
       p.description?.trim().toLowerCase() === cleanDesc.toLowerCase()
@@ -372,13 +465,37 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
       return;
     }
 
+    const nextType = editingPart.catalog_type || 'repair_part';
+    const isToolOrConsumable = nextType === 'tool' || nextType === 'consumable';
+    const parsedPrice = parseFloat(editingPart.stocking_price) || 0;
+
     savePart({
       ...editingPart,
+      id: editingPart._ctOnly ? undefined : editingPart.id,
       part_number: cleanPn,
       description: cleanDesc,
-      iphone_model: editingPart.iphone_model?.trim() || 'iPhone',
-      stocking_price: parseFloat(editingPart.stocking_price) || 0
+      iphone_model: editingPart.iphone_model?.trim() || (nextType === 'tool' ? 'Service Tool' : nextType === 'consumable' ? 'Consumable' : 'iPhone'),
+      category_id: isToolOrConsumable ? (editingPart.category_id || otherCategoryId) : editingPart.category_id,
+      stocking_price: parsedPrice,
+      item_kind: isToolOrConsumable ? nextType : null
     });
+
+    if (isToolOrConsumable && typeof saveCtCatalogItem === 'function') {
+      saveCtCatalogItem({
+        ...(editingPart._ctItem || {}),
+        id: editingPart._ctItem?.id,
+        part_number: cleanPn,
+        description: cleanDesc,
+        item_kind: nextType,
+        unit_cost: parsedPrice,
+        stocking_price: parsedPrice,
+        unit_of_measure: nextType === 'tool' ? 'unit' : 'pcs',
+        is_active: editingPart.is_active !== false
+      });
+    } else if (!isToolOrConsumable && editingPart._ctItem && typeof deleteCtCatalogItem === 'function') {
+      deleteCtCatalogItem(editingPart._ctItem.id || cleanPn);
+    }
+
     setEditingPart(null);
   };
 
@@ -387,7 +504,12 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
     const finalReason = partDeletionReason === 'OTHER'
       ? (customPartDeletionReason.trim() || 'Part permanently removed from catalog by user')
       : (partDeletionReason || 'Obsolete / End-of-Service-Life Part');
-    deletePart(deletingPart, finalReason);
+    if (!deletingPart._ctOnly) {
+      deletePart(deletingPart, finalReason);
+    }
+    if (deletingPart._ctItem && typeof deleteCtCatalogItem === 'function') {
+      deleteCtCatalogItem(deletingPart._ctItem.id || deletingPart.part_number);
+    }
     setDeletingPart(null);
     setPartDeletionReason('Obsolete / End-of-Service-Life Part');
     setCustomPartDeletionReason('');
@@ -471,25 +593,36 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
 
   // Filtered parts calculation
   const filteredParts = useMemo(() => {
-    return (parts || []).filter(p => {
+    return unifiedPartsCatalog.filter(p => {
+      if (catalogTypeFilter !== 'ALL' && p.catalog_type !== catalogTypeFilter) {
+        return false;
+      }
       if (selectedCategoryFilter !== 'ALL') {
-        const cat = getCategoryForPart(p, categories);
-        const activeCat = categories.find(c => c.id === selectedCategoryFilter);
-        const matchesCat = (p.category_id === selectedCategoryFilter) ||
-          (cat && cat.id === selectedCategoryFilter) ||
-          (activeCat && cat && (cat.code === activeCat.code || cat.name === activeCat.name));
-        if (!matchesCat) return false;
+        if (selectedCategoryFilter === '__TOOL__') {
+          if (p.catalog_type !== 'tool') return false;
+        } else if (selectedCategoryFilter === '__CONSUMABLE__') {
+          if (p.catalog_type !== 'consumable') return false;
+        } else {
+          const cat = getCategoryForPart(p, categories);
+          const activeCat = categories.find(c => c.id === selectedCategoryFilter);
+          const matchesCat = (p.category_id === selectedCategoryFilter) ||
+            (cat && cat.id === selectedCategoryFilter) ||
+            (activeCat && cat && (cat.code === activeCat.code || cat.name === activeCat.name));
+          if (!matchesCat) return false;
+        }
       }
       if (partSearch.trim()) {
         const q = partSearch.toLowerCase().trim();
         const pnMatch = p.part_number?.toLowerCase().includes(q);
         const descMatch = p.description?.toLowerCase().includes(q);
         const modelMatch = p.iphone_model?.toLowerCase().includes(q);
-        if (!pnMatch && !descMatch && !modelMatch) return false;
+        const typeMatch = (p.catalog_type === 'tool' && 'tool service tool'.includes(q)) ||
+          (p.catalog_type === 'consumable' && 'consumable consumables'.includes(q));
+        if (!pnMatch && !descMatch && !modelMatch && !typeMatch) return false;
       }
       return true;
     });
-  }, [parts, partSearch, selectedCategoryFilter, categories]);
+  }, [unifiedPartsCatalog, partSearch, selectedCategoryFilter, catalogTypeFilter, categories]);
 
   const totalPartsPages = Math.max(1, Math.ceil(filteredParts.length / PARTS_PAGE_SIZE));
   const safePartsPage = Math.min(partsPage, totalPartsPages);
@@ -500,7 +633,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
 
   useEffect(() => {
     setPartsPage(1);
-  }, [partSearch, selectedCategoryFilter]);
+  }, [partSearch, selectedCategoryFilter, catalogTypeFilter]);
 
   const handleGsxCatalogCsvUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -538,7 +671,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
         >
           <Smartphone size={17} />
           <span>Parts Master Catalog</span>
-          <span className="settings-nav-count">{parts.length}</span>
+          <span className="settings-nav-count">{unifiedPartsCatalog.length}</span>
         </button>
 
         <button
@@ -729,6 +862,28 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
 
                   <div className="form-group" style={{ marginBottom: 0 }}>
                     <label className="form-label" style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#334155' }}>
+                      Catalog Type / Tag
+                    </label>
+                    <select
+                      className="form-select"
+                      value={newCatalogType}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setNewCatalogType(val);
+                        if (val === 'tool' || val === 'consumable') {
+                          setNewCatId(otherCategoryId);
+                        }
+                      }}
+                      style={{ height: '42px', fontSize: '13.5px', borderRadius: '8px' }}
+                    >
+                      <option value="repair_part">Repair Part (Hardware SKU)</option>
+                      <option value="tool">Service Tool</option>
+                      <option value="consumable">Consumable</option>
+                    </select>
+                  </div>
+
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#334155' }}>
                       Category
                     </label>
                     <select
@@ -841,11 +996,11 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                         whiteSpace: 'nowrap'
                       }}
                     >
-                      {filteredParts.length} of {parts.length} Parts
+                      {filteredParts.length} of {unifiedPartsCatalog.length} Parts
                     </span>
                   </div>
                   <p style={{ margin: '3px 0 0', fontSize: '13px', color: '#64748b' }}>
-                    Standardized Apple component SKUs, stock prices, and category definitions
+                    Centralized catalog for Apple repair parts, service tools, and consumables
                   </p>
                 </div>
               </div>
@@ -856,7 +1011,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                   <Search size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                   <input
                     type="text"
-                    placeholder="Search P/N, model, desc..."
+                    placeholder="Search P/N, model, desc, tag..."
                     value={partSearch}
                     onChange={(e) => setPartSearch(e.target.value)}
                     className="form-input"
@@ -880,9 +1035,11 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                   value={selectedCategoryFilter}
                   onChange={(e) => setSelectedCategoryFilter(e.target.value)}
                 >
-                  <option value="ALL">All Categories ({parts.length})</option>
+                  <option value="ALL">All Categories ({unifiedPartsCatalog.length})</option>
+                  <option value="__TOOL__">Service Tools ({catalogTypeCounts.tools})</option>
+                  <option value="__CONSUMABLE__">Consumables ({catalogTypeCounts.consumables})</option>
                   {categories.map(c => {
-                    const count = (parts || []).filter(p => {
+                    const count = unifiedPartsCatalog.filter(p => {
                       const partCat = getCategoryForPart(p, categories);
                       return p.category_id === c.id || partCat?.id === c.id || partCat?.code === c.code;
                     }).length;
@@ -921,6 +1078,76 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                   </label>
                 )}
               </div>
+            </div>
+
+            {/* Unified Catalog Classification Filter Pills */}
+            <div style={{ padding: '12px 24px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                {[
+                  { key: 'ALL', label: 'All Parts', count: catalogTypeCounts.all, icon: Layers, activeBg: '#0f172a', activeColor: '#ffffff' },
+                  { key: 'repair_part', label: 'Repair Parts', count: catalogTypeCounts.repair, icon: Smartphone, activeBg: '#0284c7', activeColor: '#ffffff' },
+                  { key: 'tool', label: 'Service Tools', count: catalogTypeCounts.tools, icon: Wrench, activeBg: '#1d4ed8', activeColor: '#ffffff' },
+                  { key: 'consumable', label: 'Consumables', count: catalogTypeCounts.consumables, icon: Package, activeBg: '#047857', activeColor: '#ffffff' }
+                ].map(tab => {
+                  const Icon = tab.icon;
+                  const active = catalogTypeFilter === tab.key;
+                  return (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onClick={() => {
+                        setCatalogTypeFilter(tab.key);
+                        if (selectedCategoryFilter === '__TOOL__' || selectedCategoryFilter === '__CONSUMABLE__') {
+                          setSelectedCategoryFilter('ALL');
+                        }
+                      }}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '6px 12px',
+                        borderRadius: '8px',
+                        border: active ? `1px solid ${tab.activeBg}` : '1px solid #cbd5e1',
+                        background: active ? tab.activeBg : '#ffffff',
+                        color: active ? tab.activeColor : '#334155',
+                        fontSize: '12.5px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <Icon size={13} />
+                      <span>{tab.label}</span>
+                      <span
+                        style={{
+                          padding: '1px 7px',
+                          borderRadius: '999px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          background: active ? 'rgba(255,255,255,0.2)' : '#f1f5f9',
+                          color: active ? '#ffffff' : '#475569'
+                        }}
+                      >
+                        {tab.count.toLocaleString()}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              {(catalogTypeFilter !== 'ALL' || selectedCategoryFilter !== 'ALL' || partSearch) && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    setCatalogTypeFilter('ALL');
+                    setSelectedCategoryFilter('ALL');
+                    setPartSearch('');
+                  }}
+                  style={{ fontSize: '12px', padding: '5px 10px' }}
+                >
+                  Clear Filters
+                </button>
+              )}
             </div>
 
             {gsxRefreshInfo && (
@@ -969,7 +1196,10 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                       const rowNum = (safePartsPage - 1) * PARTS_PAGE_SIZE + i;
                       const cat = getCategoryForPart(p, categories);
                       const isVariant = partNumberCounts[p.part_number?.toUpperCase()] > 1;
-                      const catBadge = getCategoryBadgeStyle(cat?.name);
+                      const isTool = p.catalog_type === 'tool';
+                      const isConsumable = p.catalog_type === 'consumable';
+                      const badgeLabel = isTool ? 'Service Tool' : isConsumable ? 'Consumable' : (cat?.name || 'Part');
+                      const catBadge = getCategoryBadgeStyle(isTool ? 'TOOL' : isConsumable ? 'CONSUMABLE' : cat?.name);
                       return (
                         <tr
                           key={p.id || `${p.part_number}-${p.description}-${rowNum}`}
@@ -1029,19 +1259,24 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                           <td style={{ textAlign: 'center', padding: '14px 12px' }}>
                             <span
                               style={{
-                                fontSize: '12px',
+                                fontSize: '11.5px',
                                 fontWeight: 700,
                                 padding: '4px 10px',
                                 borderRadius: '7px',
                                 background: catBadge.bg,
                                 color: catBadge.text,
                                 border: `1px solid ${catBadge.border}`,
-                                display: 'inline-block',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
                                 textTransform: 'uppercase',
-                                letterSpacing: '0.03em'
+                                letterSpacing: '0.03em',
+                                whiteSpace: 'nowrap'
                               }}
                             >
-                              {cat?.name || 'Part'}
+                              {isTool && <Wrench size={11} />}
+                              {isConsumable && <Package size={11} />}
+                              <span>{badgeLabel}</span>
                             </span>
                           </td>
                           <td style={{ textAlign: 'right', padding: '14px 14px', fontFamily: 'var(--font-sans)', fontWeight: 700, color: '#047857', fontSize: '14px' }}>
@@ -1190,6 +1425,26 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
 
                 <div className="modal-form-grid-2" style={{ marginBottom: '14px' }}>
                   <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Catalog Type / Tag</label>
+                    <select
+                      className="form-select"
+                      value={editingPart.catalog_type || 'repair_part'}
+                      onChange={(e) => {
+                        const nextType = e.target.value;
+                        setEditingPart({
+                          ...editingPart,
+                          catalog_type: nextType,
+                          category_id: (nextType === 'tool' || nextType === 'consumable') ? otherCategoryId : editingPart.category_id
+                        });
+                      }}
+                    >
+                      <option value="repair_part">Repair Part (Hardware SKU)</option>
+                      <option value="tool">Service Tool</option>
+                      <option value="consumable">Consumable</option>
+                    </select>
+                  </div>
+
+                  <div className="form-group" style={{ marginBottom: 0 }}>
                     <label className="form-label">Category</label>
                     <select
                       className="form-select"
@@ -1201,17 +1456,17 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                       ))}
                     </select>
                   </div>
+                </div>
 
-                  <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label">Stock Price ($)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      className="form-input font-mono"
-                      value={editingPart.stocking_price}
-                      onChange={(e) => setEditingPart({ ...editingPart, stocking_price: e.target.value })}
-                    />
-                  </div>
+                <div className="form-group" style={{ marginBottom: '14px' }}>
+                  <label className="form-label">Stock Price ($)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="form-input font-mono"
+                    value={editingPart.stocking_price}
+                    onChange={(e) => setEditingPart({ ...editingPart, stocking_price: e.target.value })}
+                  />
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px' }}>

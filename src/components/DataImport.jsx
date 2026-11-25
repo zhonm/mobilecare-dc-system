@@ -27,6 +27,7 @@ export default function DataImport() {
     applyParsedDataset,
     sites,
     parts,
+    autoRegisterPartsToCatalog,
     currentUser,
     showToast,
     activePeriod,
@@ -273,6 +274,14 @@ export default function DataImport() {
       await applyParsedDataset(parsedData, auditMeta);
 
       const itemsForForecast = parsedData.payload?.forecastItems || parsedData.forecastItems || [];
+      const allocsForCatalog = parsedData.payload?.allocations || parsedData.allocations || [];
+      const partsForCatalog = parsedData.payload?.parts || parsedData.parts || [];
+      if (typeof autoRegisterPartsToCatalog === 'function') {
+        await autoRegisterPartsToCatalog(
+          [...partsForCatalog, ...allocsForCatalog, ...itemsForForecast],
+          { silent: false }
+        ).catch(() => {});
+      }
       const itemsForAlloc = parsedData.payload?.allocations || parsedData.allocations || [];
 
       // Auto-archive both workbooks to Google Drive

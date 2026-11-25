@@ -75,7 +75,8 @@ export default function FixablyInventoryDashboard({
   initialSelectedSiteId = null,
   setInventoryUnits = null,
   repairUsageRecords = [],
-  setRepairUsageRecords = null
+  setRepairUsageRecords = null,
+  autoRegisterPartsToCatalog = null
 }) {
   const effectiveInventoryUnits = inventoryUnits?.length ? inventoryUnits : _inventoryUnits;
   const isSuperadmin = Boolean(currentUser?.role === 'superadmin' || currentUser?.role === 'SUPERADMIN' || currentUser?.isSuperAdmin);
@@ -740,7 +741,6 @@ export default function FixablyInventoryDashboard({
           if (isMounted) {
             setSnapshot(hydrated);
             setIsLoading(false);
-            setIsDropzoneOpen(false);
           }
           return;
         }
@@ -782,7 +782,7 @@ export default function FixablyInventoryDashboard({
           return;
         }
         setSnapshot(incomingSnapshot);
-        setIsDropzoneOpen(false);
+        // Keep Data Sync Upload panel state untouched on sync events so uploads or background syncs never auto-close it
         setIsLoading(false);
       }
     };
@@ -967,7 +967,7 @@ export default function FixablyInventoryDashboard({
     transferText,
     sourceLabel = 'Manual Multi-File Sync',
     uploadedFileName = '',
-    closeDropzoneOnSuccess = true
+    closeDropzoneOnSuccess = false
   }) => {
     setIsParsing(true);
     setParseProgress({ stage: 'Reading files and validating schemas...', percent: 15 });
@@ -1047,6 +1047,14 @@ export default function FixablyInventoryDashboard({
       setSnapshot(reconciled);
       if (closeDropzoneOnSuccess) {
         setIsDropzoneOpen(false);
+      }
+
+      // Automatically register any part numbers from uploaded CSVs not yet in the Parts Catalog
+      if (typeof autoRegisterPartsToCatalog === 'function' && Array.isArray(reconciled.items) && reconciled.items.length > 0) {
+        autoRegisterPartsToCatalog(
+          [...reconciled.items, ...(Array.isArray(reconciled.transfers) ? reconciled.transfers : [])],
+          { silent: false }
+        ).catch(() => {});
       }
 
       // Cloud Persistence & Realtime Broadcast: Sync compact snapshot (<2.5MB) to Supabase Cloud
@@ -1169,7 +1177,8 @@ export default function FixablyInventoryDashboard({
     repairUsageRecords,
     setInventoryUnits,
     setRepairUsageRecords,
-    sites
+    sites,
+    autoRegisterPartsToCatalog
   ]);
 
   // Handle multiple files selected or dropped simultaneously across slots

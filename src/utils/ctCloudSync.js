@@ -169,7 +169,8 @@ export async function pushCtSnapshotToSupabase(supabaseClient, state, meta = {})
     return { ok: false, error: 'Supabase client unavailable' };
   }
   const updatedAt = meta.updatedAt || new Date().toISOString();
-  const nowDate = new Date(updatedAt);
+  const parsedDate = new Date(updatedAt);
+  const nowDate = Number.isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
   const snapshotData = buildCtSnapshotPayload(state, { ...meta, updatedAt });
 
   try {

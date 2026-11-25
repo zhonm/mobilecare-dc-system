@@ -213,6 +213,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
     pmgSubTab,
     setPmgSubTab,
     setParts,
+    autoRegisterPartsToCatalog,
     batchAddScanInUnits,
     supervisorSettings,
     broadcastCloudEvent,
@@ -2612,6 +2613,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
           sites={sites}
           parts={parts}
           setParts={setParts}
+          autoRegisterPartsToCatalog={autoRegisterPartsToCatalog}
           inventoryUnits={inventoryUnits}
           setInventoryUnits={setInventoryUnits}
           repairUsageRecords={repairUsageRecords}
@@ -6181,6 +6183,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
           sites={sites}
           parts={parts}
           setParts={setParts}
+          autoRegisterPartsToCatalog={autoRegisterPartsToCatalog}
           inventoryUnits={inventoryUnits}
           setInventoryUnits={setInventoryUnits}
           repairUsageRecords={repairUsageRecords}

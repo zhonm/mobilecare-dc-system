@@ -41,11 +41,34 @@ const pendingClients = new Map();
 const DEFAULT_DEBOUNCE_MS = 1200;
 
 /**
+ * Guarantees that every `saved_records` row payload satisfies NOT NULL constraints
+ * on `period_year` and `period_month` (preventing PostgreSQL error 23502).
+ */
+export function ensureSavedRecordPeriodFields(payload) {
+  if (!payload || typeof payload !== 'object') return payload;
+  const now = new Date();
+  const parsedYear = Number(payload.period_year);
+  const parsedMonth = Number(payload.period_month);
+  const safeYear = Number.isInteger(parsedYear) && parsedYear >= 2000 && parsedYear <= 2100
+    ? parsedYear
+    : now.getFullYear();
+  const safeMonth = Number.isInteger(parsedMonth) && parsedMonth >= 1 && parsedMonth <= 12
+    ? parsedMonth
+    : (now.getMonth() + 1);
+
+  return {
+    ...payload,
+    period_year: safeYear,
+    period_month: safeMonth
+  };
+}
+
+/**
  * Core internal worker that executes the Supabase upsert sequentially
  */
 async function executeSequentialUpsert(recordId) {
-  const payload = pendingPayloads.get(recordId);
-  if (!payload) return { success: true, skipped: true };
+  const rawPayload = pendingPayloads.get(recordId);
+  if (!rawPayload) return { success: true, skipped: true };
 
   pendingPayloads.delete(recordId);
   const client = pendingClients.get(recordId) || supabase;
@@ -54,6 +77,8 @@ async function executeSequentialUpsert(recordId) {
   if (!client) {
     return { success: false, error: 'Supabase client not configured' };
   }
+
+  const payload = ensureSavedRecordPeriodFields(rawPayload);
 
   try {
     const { error } = await client.from('saved_records').upsert(payload, { onConflict: 'id' });

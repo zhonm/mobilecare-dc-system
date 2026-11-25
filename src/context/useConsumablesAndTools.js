@@ -26,8 +26,10 @@ import {
   transitionToolAsset,
   updateToolAssetMetadata,
   consumeConsumableStock,
+  adjustConsumableStock,
   createConsumablesToolsShipment,
-  confirmConsumablesToolsDelivery
+  confirmConsumablesToolsDelivery,
+  ensureOwnershipTagIds
 } from '../utils/consumablesToolsEngine.js';
 import {
   detectDuplicateSpreadsheetImport,
@@ -75,6 +77,7 @@ export function useConsumablesAndTools({
   getCurrentUser,
   parts = [],
   savePart = null,
+  autoRegisterPartsToCatalog = null,
   showToast,
   logAuditEvent
 }) {
@@ -131,8 +134,8 @@ export function useConsumablesAndTools({
     return normalizeLegacyCtOrders(saved);
   });
 
-  const [ctStock, setCtStock] = useState(() => readStorageJson(LS_KEYS.stock, []));
-  const [ctToolAssets, setCtToolAssets] = useState(() => readStorageJson(LS_KEYS.toolAssets, []));
+  const [ctStock, setCtStock] = useState(() => ensureOwnershipTagIds(readStorageJson(LS_KEYS.stock, [])));
+  const [ctToolAssets, setCtToolAssets] = useState(() => ensureOwnershipTagIds(readStorageJson(LS_KEYS.toolAssets, [])));
   const [ctMovements, setCtMovements] = useState(() => {
     const saved = readStorageJson(LS_KEYS.movements, []);
     return stripSeedMovements(saved);
@@ -191,8 +194,8 @@ export function useConsumablesAndTools({
       orders: Array.isArray(remoteState.orders)
         ? normalizeLegacyCtOrders(remoteState.orders)
         : latestStateRef.current.orders,
-      stock: Array.isArray(remoteState.stock) ? remoteState.stock : latestStateRef.current.stock,
-      toolAssets: Array.isArray(remoteState.toolAssets) ? remoteState.toolAssets : latestStateRef.current.toolAssets,
+      stock: Array.isArray(remoteState.stock) ? ensureOwnershipTagIds(remoteState.stock) : latestStateRef.current.stock,
+      toolAssets: Array.isArray(remoteState.toolAssets) ? ensureOwnershipTagIds(remoteState.toolAssets) : latestStateRef.current.toolAssets,
       movements: Array.isArray(remoteState.movements)
         ? stripSeedMovements(remoteState.movements)
         : latestStateRef.current.movements,
@@ -400,10 +403,10 @@ export function useConsumablesAndTools({
           );
         }
         if (Array.isArray(dbStk) && dbStk.length > 0) {
-          setCtStock(prev => (prev.length >= dbStk.length ? prev : dbStk));
+          setCtStock(prev => (prev.length >= dbStk.length ? prev : ensureOwnershipTagIds(dbStk)));
         }
         if (Array.isArray(dbAssets) && dbAssets.length > 0) {
-          setCtToolAssets(prev => (prev.length >= dbAssets.length ? prev : dbAssets));
+          setCtToolAssets(prev => (prev.length >= dbAssets.length ? prev : ensureOwnershipTagIds(dbAssets)));
         }
         if (Array.isArray(dbMov) && dbMov.length > 0) {
           const cleanedDbMov = stripSeedMovements(dbMov);
@@ -976,7 +979,24 @@ export function useConsumablesAndTools({
 
   const bulkReceiveCtCsv = useCallback((csvText, defaultSiteCode = null) => {
     const actor = resolveActor();
-    const { validRows, errorRows } = parseConsumablesReceivingCsv(csvText, unifiedCatalog);
+    const { validRows, errorRows, autoRegisteredItems = [] } = parseConsumablesReceivingCsv(csvText, unifiedCatalog, { allowAutoRegister: true });
+    let workingCatalog = [...ctCatalog];
+    let effectiveCatalog = [...unifiedCatalog];
+
+    if (autoRegisteredItems.length > 0) {
+      const existingRawPns = new Set(workingCatalog.map(c => normalizePartNumber(c.part_number)));
+      const newlyAddedCt = autoRegisteredItems.filter(it => !existingRawPns.has(normalizePartNumber(it.part_number)));
+      if (newlyAddedCt.length > 0) {
+        workingCatalog = [...newlyAddedCt, ...workingCatalog];
+        effectiveCatalog = [...newlyAddedCt, ...effectiveCatalog];
+        setCtCatalog(workingCatalog);
+        persistDual(LS_KEYS.catalog, workingCatalog);
+      }
+      if (typeof autoRegisterPartsToCatalog === 'function') {
+        autoRegisterPartsToCatalog(autoRegisteredItems, { silent: false }).catch(() => {});
+      }
+    }
+
     let workingOrders = [...ctOrders];
     let workingStock = [...ctStock];
     let workingAssets = [...ctToolAssets];
@@ -995,7 +1015,7 @@ export function useConsumablesAndTools({
         deliveredQty: row.quantity,
         scannedSerials: row.serials,
         siteCode: row.siteCode || defaultSiteCode || order?.site_code || 'DC-MDC',
-        catalogItems: unifiedCatalog,
+        catalogItems: effectiveCatalog,
         stockRows: workingStock,
         toolAssets: workingAssets,
         actorName: actor.name,
@@ -1054,7 +1074,7 @@ export function useConsumablesAndTools({
       processed,
       errors: runtimeErrors
     };
-  }, [resolveActor, unifiedCatalog, ctOrders, ctStock, ctToolAssets, appendMovements, commitAndSyncState, recordAudit]);
+  }, [resolveActor, unifiedCatalog, ctCatalog, ctOrders, ctStock, ctToolAssets, autoRegisterPartsToCatalog, appendMovements, commitAndSyncState, recordAudit]);
 
   const checkoutTool = useCallback(({ assetId, assignedTo, siteCode = null, notes = '' }) => {
     const actor = resolveActor();
@@ -1167,7 +1187,7 @@ export function useConsumablesAndTools({
     return res;
   }, [resolveActor, ctToolAssets, ctMovements, appendMovements, commitAndSyncState, showToast]);
 
-  const consumeCtStock = useCallback(({ partNumber, siteCode = 'DC-MDC', quantity, notes = '' }) => {
+  const consumeCtStock = useCallback(({ partNumber, siteCode = 'DC-MDC', quantity, unitMode = 'piece', notes = '' }) => {
     const actor = resolveActor();
     const res = consumeConsumableStock({
       catalogItems: unifiedCatalog,
@@ -1175,6 +1195,7 @@ export function useConsumablesAndTools({
       partNumber,
       siteCode,
       quantity,
+      unitMode,
       actorName: actor.name,
       actorId: actor.id,
       notes
@@ -1190,8 +1211,62 @@ export function useConsumablesAndTools({
       { stock: res.nextStockRows, movements: nextMovements },
       { reason: 'ct_consumed', actorName: actor.name }
     );
-    recordAudit('CT_CONSUMED', `${partNumber} (x${quantity}) at ${siteCode}`, { performed_by: actor.name });
-    showToast?.(`Recorded consumption of ${quantity}x ${partNumber} at ${siteCode}`, 'success');
+    const unitLabel = unitMode === 'pack' ? `${quantity} pk` : `${quantity} pc${quantity === 1 ? '' : 's'}`;
+    recordAudit('CT_CONSUMED', `${partNumber} (${unitLabel}) at ${siteCode}`, { performed_by: actor.name });
+    showToast?.(
+      res.lowStockAlert
+        ? `Deducted ${unitLabel} of ${partNumber} at ${siteCode}. Low-stock alert triggered (${res.breakdown.individualUnits} pcs left)!`
+        : `Deducted ${unitLabel} of ${partNumber} at ${siteCode} (${res.breakdown.individualUnits} pcs remaining).`,
+      res.lowStockAlert ? 'warning' : 'success'
+    );
+    return res;
+  }, [resolveActor, unifiedCatalog, ctStock, appendMovements, commitAndSyncState, recordAudit, showToast]);
+
+  const adjustCtStock = useCallback(({
+    stockId = null,
+    partNumber = '',
+    siteCode = 'DC-MDC',
+    newQty,
+    unitMode = 'piece',
+    packSize = null,
+    minStockThreshold = null,
+    reason = 'Physical Cycle Count',
+    notes = ''
+  }) => {
+    const actor = resolveActor();
+    const res = adjustConsumableStock({
+      catalogItems: unifiedCatalog,
+      stockRows: ctStock,
+      stockId,
+      partNumber,
+      siteCode,
+      newQty,
+      unitMode,
+      packSize,
+      minStockThreshold,
+      reason,
+      notes,
+      actorName: actor.name,
+      actorId: actor.id
+    });
+    if (!res.ok) {
+      showToast?.(res.message, 'error');
+      return res;
+    }
+    setCtStock(res.nextStockRows);
+    persistDual(LS_KEYS.stock, res.nextStockRows);
+    const nextMovements = appendMovements([res.movement]);
+    commitAndSyncState(
+      { stock: res.nextStockRows, movements: nextMovements },
+      { reason: 'ct_stock_adjusted', actorName: actor.name }
+    );
+    recordAudit('CT_STOCK_ADJUSTED', `${res.updatedStockRow.part_number} adjusted to ${res.breakdown.individualUnits} pcs at ${res.updatedStockRow.site_code} (${reason})`, {
+      performed_by: actor.name
+    });
+    showToast?.(
+      `Adjusted ${res.updatedStockRow.part_number} at ${res.updatedStockRow.site_code} to ${res.breakdown.individualUnits} pcs (${res.breakdown.fullPacks} pk + ${res.breakdown.looseUnits} loose).`,
+      'success'
+    );
     return res;
   }, [resolveActor, unifiedCatalog, ctStock, appendMovements, commitAndSyncState, recordAudit, showToast]);
 
@@ -1312,6 +1387,9 @@ export function useConsumablesAndTools({
     persistDual(LS_KEYS.catalog, nextCatalog);
     setCtOrders(merged.orders);
     persistDual(LS_KEYS.orders, merged.orders);
+    if (typeof autoRegisterPartsToCatalog === 'function' && nextCatalog.length > 0) {
+      autoRegisterPartsToCatalog(nextCatalog, { silent: true }).catch(() => {});
+    }
     commitAndSyncState(
       { catalog: nextCatalog, orders: merged.orders },
       { reason: 'ct_priority_csv_imported', actorName: actor.name }
@@ -1321,7 +1399,7 @@ export function useConsumablesAndTools({
       'success'
     );
     return { ...imported, catalog: nextCatalog, catalogItems: nextCatalog, orders: merged.orders };
-  }, [resolveActor, ctCatalog, ctOrders, commitAndSyncState, showToast]);
+  }, [resolveActor, ctCatalog, ctOrders, autoRegisterPartsToCatalog, commitAndSyncState, showToast]);
 
   const commitCtPdfImport = useCallback(async ({
     file = null,
@@ -1483,6 +1561,29 @@ export function useConsumablesAndTools({
     );
     const addedToMasterCatalog = [];
 
+    // Auto-register any unregistered parts into the System Parts Master Catalog (Settings -> Parts Catalog) in one batch
+    if (typeof autoRegisterPartsToCatalog === 'function' && selectedItems.length > 0) {
+      try {
+        const autoRes = await autoRegisterPartsToCatalog(
+          selectedItems.map(it => ({
+            part_number: normalizePartNumber(it.part_number),
+            description: String(it.description || it.part_number || '').trim(),
+            stocking_price: Math.max(0, Number(it.unit_cost) || 0),
+            item_kind: it.item_kind === 'tool' ? 'tool' : 'consumable'
+          })),
+          { silent: true }
+        );
+        if (Array.isArray(autoRes?.addedParts)) {
+          autoRes.addedParts.forEach(p => {
+            existingMasterPartsSet.add(p.part_number);
+            addedToMasterCatalog.push(p.part_number);
+          });
+        }
+      } catch {
+        // Non-blocking: continue CT import even if master catalog upsert fails
+      }
+    }
+
     for (const item of selectedItems) {
       const cleanPn = normalizePartNumber(item.part_number);
       const cleanDesc = String(item.description || cleanPn).trim();
@@ -1490,14 +1591,14 @@ export function useConsumablesAndTools({
       const existsInUnified = workingUnifiedCatalog.some(c => normalizePartNumber(c.part_number) === cleanPn);
       const existsInRaw = workingRawCatalog.some(c => normalizePartNumber(c.part_number) === cleanPn);
 
-      // Auto-add missing part to the system Parts Master Catalog (Settings -> Parts Catalog) with its USD price
-      if (cleanPn && !existingMasterPartsSet.has(cleanPn) && typeof savePart === 'function') {
+      // Fallback to savePart only if autoRegisterPartsToCatalog was not provided
+      if (!autoRegisterPartsToCatalog && cleanPn && !existingMasterPartsSet.has(cleanPn) && typeof savePart === 'function') {
         try {
           const partRes = await savePart({
             part_number: cleanPn,
             description: cleanDesc,
             stocking_price: usdPrice > 0 ? usdPrice : 0,
-            part_type: item.item_kind === 'tool' ? 'Tool' : 'Consumable',
+            item_kind: item.item_kind === 'tool' ? 'tool' : 'consumable',
             is_active: true
           });
           if (partRes?.success !== false) {
@@ -1735,7 +1836,7 @@ export function useConsumablesAndTools({
     }
 
     return { ok: importStatus !== 'failed', importRecord, itemErrors };
-  }, [resolveActor, unifiedCatalog, parts, savePart, appendMovements, commitAndSyncState, recordAudit, showToast]);
+  }, [resolveActor, unifiedCatalog, parts, savePart, autoRegisterPartsToCatalog, appendMovements, commitAndSyncState, recordAudit, showToast]);
 
   const openCtSourcePdf = useCallback(async (importOrId) => {
     const rec =
@@ -1788,8 +1889,8 @@ export function useConsumablesAndTools({
       orders: Array.isArray(snapshot.orders)
         ? normalizeLegacyCtOrders(snapshot.orders)
         : latestStateRef.current.orders,
-      stock: Array.isArray(snapshot.stock) ? snapshot.stock : latestStateRef.current.stock,
-      toolAssets: Array.isArray(snapshot.toolAssets) ? snapshot.toolAssets : latestStateRef.current.toolAssets,
+      stock: Array.isArray(snapshot.stock) ? ensureOwnershipTagIds(snapshot.stock) : latestStateRef.current.stock,
+      toolAssets: Array.isArray(snapshot.toolAssets) ? ensureOwnershipTagIds(snapshot.toolAssets) : latestStateRef.current.toolAssets,
       movements: Array.isArray(snapshot.movements)
         ? stripSeedMovements(snapshot.movements)
         : latestStateRef.current.movements,
@@ -1849,6 +1950,7 @@ export function useConsumablesAndTools({
     updateToolStatus,
     updateToolMetadata,
     consumeCtStock,
+    adjustCtStock,
     createCtShipment,
     confirmCtDelivery,
     attachCtShipmentDocument,

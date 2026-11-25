@@ -225,8 +225,10 @@ const csvSample = [
   `SVC20269999,${serializedToolPn},2,DUP-A DUP-A,DC-MDC`
 ].join('\n');
 const parsedBulk = parseConsumablesReceivingCsv(csvSample, catalogWithSerializedTool);
-assert.equal(parsedBulk.validRows.length, 1);
-assert.equal(parsedBulk.errorRows.length, 2);
+assert.equal(parsedBulk.validRows.length, 2, 'Known PN and unregistered PN must both be accepted');
+assert.equal(parsedBulk.autoRegisteredItems.length, 1, 'Unregistered PN must be queued for auto-registration');
+assert.equal(parsedBulk.autoRegisteredItems[0].part_number, 'UNKNOWN-SKU');
+assert.equal(parsedBulk.errorRows.length, 1, 'Only duplicate serial row should error');
 
 console.log('  ✓ PASS: Receiving validations (full, partial, over-delivery, unknown PN, dup serial, qty mismatch)');
 
@@ -237,6 +239,7 @@ const consRes = consumeConsumableStock({
   partNumber: '923-06625',
   siteCode: 'DC-MDC',
   quantity: 3,
+  unitMode: 'pack',
   actorName: 'Tech Alex',
   timestamp: '2026-11-14T11:00:00.000Z'
 });

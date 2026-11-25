@@ -21,6 +21,7 @@ export default function PurchaseOrders() {
   const {
     purchaseOrders = [],
     parts = [],
+    autoRegisterPartsToCatalog,
     addPurchaseOrder,
     deletePurchaseOrder,
     clearCompletedPurchaseOrders,
@@ -277,6 +278,7 @@ export default function PurchaseOrders() {
     });
 
     let count = 0;
+    const allImportedPoItems = [];
     for (const [basePoNum, consolidatedStaged] of poMap.entries()) {
       const calculatedTotal = consolidatedStaged.items.reduce((sum, it) => sum + (Number(it.quantity_ordered || 0) * Number(it.unit_price || 0)), 0);
       const combinedInvoiceRef = consolidatedStaged.invoice_refs.join(', ') || null;
@@ -307,10 +309,17 @@ export default function PurchaseOrders() {
         }))
       };
 
+      allImportedPoItems.push(...poPayload.items);
+
       if (addPurchaseOrder) {
         await addPurchaseOrder(poPayload);
         count++;
       }
+    }
+
+    // Automatically register any part numbers from uploaded PO CSV/Excel/PDF not yet in the Parts Catalog
+    if (typeof autoRegisterPartsToCatalog === 'function' && allImportedPoItems.length > 0) {
+      await autoRegisterPartsToCatalog(allImportedPoItems, { silent: false }).catch(() => {});
     }
 
     setIsBatchImporting(false);

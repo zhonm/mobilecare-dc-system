@@ -1,6 +1,12 @@
 import assert from 'assert';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { validateFixablyFile, reconcileFixablyMultiFile } from '../utils/fixablyInventoryEngine.js';
 import { OFFICIAL_BRANCH_DIRECTORY } from '../constants/branchDirectory.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Setup Mock Browser Globals
 const mockStore = new Map();
@@ -162,6 +168,28 @@ async function runTests() {
   assert.strictEqual(uploadedBatch.reconciled.success, true);
   assert.strictEqual(uploadedBatch.filesProcessed.length, 3, 'All 3 files processed in the single upload action');
   console.log('  ✓ PASS: Single upload action processed all 3 files simultaneously with success');
+
+  // --- Test 5: Data Sync Upload panel stays open after upload & sync broadcasts ---
+  console.log('\n--- Test 5: Data Sync Upload panel remains open after file replacement and upload ---');
+  const dashPath = path.resolve(__dirname, '../components/FixablyInventoryDashboard.jsx');
+  const dashSrc = fs.readFileSync(dashPath, 'utf8');
+
+  const handleApplyMatch = dashSrc.match(/const handleApplySyncedSnapshot\s*=\s*\(incomingSnapshot\)\s*=>\s*\{[\s\S]*?\n {4}\};/);
+  assert(handleApplyMatch, 'handleApplySyncedSnapshot must exist in FixablyInventoryDashboard.jsx');
+  assert(
+    !handleApplyMatch[0].includes('setIsDropzoneOpen(false)'),
+    'handleApplySyncedSnapshot must NOT call setIsDropzoneOpen(false) on sync broadcasts'
+  );
+
+  assert(
+    dashSrc.includes('closeDropzoneOnSuccess = false'),
+    'executeReconciliationAndSync must default closeDropzoneOnSuccess to false'
+  );
+  assert(
+    dashSrc.includes('closeDropzoneOnSuccess: false'),
+    'handleProcessMultiFile must pass closeDropzoneOnSuccess: false'
+  );
+  console.log('  ✓ PASS: Data Sync Upload panel stays open after file replacement, upload, and sync broadcast');
 
   console.log('\n========================================================================');
   console.log('ALL MANUAL UPLOAD BUTTON & MULTI-FILE STAGING TESTS PASSED (100%)');

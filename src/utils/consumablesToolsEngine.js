@@ -141,6 +141,171 @@ export function parseSerialTokens(rawSerials) {
   return { serials, duplicatesInBatch };
 }
 
+export const OWNERSHIP_TAG_CATEGORIES = [
+  { value: 'Apple-Owned', prefix: 'APPLE', bg: '#0f172a', color: '#ffffff', border: '#0f172a' },
+  { value: 'MobileCare-Owned', prefix: 'MCARE', bg: '#eff6ff', color: '#0369a1', border: '#bae6fd' },
+  { value: 'Cable / Admin-Tagged', prefix: 'ADMIN', bg: '#eef2ff', color: '#4338ca', border: '#c7d2fe' },
+  { value: 'Vendor-Loaned', prefix: 'VENDR', bg: '#fffbeb', color: '#b45309', border: '#fde68a' },
+  { value: 'DC-Shared', prefix: 'DCSHR', bg: '#f0fdfa', color: '#0f766e', border: '#99f6e4' }
+];
+
+const TAG_UID_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+
+export function getOwnershipTagCategoryMeta(ownershipTag = 'Apple-Owned') {
+  const raw = String(ownershipTag || 'Apple-Owned').trim();
+  const lower = raw.toLowerCase();
+  if (!raw || lower.includes('apple')) return OWNERSHIP_TAG_CATEGORIES[0];
+  if (lower.includes('mobilecare') || lower.includes('mobicare') || lower.includes('mcare')) return OWNERSHIP_TAG_CATEGORIES[1];
+  if (lower.includes('admin') || lower.includes('cable')) return OWNERSHIP_TAG_CATEGORIES[2];
+  if (lower.includes('vendor') || lower.includes('loan')) return OWNERSHIP_TAG_CATEGORIES[3];
+  if (lower.includes('dc-shared') || lower.includes('shared') || lower.includes('dc ')) return OWNERSHIP_TAG_CATEGORIES[4];
+  const fallbackPrefix = raw.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5) || 'OWNED';
+  return { value: raw, prefix: fallbackPrefix, bg: '#f1f5f9', color: '#334155', border: '#cbd5e1' };
+}
+
+function buildOwnershipUid4(seedText = null, salt = 0) {
+  if (seedText) {
+    let hash = 2166136261 ^ salt;
+    const str = `${seedText}#${salt}`;
+    for (let i = 0; i < str.length; i += 1) {
+      hash ^= str.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    hash = hash >>> 0;
+    let out = '';
+    for (let i = 0; i < 4; i += 1) {
+      out += TAG_UID_ALPHABET[hash % TAG_UID_ALPHABET.length];
+      hash = Math.floor(hash / TAG_UID_ALPHABET.length) ^ ((i + 1) * 17);
+      hash = hash >>> 0;
+    }
+    return out;
+  }
+  let out = '';
+  for (let i = 0; i < 4; i += 1) {
+    out += TAG_UID_ALPHABET[Math.floor(Math.random() * TAG_UID_ALPHABET.length)];
+  }
+  return out;
+}
+
+/**
+ * Generates a unique, human-readable, barcode-friendly Ownership Tag ID:
+ *   <OWNERSHIP_PREFIX>-<PART_NO>-<SITE_SEQ>-<UID4>
+ *
+ * Examples:
+ *   APPLE-07701158-01-4K9A  (1st unit of 077-01158 at a site)
+ *   APPLE-07701158-02-7M2P  (2nd unit of 077-01158 at the same site)
+ *   MCARE-07701158-01-8X3C  (MobileCare-Owned unit)
+ */
+export function generateNextOwnershipTagId({
+  ownershipTag = 'Apple-Owned',
+  partNumber = 'ITEM',
+  siteCode = 'DC-MDC',
+  existingRecords = [],
+  reservedTagIds = null,
+  reservedSitePartSeqs = null,
+  preferredSeq = null,
+  seedKey = null
+} = {}) {
+  const meta = getOwnershipTagCategoryMeta(ownershipTag);
+  const cleanPn = normalizePartNumber(partNumber).replace(/[^A-Z0-9]/g, '') || 'ITEM';
+  const normSite = String(siteCode || 'DC-MDC').trim().toUpperCase();
+  const sitePartKey = `${normSite}::${cleanPn}`;
+
+  const usedTagIds = new Set(
+    (existingRecords || []).map(r => String(r?.ownership_tag_id || '').trim().toUpperCase()).filter(Boolean)
+  );
+  if (reservedTagIds) {
+    reservedTagIds.forEach(t => usedTagIds.add(String(t).toUpperCase()));
+  }
+
+  // Track used per-site, per-part sequence numbers (01, 02, 03, ...)
+  const usedSeqs = new Set();
+  (existingRecords || []).forEach(r => {
+    if (!r) return;
+    const rSite = String(r.site_code || '').trim().toUpperCase();
+    const rPn = normalizePartNumber(r.part_number).replace(/[^A-Z0-9]/g, '');
+    if (rSite === normSite && rPn === cleanPn) {
+      const match = String(r.ownership_tag_id || '').match(/-(\d{2,4})-[A-Z0-9]{4}$/i);
+      if (match) {
+        usedSeqs.add(parseInt(match[1], 10));
+      }
+    }
+  });
+  if (reservedSitePartSeqs && reservedSitePartSeqs.has(sitePartKey)) {
+    reservedSitePartSeqs.get(sitePartKey).forEach(n => usedSeqs.add(n));
+  }
+
+  let seq = Number.isInteger(preferredSeq) && preferredSeq > 0 ? preferredSeq : 1;
+  while (usedSeqs.has(seq)) {
+    seq += 1;
+  }
+
+  const seqStr = String(seq).padStart(2, '0');
+  let salt = 0;
+  let candidate = `${meta.prefix}-${cleanPn}-${seqStr}-${buildOwnershipUid4(seedKey, salt)}`;
+  while (usedTagIds.has(candidate.toUpperCase()) && salt < 50) {
+    salt += 1;
+    candidate = `${meta.prefix}-${cleanPn}-${seqStr}-${buildOwnershipUid4(seedKey, salt)}`;
+  }
+
+  if (reservedTagIds) reservedTagIds.add(candidate.toUpperCase());
+  if (reservedSitePartSeqs) {
+    if (!reservedSitePartSeqs.has(sitePartKey)) reservedSitePartSeqs.set(sitePartKey, new Set());
+    reservedSitePartSeqs.get(sitePartKey).add(seq);
+  }
+  return candidate;
+}
+
+/**
+ * Ensures every tool asset or stock record has a unique system-generated `ownership_tag_id`
+ * with sequential numbering (01, 02, 03...) when the same part number exists multiple times at a site.
+ */
+export function ensureOwnershipTagIds(records = []) {
+  if (!Array.isArray(records) || records.length === 0) return [];
+  const reservedTagIds = new Set();
+  const reservedSitePartSeqs = new Map();
+
+  // First pass: register existing valid ownership_tag_ids
+  records.forEach(r => {
+    if (!r?.ownership_tag_id) return;
+    const cleanId = String(r.ownership_tag_id).trim().toUpperCase();
+    if (!cleanId) return;
+    reservedTagIds.add(cleanId);
+    const rSite = String(r.site_code || 'DC-MDC').trim().toUpperCase();
+    const rPn = normalizePartNumber(r.part_number).replace(/[^A-Z0-9]/g, '') || 'ITEM';
+    const match = cleanId.match(/-(\d{2,4})-[A-Z0-9]{4}$/i);
+    if (match) {
+      const key = `${rSite}::${rPn}`;
+      if (!reservedSitePartSeqs.has(key)) reservedSitePartSeqs.set(key, new Set());
+      reservedSitePartSeqs.get(key).add(parseInt(match[1], 10));
+    }
+  });
+
+  // Second pass: backfill missing ownership_tag_ids deterministically
+  return records.map((r, idx) => {
+    if (!r) return r;
+    const ownershipLabel = String(r.ownership_tag || 'Apple-Owned').trim() || 'Apple-Owned';
+    if (r.ownership_tag_id && String(r.ownership_tag_id).trim()) {
+      return r.ownership_tag ? r : { ...r, ownership_tag: ownershipLabel };
+    }
+    const seedKey = `${r.id || ''}|${r.asset_tag || ''}|${r.site_code || ''}|${r.part_number || ''}|${idx}`;
+    const generatedId = generateNextOwnershipTagId({
+      ownershipTag: ownershipLabel,
+      partNumber: r.part_number || 'ITEM',
+      siteCode: r.site_code || 'DC-MDC',
+      existingRecords: [],
+      reservedTagIds,
+      reservedSitePartSeqs,
+      seedKey
+    });
+    return {
+      ...r,
+      ownership_tag: ownershipLabel,
+      ownership_tag_id: generatedId
+    };
+  });
+}
+
 export function generateNextAssetTag(existingToolAssets = [], partNumber = 'TOOL', reservedSet = null) {
   const cleanPn = normalizePartNumber(partNumber).replace(/[^A-Z0-9]/g, '') || 'TOOL';
   const prefix = `MDC-TL-${cleanPn}-`;
@@ -454,17 +619,29 @@ export function validateAndReceiveOrderLine({
   // Mint individually tracked tool assets when receiving tools
   const newToolAssets = [];
   const reservedTags = new Set();
+  const reservedOwnershipTagIds = new Set();
+  const reservedSitePartSeqs = new Map();
   if (catalogItem.item_kind === 'tool') {
     for (let i = 0; i < qty; i += 1) {
       const serial = parsedSerials.serials[i] || null;
       const assetTag = generateNextAssetTag(toolAssets, cleanPn, reservedTags);
+      const ownershipCategory = catalogItem.ownership_tag || 'Apple-Owned';
+      const ownershipTagId = generateNextOwnershipTagId({
+        ownershipTag: ownershipCategory,
+        partNumber: cleanPn,
+        siteCode: targetSite,
+        existingRecords: toolAssets,
+        reservedTagIds: reservedOwnershipTagIds,
+        reservedSitePartSeqs
+      });
       newToolAssets.push({
         id: generateCtId('ct-asset'),
         catalog_id: catalogItem.id,
         part_number: cleanPn,
         description: catalogItem.description,
         asset_tag: assetTag,
-        ownership_tag: catalogItem.ownership_tag || 'Apple-Owned',
+        ownership_tag: ownershipCategory,
+        ownership_tag_id: ownershipTagId,
         serial_number: serial,
         site_code: targetSite,
         order_id: updatedOrder?.id || null,
@@ -518,10 +695,22 @@ export function validateAndReceiveOrderLine({
           ...prevPdfRefs.filter(p => p.import_id !== sourcePdfMeta.importId)
         ]
       : prevPdfRefs;
+    const stockOwnership = prev.ownership_tag || catalogItem.ownership_tag || 'Apple-Owned';
+    const prevBreakdown = getStockPackBreakdown(prev, catalogItem);
+    const receivedPieces = qty * prevBreakdown.packSize;
+    const nextIndividualPieces = prevBreakdown.individualUnits + receivedPieces;
     updatedStockRow = {
       ...prev,
-      ownership_tag: prev.ownership_tag || catalogItem.ownership_tag || 'Apple-Owned',
-      qty_on_hand: (Number(prev.qty_on_hand) || 0) + qty,
+      pack_size: prevBreakdown.packSize,
+      ownership_tag: stockOwnership,
+      ownership_tag_id: prev.ownership_tag_id || generateNextOwnershipTagId({
+        ownershipTag: stockOwnership,
+        partNumber: cleanPn,
+        siteCode: targetSite,
+        existingRecords: nextStockRows
+      }),
+      individual_qty_on_hand: nextIndividualPieces,
+      qty_on_hand: prevBreakdown.packSize > 1 ? Number((nextIndividualPieces / prevBreakdown.packSize).toFixed(2)) : nextIndividualPieces,
       serial_numbers: mergedSerials,
       ...(sourcePdfMeta ? {
         last_source_pdf_import_id: sourcePdfMeta.importId || null,
@@ -537,15 +726,26 @@ export function validateAndReceiveOrderLine({
     };
     nextStockRows[existingStockIdx] = updatedStockRow;
   } else {
+    const newStockOwnership = catalogItem.ownership_tag || 'Apple-Owned';
+    const detectedPackSize = detectPackSizeFromDescription(catalogItem.description, catalogItem.pack_size || 1);
+    const initialIndividualPieces = qty * detectedPackSize;
     updatedStockRow = {
       id: generateCtId('ct-stk'),
       catalog_id: catalogItem.id,
       part_number: cleanPn,
       description: catalogItem.description,
       item_kind: catalogItem.item_kind,
-      ownership_tag: catalogItem.ownership_tag || 'Apple-Owned',
+      pack_size: detectedPackSize,
+      ownership_tag: newStockOwnership,
+      ownership_tag_id: generateNextOwnershipTagId({
+        ownershipTag: newStockOwnership,
+        partNumber: cleanPn,
+        siteCode: targetSite,
+        existingRecords: nextStockRows
+      }),
       site_code: targetSite,
       qty_on_hand: qty,
+      individual_qty_on_hand: initialIndividualPieces,
       serial_numbers: [...parsedSerials.serials],
       qty_reserved: 0,
       qty_consumed: 0,
@@ -659,16 +859,20 @@ export function validateAndReceiveOrderLine({
   };
 }
 
-export function parseConsumablesReceivingCsv(csvText, catalogItems = []) {
+export function parseConsumablesReceivingCsv(csvText, catalogItems = [], options = {}) {
+  const { allowAutoRegister = true } = options || {};
   const records = parseCsvRecords(csvText);
   if (!Array.isArray(records) || records.length === 0) {
-    return { validRows: [], errorRows: [], headers: [] };
+    return { validRows: [], errorRows: [], headers: [], autoRegisteredItems: [] };
   }
 
   const headers = Object.keys(records[0] || {});
   const colKey = {
     poNumber: headers.find(h => /po.?num|po#|order/i.test(h)),
     partNumber: headers.find(h => /part.?num|sku|\bpn\b|item/i.test(h)),
+    description: headers.find(h => /desc|name/i.test(h) && !/part.?num|sku|\bpn\b/i.test(h)),
+    itemKind: headers.find(h => /type|kind|category/i.test(h)),
+    unitCost: headers.find(h => /price|cost|usd|value/i.test(h)),
     quantity: headers.find(h => /qty|quantity|delivered/i.test(h)),
     serials: headers.find(h => /serial|sn\b/i.test(h)),
     siteCode: headers.find(h => /site|branch|location/i.test(h)),
@@ -678,6 +882,7 @@ export function parseConsumablesReceivingCsv(csvText, catalogItems = []) {
   const { byPn } = buildCatalogLookup(catalogItems);
   const validRows = [];
   const errorRows = [];
+  const autoRegisteredItems = [];
 
   records.forEach((rec, idx) => {
     const rowNumber = idx + 2;
@@ -694,10 +899,36 @@ export function parseConsumablesReceivingCsv(csvText, catalogItems = []) {
       return;
     }
 
-    const catalogItem = byPn.get(partNumber);
+    let catalogItem = byPn.get(partNumber);
     if (!catalogItem) {
-      errorRows.push({ rowNumber, poNumber, partNumber, errorCode: 'UNKNOWN_PART_NUMBER', message: `Unknown Part Number ${partNumber}` });
-      return;
+      if (!allowAutoRegister) {
+        errorRows.push({ rowNumber, poNumber, partNumber, errorCode: 'UNKNOWN_PART_NUMBER', message: `Unknown Part Number ${partNumber}` });
+        return;
+      }
+      const csvDesc = colKey.description ? String(rec[colKey.description] || '').trim() : '';
+      const csvKindRaw = colKey.itemKind ? String(rec[colKey.itemKind] || '').trim().toLowerCase() : '';
+      const csvCostRaw = colKey.unitCost ? parseFloat(String(rec[colKey.unitCost] || '').replace(/[^0-9.-]/g, '')) : 0;
+      const inferredKind = /tool|fixture|jig|driver|opener|press|pocket|heater|station|stand|cutter|tray/.test(`${csvKindRaw} ${csvDesc}`.toLowerCase())
+        ? 'tool'
+        : 'consumable';
+      catalogItem = {
+        id: generateCtId('ct-cat-auto'),
+        part_number: partNumber,
+        description: csvDesc || `Part ${partNumber}`,
+        item_kind: inferredKind,
+        category: inferredKind === 'tool' ? 'Service Tools' : 'Consumables',
+        unit_of_measure: inferredKind === 'tool' ? 'unit' : 'pcs',
+        pack_size: 1,
+        unit_cost: Number.isFinite(csvCostRaw) && csvCostRaw > 0 ? csvCostRaw : 0,
+        stocking_price: Number.isFinite(csvCostRaw) && csvCostRaw > 0 ? csvCostRaw : 0,
+        is_serialized: false,
+        min_stock_threshold: inferredKind === 'tool' ? 1 : 2,
+        reorder_qty: inferredKind === 'tool' ? 1 : 5,
+        is_active: true,
+        auto_registered: true
+      };
+      byPn.set(partNumber, catalogItem);
+      autoRegisteredItems.push(catalogItem);
     }
 
     if (!Number.isInteger(quantity) || quantity <= 0) {
@@ -740,7 +971,7 @@ export function parseConsumablesReceivingCsv(csvText, catalogItems = []) {
     });
   });
 
-  return { validRows, errorRows, headers };
+  return { validRows, errorRows, headers, autoRegisteredItems };
 }
 
 export function transitionToolAsset({
@@ -858,10 +1089,26 @@ export function updateToolAssetMetadata({
     return { ok: true, changed: false, updatedAsset: current, nextToolAssets: toolAssets, movement: null };
   }
 
+  // Regenerate ownership_tag_id whenever ownership category changes (or backfill if missing), preserving per-site sequence
+  let nextOwnershipTagId = current.ownership_tag_id || null;
+  if (ownershipChanged || !nextOwnershipTagId) {
+    const existingSeqMatch = String(current.ownership_tag_id || '').match(/-(\d{2,4})-[A-Z0-9]{4}$/i);
+    const existingSeq = existingSeqMatch ? parseInt(existingSeqMatch[1], 10) : null;
+    const otherAssets = (toolAssets || []).filter(a => a.id !== assetId);
+    nextOwnershipTagId = generateNextOwnershipTagId({
+      ownershipTag: nextOwnershipTag,
+      partNumber: current.part_number,
+      siteCode: current.site_code,
+      existingRecords: otherAssets,
+      preferredSeq: existingSeq
+    });
+  }
+
   const updated = {
     ...current,
     admin_asset_tag: nextAdminTag,
     ownership_tag: nextOwnershipTag,
+    ownership_tag_id: nextOwnershipTagId,
     assigned_to: nextAssignedTo,
     assigned_at: assigneeChanged ? (nextAssignedTo ? timestamp : null) : current.assigned_at,
     updated_at: timestamp
@@ -905,12 +1152,82 @@ export function updateToolAssetMetadata({
   return { ok: true, changed: true, updatedAsset: updated, nextToolAssets, movement };
 }
 
+export function detectPackSizeFromDescription(description = '', fallbackPackSize = 1) {
+  const desc = String(description || '');
+  const patterns = [
+    /\b(\d{1,4})\s*[-]?\s*PK\b/i,
+    /\b(\d{1,4})\s*\/\s*PK\b/i,
+    /\bPACK\s*(?:OF\s*)?(\d{1,4})\b/i,
+    /\b(\d{1,4})\s*PACK\b/i,
+    /\b(\d{1,4})\s*PCS\b/i,
+    /\((\d{1,4})\s*PK\)/i
+  ];
+  for (const re of patterns) {
+    const m = desc.match(re);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (Number.isInteger(n) && n >= 2 && n <= 5000) return n;
+    }
+  }
+  const fb = parseInt(fallbackPackSize, 10);
+  return Number.isInteger(fb) && fb >= 1 ? fb : 1;
+}
+
+export function getStockPackBreakdown(stockRow, catalogItem = null) {
+  const rawPackSize = parseInt(stockRow?.pack_size, 10);
+  const detectedPackSize = detectPackSizeFromDescription(
+    stockRow?.description || catalogItem?.description || '',
+    catalogItem?.pack_size || 1
+  );
+  const packSize = Number.isInteger(rawPackSize) && rawPackSize >= 1
+    ? (rawPackSize === 1 && detectedPackSize > 1 && !stockRow?.pack_size_explicit ? detectedPackSize : rawPackSize)
+    : detectedPackSize;
+
+  const hasExplicitIndividual =
+    stockRow?.individual_qty_on_hand !== undefined &&
+    stockRow?.individual_qty_on_hand !== null &&
+    Number.isFinite(Number(stockRow.individual_qty_on_hand));
+
+  const individualUnits = hasExplicitIndividual
+    ? Math.max(0, Math.round(Number(stockRow.individual_qty_on_hand)))
+    : Math.max(0, Math.round((Number(stockRow?.qty_on_hand) || 0) * packSize));
+
+  const fullPacks = Math.floor(individualUnits / packSize);
+  const looseUnits = individualUnits % packSize;
+  const packEquivalent = packSize > 1 ? Number((individualUnits / packSize).toFixed(2)) : individualUnits;
+
+  const rawMin = stockRow?.min_stock_threshold;
+  const minThresholdUnits =
+    rawMin !== undefined && rawMin !== null && Number.isFinite(Number(rawMin))
+      ? Math.max(0, Math.round(Number(rawMin)))
+      : (packSize > 1 ? Math.max(2, Math.ceil(packSize * 0.5)) : 2);
+
+  const isOutOfStock = individualUnits <= 0;
+  const isLowStock = individualUnits > 0 && minThresholdUnits > 0 && individualUnits <= minThresholdUnits;
+  const suggestedReorderPacks = isOutOfStock || isLowStock
+    ? Math.max(1, Math.ceil(Math.max(minThresholdUnits * 2 - individualUnits, packSize) / packSize))
+    : 0;
+
+  return {
+    packSize,
+    individualUnits,
+    fullPacks,
+    looseUnits,
+    packEquivalent,
+    minThresholdUnits,
+    isOutOfStock,
+    isLowStock,
+    suggestedReorderPacks
+  };
+}
+
 export function consumeConsumableStock({
   catalogItems = [],
   stockRows = [],
   partNumber,
   siteCode = 'DC-MDC',
   quantity,
+  unitMode = 'piece', // 'piece' | 'pack'
   actorName = 'Technician',
   actorId = null,
   notes = '',
@@ -932,21 +1249,50 @@ export function consumeConsumableStock({
       ((s.catalog_id && s.catalog_id === catalogItem.id) || normalizePartNumber(s.part_number) === cleanPn) &&
       String(s.site_code || '').toUpperCase() === String(siteCode).toUpperCase()
   );
-  if (idx === -1 || (Number(stockRows[idx].qty_on_hand) || 0) < qty) {
-    const avail = idx >= 0 ? (Number(stockRows[idx].qty_on_hand) || 0) : 0;
+
+  if (idx === -1) {
     return {
       ok: false,
       errorCode: 'INSUFFICIENT_STOCK',
-      availableQty: avail,
+      availableQty: 0,
       requestedQty: qty,
-      message: `Insufficient stock for ${cleanPn} at ${siteCode}: available ${avail}, requested ${qty}.`
+      message: `Insufficient stock for ${cleanPn} at ${siteCode}: available 0, requested ${qty}.`
     };
   }
 
+  const prevRow = stockRows[idx];
+  const prevBreakdown = getStockPackBreakdown(prevRow, catalogItem);
+  const packSize = prevBreakdown.packSize;
+  const mode = unitMode === 'pack' ? 'pack' : 'piece';
+  const deductPieces = mode === 'pack' ? qty * packSize : qty;
+
+  if (prevBreakdown.individualUnits < deductPieces) {
+    return {
+      ok: false,
+      errorCode: 'INSUFFICIENT_STOCK',
+      availableQty: prevBreakdown.individualUnits,
+      requestedQty: deductPieces,
+      message: `Insufficient stock for ${cleanPn} at ${siteCode}: available ${prevBreakdown.individualUnits} pcs, requested ${deductPieces} pcs.`
+    };
+  }
+
+  const afterPieces = prevBreakdown.individualUnits - deductPieces;
+  const prevConsumedPieces =
+    prevRow.individual_qty_consumed !== undefined && prevRow.individual_qty_consumed !== null
+      ? Number(prevRow.individual_qty_consumed) || 0
+      : Math.round((Number(prevRow.qty_consumed) || 0) * packSize);
+  const nextConsumedPieces = prevConsumedPieces + deductPieces;
+
+  const nextPackQty = packSize > 1 ? Number((afterPieces / packSize).toFixed(2)) : afterPieces;
+  const nextPackConsumed = packSize > 1 ? Number((nextConsumedPieces / packSize).toFixed(2)) : nextConsumedPieces;
+
   const updatedRow = {
-    ...stockRows[idx],
-    qty_on_hand: (Number(stockRows[idx].qty_on_hand) || 0) - qty,
-    qty_consumed: (Number(stockRows[idx].qty_consumed) || 0) + qty,
+    ...prevRow,
+    pack_size: packSize,
+    individual_qty_on_hand: afterPieces,
+    individual_qty_consumed: nextConsumedPieces,
+    qty_on_hand: nextPackQty,
+    qty_consumed: nextPackConsumed,
     last_updated_by: actorId,
     last_updated_by_name: actorName,
     updated_at: timestamp
@@ -954,14 +1300,25 @@ export function consumeConsumableStock({
   const nextStockRows = [...stockRows];
   nextStockRows[idx] = updatedRow;
 
+  const afterBreakdown = getStockPackBreakdown(updatedRow, catalogItem);
+  const packsEquivalent = packSize > 1 ? Number((deductPieces / packSize).toFixed(2)) : deductPieces;
+  const unitDesc = packSize > 1
+    ? `${deductPieces} pc${deductPieces === 1 ? '' : 's'} (${packsEquivalent} pk of ${packSize})`
+    : `${deductPieces} ${catalogItem.unit_of_measure || 'units'}`;
+
   const movement = {
     id: generateCtId('ct-mov'),
     catalog_id: catalogItem.id,
     part_number: cleanPn,
-    description: catalogItem.description,
-    item_kind: catalogItem.item_kind,
+    description: prevRow.description || catalogItem.description,
+    item_kind: catalogItem.item_kind || 'consumable',
     action: 'consumed',
-    quantity: qty,
+    quantity: deductPieces,
+    unit_mode: mode,
+    pack_size: packSize,
+    packs_equivalent: packsEquivalent,
+    before_qty_units: prevBreakdown.individualUnits,
+    after_qty_units: afterPieces,
     serial_numbers: [],
     asset_tags: [],
     from_site_code: siteCode,
@@ -971,11 +1328,240 @@ export function consumeConsumableStock({
     reference_number: `${siteCode}-USE`,
     performed_by: actorId,
     performed_by_name: actorName,
-    notes: notes || `Consumed ${qty} ${catalogItem.unit_of_measure || 'units'} at ${siteCode}`,
+    notes: notes || `Consumed ${unitDesc} at ${siteCode}`,
     created_at: timestamp
   };
 
-  return { ok: true, updatedStockRow: updatedRow, nextStockRows, movement };
+  return {
+    ok: true,
+    updatedStockRow: updatedRow,
+    nextStockRows,
+    movement,
+    breakdown: afterBreakdown,
+    lowStockAlert: afterBreakdown.isLowStock || afterBreakdown.isOutOfStock
+  };
+}
+
+export function adjustConsumableStock({
+  catalogItems = [],
+  stockRows = [],
+  stockId = null,
+  partNumber = '',
+  siteCode = 'DC-MDC',
+  newQty,
+  unitMode = 'piece', // 'piece' | 'pack'
+  packSize: nextPackSizeInput = null,
+  minStockThreshold = null,
+  reason = 'Physical Cycle Count',
+  notes = '',
+  actorName = 'Branch Specialist',
+  actorId = null,
+  timestamp = new Date().toISOString()
+}) {
+  const cleanPn = normalizePartNumber(partNumber);
+  const idx = (stockRows || []).findIndex(s =>
+    (stockId && s.id === stockId) ||
+    (cleanPn && normalizePartNumber(s.part_number) === cleanPn && String(s.site_code || '').toUpperCase() === String(siteCode).toUpperCase())
+  );
+  if (idx === -1) {
+    return { ok: false, errorCode: 'STOCK_NOT_FOUND', message: 'Consumable stock record not found.' };
+  }
+
+  const prevRow = stockRows[idx];
+  const { byPn } = buildCatalogLookup(catalogItems);
+  const catalogItem = byPn.get(normalizePartNumber(prevRow.part_number));
+  const prevBreakdown = getStockPackBreakdown(prevRow, catalogItem);
+
+  const packSize = Number.isInteger(Number(nextPackSizeInput)) && Number(nextPackSizeInput) >= 1
+    ? Math.round(Number(nextPackSizeInput))
+    : prevBreakdown.packSize;
+
+  const parsedTarget = Number(newQty);
+  if (!Number.isFinite(parsedTarget) || parsedTarget < 0) {
+    return { ok: false, errorCode: 'INVALID_QTY', message: 'Adjusted quantity must be 0 or greater.' };
+  }
+
+  const mode = unitMode === 'pack' ? 'pack' : 'piece';
+  const nextPieces = mode === 'pack' ? Math.round(parsedTarget * packSize) : Math.round(parsedTarget);
+  const deltaPieces = nextPieces - prevBreakdown.individualUnits;
+  const nextPackQty = packSize > 1 ? Number((nextPieces / packSize).toFixed(2)) : nextPieces;
+  const nextThreshold = minStockThreshold !== null && minStockThreshold !== undefined && Number.isFinite(Number(minStockThreshold))
+    ? Math.max(0, Math.round(Number(minStockThreshold)))
+    : prevBreakdown.minThresholdUnits;
+
+  const updatedRow = {
+    ...prevRow,
+    pack_size: packSize,
+    pack_size_explicit: Boolean(nextPackSizeInput && Number(nextPackSizeInput) >= 1) || prevRow.pack_size_explicit,
+    individual_qty_on_hand: nextPieces,
+    qty_on_hand: nextPackQty,
+    min_stock_threshold: nextThreshold,
+    last_updated_by: actorId,
+    last_updated_by_name: actorName,
+    updated_at: timestamp
+  };
+
+  const nextStockRows = [...stockRows];
+  nextStockRows[idx] = updatedRow;
+
+  const deltaLabel = deltaPieces >= 0 ? `+${deltaPieces}` : `${deltaPieces}`;
+  const reasonClean = String(reason || 'Stock Adjustment').trim();
+  const detailNote = notes ? `${reasonClean} — ${notes}` : reasonClean;
+
+  const movement = {
+    id: generateCtId('ct-mov'),
+    catalog_id: prevRow.catalog_id || catalogItem?.id || null,
+    part_number: prevRow.part_number,
+    description: prevRow.description || catalogItem?.description || prevRow.part_number,
+    item_kind: 'consumable',
+    action: 'adjusted',
+    quantity: Math.abs(deltaPieces),
+    delta_units: deltaPieces,
+    unit_mode: mode,
+    pack_size: packSize,
+    packs_equivalent: packSize > 1 ? Number((Math.abs(deltaPieces) / packSize).toFixed(2)) : Math.abs(deltaPieces),
+    before_qty_units: prevBreakdown.individualUnits,
+    after_qty_units: nextPieces,
+    serial_numbers: [],
+    asset_tags: [],
+    from_site_code: prevRow.site_code,
+    to_site_code: prevRow.site_code,
+    reference_type: 'adjustment',
+    reference_id: updatedRow.id,
+    reference_number: `${prevRow.site_code}-ADJ`,
+    performed_by: actorId,
+    performed_by_name: actorName,
+    notes: `${detailNote} (${prevBreakdown.individualUnits} → ${nextPieces} pcs, ${deltaLabel} pcs)`,
+    created_at: timestamp
+  };
+
+  return {
+    ok: true,
+    updatedStockRow: updatedRow,
+    nextStockRows,
+    movement,
+    deltaPieces,
+    breakdown: getStockPackBreakdown(updatedRow, catalogItem)
+  };
+}
+
+export function computeConsumableUsageAnalytics(stockRows = [], movements = [], options = {}) {
+  const { siteCode = 'ALL', days = 30 } = options || {};
+  const siteNorm = String(siteCode || 'ALL').trim().toUpperCase();
+  const nowMs = Date.now();
+  const cutoffMs = nowMs - Math.max(1, days) * 24 * 60 * 60 * 1000;
+
+  const scopedStock = (stockRows || []).filter(s => {
+    if (!s || s.item_kind === 'tool') return false;
+    if (siteNorm !== 'ALL' && String(s.site_code || '').trim().toUpperCase() !== siteNorm) return false;
+    return true;
+  });
+
+  const stockByPn = new Map();
+  const lowStockAlerts = [];
+  scopedStock.forEach(row => {
+    const pn = normalizePartNumber(row.part_number);
+    const breakdown = getStockPackBreakdown(row);
+    if (!stockByPn.has(pn)) {
+      stockByPn.set(pn, { pieces: 0, packSize: breakdown.packSize, description: row.description || pn });
+    }
+    const entry = stockByPn.get(pn);
+    entry.pieces += breakdown.individualUnits;
+    if (breakdown.packSize > entry.packSize) entry.packSize = breakdown.packSize;
+
+    if (breakdown.isLowStock || breakdown.isOutOfStock) {
+      lowStockAlerts.push({
+        ...row,
+        breakdown,
+        suggested_reorder_packs: breakdown.suggestedReorderPacks
+      });
+    }
+  });
+
+  const auditLog = (movements || [])
+    .filter(m => {
+      if (!m || (m.action !== 'consumed' && m.action !== 'adjusted')) return false;
+      if (siteNorm !== 'ALL') {
+        const fromMatch = String(m.from_site_code || '').trim().toUpperCase() === siteNorm;
+        const toMatch = String(m.to_site_code || '').trim().toUpperCase() === siteNorm;
+        if (!fromMatch && !toMatch) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+
+  const consumedByPn = new Map();
+  const dailyMap = new Map();
+  let totalPiecesConsumed = 0;
+
+  auditLog.forEach(m => {
+    if (m.action !== 'consumed') return;
+    const ts = new Date(m.created_at || 0).getTime();
+    if (Number.isFinite(ts) && ts < cutoffMs) return;
+
+    const pn = normalizePartNumber(m.part_number);
+    const qtyPieces = Math.max(0, Number(m.quantity) || 0);
+    const packSize = Math.max(1, Number(m.pack_size) || detectPackSizeFromDescription(m.description, 1));
+    totalPiecesConsumed += qtyPieces;
+
+    if (!consumedByPn.has(pn)) {
+      consumedByPn.set(pn, {
+        part_number: pn,
+        description: m.description || stockByPn.get(pn)?.description || pn,
+        pack_size: packSize,
+        total_pieces_used: 0,
+        events_count: 0,
+        sites: new Set()
+      });
+    }
+    const agg = consumedByPn.get(pn);
+    agg.total_pieces_used += qtyPieces;
+    agg.events_count += 1;
+    if (m.from_site_code) agg.sites.add(String(m.from_site_code).toUpperCase());
+
+    const dayKey = m.created_at ? String(m.created_at).slice(0, 10) : new Date().toISOString().slice(0, 10);
+    if (!dailyMap.has(dayKey)) {
+      dailyMap.set(dayKey, { date: dayKey, pieces_used: 0, events_count: 0 });
+    }
+    const dEntry = dailyMap.get(dayKey);
+    dEntry.pieces_used += qtyPieces;
+    dEntry.events_count += 1;
+  });
+
+  const topConsumed = Array.from(consumedByPn.values())
+    .map(item => {
+      const stockInfo = stockByPn.get(item.part_number);
+      const currentPieces = stockInfo?.pieces ?? 0;
+      const avgDaily = Number((item.total_pieces_used / Math.max(1, days)).toFixed(2));
+      const estDaysRemaining = avgDaily > 0 ? Math.round(currentPieces / avgDaily) : null;
+      return {
+        part_number: item.part_number,
+        description: item.description,
+        pack_size: item.pack_size,
+        site_codes: Array.from(item.sites).sort(),
+        total_pieces_used: item.total_pieces_used,
+        total_packs_used: item.pack_size > 1 ? Number((item.total_pieces_used / item.pack_size).toFixed(2)) : item.total_pieces_used,
+        events_count: item.events_count,
+        avg_daily_pieces: avgDaily,
+        current_pieces_on_hand: currentPieces,
+        est_days_remaining: estDaysRemaining
+      };
+    })
+    .sort((a, b) => b.total_pieces_used - a.total_pieces_used);
+
+  const dailyTrend = Array.from(dailyMap.values())
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(-14);
+
+  lowStockAlerts.sort((a, b) => a.breakdown.individualUnits - b.breakdown.individualUnits);
+
+  return {
+    totalPiecesConsumed,
+    topConsumed,
+    dailyTrend,
+    lowStockAlerts,
+    auditLog
+  };
 }
 
 export function generateNextCtShipmentNumbers(existingShipments = [], isoDate = new Date().toISOString()) {

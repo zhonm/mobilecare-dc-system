@@ -1503,6 +1503,8 @@ export function useShipments({
             id: updatedShipment.id,
             record_type: 'shipment',
             period_label: updatedShipment.invoice_ref || updatedShipment.shipment_number,
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
             snapshot_data: updatedShipment,
             updated_at: nowIso
           });

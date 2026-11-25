@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import { getSiteColorTheme, isCanonicalToolKind } from './ctSpreadsheetImporter.js';
+import { getStockPackBreakdown, computeConsumableUsageAnalytics } from './consumablesToolsEngine.js';
 import { formatTo12HourTime } from './dateUtils.js';
 
 const HEADER_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
@@ -136,6 +137,7 @@ function triggerExcelDownload(buffer, fileName) {
 export async function buildCtCenterExcelBuffer({
   toolAssets = [],
   consumablesStock = [],
+  movements = [],
   catalog = [],
   siteFilter = 'ALL',
   statusFilter = 'ALL',
@@ -456,13 +458,14 @@ export async function buildCtCenterExcelBuffer({
     { header: 'Status', key: 'status', width: 14 },
     { header: 'Assigned To', key: 'assigned_to', width: 22 },
     { header: 'Ownership Tag', key: 'ownership_tag', width: 18 },
+    { header: 'Ownership Tag ID', key: 'ownership_tag_id', width: 26 },
     { header: 'Assigned Date', key: 'assigned_at', width: 14 },
     { header: 'PO Reference', key: 'po_number', width: 18 },
     { header: 'Last Updated', key: 'updated_at', width: 16 },
     { header: 'Notes', key: 'notes', width: 32 }
   ];
   styleTableHeader(toolsWs.getRow(1));
-  toolsWs.autoFilter = 'A1:M1';
+  toolsWs.autoFilter = 'A1:N1';
 
   scopedTools.forEach((a, idx) => {
     const r = toolsWs.addRow({
@@ -475,47 +478,153 @@ export async function buildCtCenterExcelBuffer({
       status: String(a.status || '').toUpperCase(),
       assigned_to: a.assigned_to || '',
       ownership_tag: a.ownership_tag || 'Apple-Owned',
+      ownership_tag_id: a.ownership_tag_id || '',
       assigned_at: formatIsoDate(a.assigned_at),
       po_number: a.po_number || a.order_po_number || '',
       updated_at: formatIsoDate(a.updated_at || a.created_at),
       notes: a.notes || ''
     });
-    styleDataRow(r, idx % 2 === 1, { wrapCols: [5, 13] });
+    styleDataRow(r, idx % 2 === 1, { wrapCols: [5, 14] });
     applyStatusCellStyle(r.getCell('status'), a.status);
   });
 
-  // ── Sheet 3: Consumables Stock ─────────────────────────────────────────
+  // ── Sheet 3: Consumables Stock (Pack & Individual Piece Tracking) ────────
   const consWs = workbook.addWorksheet('Consumables Stock', { views: [{ state: 'frozen', ySplit: 1 }] });
   consWs.columns = [
     { header: 'Site', key: 'site_code', width: 16 },
     { header: 'Ownership Tag', key: 'ownership_tag', width: 18 },
+    { header: 'Ownership Tag ID', key: 'ownership_tag_id', width: 26 },
     { header: 'Part Number', key: 'part_number', width: 18 },
     { header: 'Description', key: 'description', width: 44 },
-    { header: 'Qty On Hand', key: 'qty_on_hand', width: 14 },
-    { header: 'Reorder Level', key: 'reorder_level', width: 14 },
+    { header: 'Pack Size (pcs/pk)', key: 'pack_size', width: 16 },
+    { header: 'Full Packs', key: 'full_packs', width: 12 },
+    { header: 'Loose Pieces', key: 'loose_units', width: 13 },
+    { header: 'Individual Pieces On Hand', key: 'individual_units', width: 22 },
+    { header: 'Min Threshold (pcs)', key: 'min_threshold', width: 18 },
     { header: 'Stock Status', key: 'stock_status', width: 14 },
     { header: 'Last Updated', key: 'updated_at', width: 16 }
   ];
   styleTableHeader(consWs.getRow(1));
-  consWs.autoFilter = 'A1:H1';
+  consWs.autoFilter = 'A1:L1';
 
   scopedConsumables.forEach((row, idx) => {
     const cat = catalogDescMap.get(String(row.part_number || '').trim().toUpperCase());
-    const qty = Number(row.qty_on_hand || 0);
-    const reorder = Number(row.reorder_level ?? cat?.reorder_level ?? 0);
-    const stockStatus = reorder > 0 && qty <= reorder ? 'Low Stock' : 'OK';
+    const bd = getStockPackBreakdown(row, cat);
+    const stockStatus = bd.isOutOfStock ? 'Out of Stock' : bd.isLowStock ? 'Low Stock' : 'OK';
     const r = consWs.addRow({
       site_code: row.site_code || '',
       ownership_tag: row.ownership_tag || 'Apple-Owned',
+      ownership_tag_id: row.ownership_tag_id || '',
       part_number: row.part_number || '',
       description: resolveDesc(row.part_number, row.description),
-      qty_on_hand: qty,
-      reorder_level: reorder,
+      pack_size: bd.packSize,
+      full_packs: bd.fullPacks,
+      loose_units: bd.looseUnits,
+      individual_units: bd.individualUnits,
+      min_threshold: bd.minThresholdUnits,
       stock_status: stockStatus,
       updated_at: formatIsoDate(row.updated_at || row.last_received_at)
     });
-    styleDataRow(r, idx % 2 === 1, { wrapCols: [4] });
+    styleDataRow(r, idx % 2 === 1, { wrapCols: [5] });
     applyStatusCellStyle(r.getCell('stock_status'), stockStatus);
+  });
+
+  // Compute usage, low-stock alerts & replenishment forecast analytics for DC reporting sheets
+  const analytics = computeConsumableUsageAnalytics(scopedConsumables, movements, {
+    siteCode: isAllSites ? 'ALL' : cleanSite,
+    days: 30
+  });
+
+  // ── Sheet 4: Low-Stock & Reorder Alerts ────────────────────────────────
+  const alertsWs = workbook.addWorksheet('Low-Stock Alerts', { views: [{ state: 'frozen', ySplit: 1 }] });
+  alertsWs.columns = [
+    { header: 'Site', key: 'site_code', width: 16 },
+    { header: 'Part Number', key: 'part_number', width: 18 },
+    { header: 'Description', key: 'description', width: 44 },
+    { header: 'Pack Size', key: 'pack_size', width: 12 },
+    { header: 'Remaining (pcs)', key: 'remaining_pcs', width: 16 },
+    { header: 'Min Threshold (pcs)', key: 'min_threshold', width: 18 },
+    { header: 'Suggested Reorder (pks)', key: 'suggested_reorder', width: 22 },
+    { header: 'Status', key: 'status', width: 15 }
+  ];
+  styleTableHeader(alertsWs.getRow(1));
+  alertsWs.autoFilter = 'A1:H1';
+
+  analytics.lowStockAlerts.forEach((al, idx) => {
+    const status = al.breakdown.isOutOfStock ? 'Out of Stock' : 'Low Stock';
+    const r = alertsWs.addRow({
+      site_code: al.site_code || '',
+      part_number: al.part_number || '',
+      description: resolveDesc(al.part_number, al.description),
+      pack_size: al.breakdown.packSize,
+      remaining_pcs: al.breakdown.individualUnits,
+      min_threshold: al.breakdown.minThresholdUnits,
+      suggested_reorder: al.suggested_reorder_packs,
+      status
+    });
+    styleDataRow(r, idx % 2 === 1, { wrapCols: [3] });
+    applyStatusCellStyle(r.getCell('status'), status);
+  });
+
+  // ── Sheet 5: Usage & Adjustment Audit Trail ────────────────────────────
+  const usageWs = workbook.addWorksheet('Usage & Audit Trail', { views: [{ state: 'frozen', ySplit: 1 }] });
+  usageWs.columns = [
+    { header: 'Timestamp', key: 'created_at', width: 22 },
+    { header: 'Action', key: 'action', width: 14 },
+    { header: 'Site', key: 'site_code', width: 15 },
+    { header: 'Part Number', key: 'part_number', width: 18 },
+    { header: 'Description', key: 'description', width: 40 },
+    { header: 'Pieces Used / Delta', key: 'qty_pcs', width: 18 },
+    { header: 'Packs Equivalent', key: 'packs_eq', width: 16 },
+    { header: 'Performed By', key: 'performed_by', width: 22 },
+    { header: 'Reason / Notes', key: 'notes', width: 38 }
+  ];
+  styleTableHeader(usageWs.getRow(1));
+  usageWs.autoFilter = 'A1:I1';
+
+  analytics.auditLog.forEach((ev, idx) => {
+    const isAdj = ev.action === 'adjusted';
+    const r = usageWs.addRow({
+      created_at: ev.created_at ? `${formatIsoDate(ev.created_at)} ${formatTo12HourTime(ev.created_at)}` : '',
+      action: isAdj ? 'ADJUSTED' : 'DEDUCTED',
+      site_code: ev.from_site_code || '',
+      part_number: ev.part_number || '',
+      description: ev.description || '',
+      qty_pcs: isAdj ? (ev.delta_units ?? ev.quantity ?? 0) : -(ev.quantity || 0),
+      packs_eq: ev.packs_equivalent ?? ev.quantity ?? 0,
+      performed_by: ev.performed_by_name || '',
+      notes: ev.notes || ''
+    });
+    styleDataRow(r, idx % 2 === 1, { wrapCols: [5, 9] });
+  });
+
+  // ── Sheet 6: Consumption Trends & Replenishment Forecast ───────────────
+  const trendsWs = workbook.addWorksheet('Consumption Trends', { views: [{ state: 'frozen', ySplit: 1 }] });
+  trendsWs.columns = [
+    { header: 'Part Number', key: 'part_number', width: 18 },
+    { header: 'Description', key: 'description', width: 42 },
+    { header: 'Pack Size', key: 'pack_size', width: 12 },
+    { header: 'Pieces Used (30d)', key: 'total_pieces_used', width: 18 },
+    { header: 'Packs Used (30d)', key: 'total_packs_used', width: 18 },
+    { header: 'Avg Daily (pcs)', key: 'avg_daily_pieces', width: 16 },
+    { header: 'Current On Hand (pcs)', key: 'current_pieces_on_hand', width: 20 },
+    { header: 'Est. Days Remaining', key: 'est_days_remaining', width: 20 }
+  ];
+  styleTableHeader(trendsWs.getRow(1));
+  trendsWs.autoFilter = 'A1:H1';
+
+  analytics.topConsumed.forEach((t, idx) => {
+    const r = trendsWs.addRow({
+      part_number: t.part_number,
+      description: t.description,
+      pack_size: t.pack_size,
+      total_pieces_used: t.total_pieces_used,
+      total_packs_used: t.total_packs_used,
+      avg_daily_pieces: t.avg_daily_pieces,
+      current_pieces_on_hand: t.current_pieces_on_hand,
+      est_days_remaining: t.est_days_remaining !== null ? t.est_days_remaining : '—'
+    });
+    styleDataRow(r, idx % 2 === 1, { wrapCols: [2] });
   });
 
   return workbook.xlsx.writeBuffer();
