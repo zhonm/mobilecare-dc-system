@@ -2978,36 +2978,24 @@ export function useCloudSync({
           idbBranchCachedUnits = await dbStorage.getItem('mdc_branch_inventory_units');
         } catch (e) {}
 
-        let activeLocalSerials = new Set();
-        try {
-          const localInv = readInventoryFromLocalStorage();
-          [...(localInv || []), ...(Array.isArray(inventoryUnits) ? inventoryUnits : []), ...(Array.isArray(idbCachedUnits) ? idbCachedUnits : [])].forEach(u => {
-            const s = String(u?.serial_number || '').trim().toUpperCase();
-            if (s && !u.is_deleted && u.status !== 'deleted') activeLocalSerials.add(s);
-          });
-        } catch (e) {}
-
+        // Build authoritative deleted serials set: union of local tombstones AND cloud deleted_unit_serials_registry.
+        // Never strip cloud deletions just because a stale local cache still contains the unit;
+        // re-scanning a serial explicitly removes it from deleted_unit_serials_registry on the writer side.
         let deletedSerialsSet = new Set();
         try {
           const localDeletedSerials = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
           const combined = new Set([
-            ...localDeletedSerials,
+            ...(Array.isArray(localDeletedSerials) ? localDeletedSerials : []),
             ...cloudDeletedSerials
-          ].map(s => String(s).trim().toUpperCase()));
-          // Guard against stale cloud deleted serials resurrecting deletions for active inventory
-          // but strictly preserve serials explicitly registered in localDeletedSerials
-          const localExplicitSet = new Set((localDeletedSerials || []).map(s => String(s).trim().toUpperCase()));
-          activeLocalSerials.forEach(s => {
-            if (!localExplicitSet.has(s)) {
-              combined.delete(s);
-            }
-          });
+          ].map(s => String(s).trim().toUpperCase()).filter(Boolean));
           deletedSerialsSet = combined;
-          localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(Array.from(deletedSerialsSet)));
+          const nextDeletedArr = Array.from(deletedSerialsSet);
+          localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(nextDeletedArr));
+          dbStorage.setItem('mdc_deleted_unit_serials', nextDeletedArr);
         } catch (e) {
-          const combined = new Set(cloudDeletedSerials.map(s => String(s).trim().toUpperCase()));
-          activeLocalSerials.forEach(s => combined.delete(s));
-          deletedSerialsSet = combined;
+          deletedSerialsSet = new Set(
+            cloudDeletedSerials.map(s => String(s).trim().toUpperCase()).filter(Boolean)
+          );
         }
 
         // Synchronize cleared sites registry across network
