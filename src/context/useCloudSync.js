@@ -213,6 +213,10 @@ export function useCloudSync({
       'INVENTORY_CACHE_INVALIDATED',
       'STOCK_UPDATED',
       'UNITS_IMPORTED',
+      'UNIT_ADDED',
+      'UNIT_SAVED',
+      'UNIT_DELETED',
+      'STOCK_UNITS_CLEARED',
       'MASTER_DATA_UPDATED',
       'MASTER_DATA_CLEARED',
       'FIFO_AUDIT_UPDATED',
@@ -4219,12 +4223,34 @@ export function useCloudSync({
       });
     } else if (type === 'UNIT_DELETED' && payload.serialNumber) {
       const cleanS = String(payload.serialNumber).trim().toUpperCase();
+      // Record tombstone locally so a concurrent/stale snapshot can never resurrect the deleted serial
+      try {
+        const localDel = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
+        if (!localDel.includes(cleanS)) {
+          const nextDel = Array.from(new Set([...localDel, cleanS]));
+          localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(nextDel));
+          dbStorage.setItem('mdc_deleted_unit_serials', nextDel);
+        }
+      } catch (e) {}
       setInventoryUnits(prev => {
         const updated = (prev || []).filter(u => String(u.serial_number || '').trim().toUpperCase() !== cleanS);
         saveInventoryToLocalStorage(updated);
         dbStorage.setItem('mdc_inventory', updated);
         return updated;
       });
+      if (setDcIntakeRecords) {
+        setDcIntakeRecords(prev => {
+          const updatedRecs = (prev || []).map(rec => {
+            if (!Array.isArray(rec.items)) return rec;
+            const filtered = rec.items.filter(it => String(it.serial_number || '').trim().toUpperCase() !== cleanS);
+            if (filtered.length === rec.items.length) return rec;
+            return { ...rec, items: filtered, total_units: filtered.length };
+          }).filter(rec => !Array.isArray(rec.items) || rec.items.length > 0);
+          try { localStorage.setItem('mdc_dc_intake_records', JSON.stringify(updatedRecs)); } catch (e) {}
+          dbStorage.setItem('mdc_dc_intake_records', updatedRecs);
+          return updatedRecs;
+        });
+      }
     } else if (type === 'KGB_USED_REPORT_SYNCED' || (type === 'PART_MARKED_AS_USED' && !payload.unit && !payload.serialNumber && !payload.usage)) {
       if (typeof autoRefreshData === 'function') {
         Promise.resolve(autoRefreshData({
@@ -4528,7 +4554,7 @@ export function useCloudSync({
         return updated;
       });
     }
-  }, [setInventoryUnits, currentUser, broadcastCloudEvent, autoRefreshData]);
+  }, [setInventoryUnits, setDcIntakeRecords, currentUser, broadcastCloudEvent, autoRefreshData]);
 
   // 1. Initial Supabase Hydration and Realtime Subscriptions on app mount
   useEffect(() => {
@@ -4827,7 +4853,10 @@ export function useCloudSync({
             } else if (['SHIPMENT_RECEIVED', 'BRANCH_STOCK_UPDATED'].includes(bType)) {
               autoRefreshData({ force: false, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]`, tables: ['shipments', 'saved_records', 'inventory_units'] });
             } else if (['SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
-              if (['STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
+              if (bType === 'UNIT_DELETED' && bPayload?.serialNumber) {
+                handleRealtimeInventoryEvent('UNIT_DELETED', bPayload);
+                autoRefreshData({ force: true, silent: true, isManual: false, reason: 'WebSocket Broadcast [UNIT_DELETED]', tables: ['inventory_units', 'saved_records'] });
+              } else if (['STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
                 triggerDebouncedRealtimeSync(`WebSocket Broadcast [${bType}]`, 'inventory_units');
               } else {
                 autoRefreshData({ force: false, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]`, tables: ['shipments', 'saved_records'] });

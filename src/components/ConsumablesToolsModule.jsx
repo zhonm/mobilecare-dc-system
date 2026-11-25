@@ -1568,18 +1568,40 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
           ))}
         </datalist>
 
-        {/* 4 Modern KPI Metric Cards */}
+        {/* 4 Modern KPI Metric Cards (DC/Superadmin see Open Orders & Dedicated Shipments; PMG/Branch see Low-Stock Alerts & 30d Usage) */}
         <div className="ct-kpi-grid">
-          <div className="ct-kpi-card">
-            <div>
-              <div className="ct-kpi-label">Open Orders</div>
-              <div className="ct-kpi-value" style={{ color: '#b45309' }}>{kpis.openOrdersCount}</div>
-              <div className="ct-kpi-sub">Pending PO deliveries</div>
+          {isDcAdmin ? (
+            <div className="ct-kpi-card">
+              <div>
+                <div className="ct-kpi-label">Open Orders</div>
+                <div className="ct-kpi-value" style={{ color: '#b45309' }}>{kpis.openOrdersCount}</div>
+                <div className="ct-kpi-sub">Pending PO deliveries</div>
+              </div>
+              <div className="ct-kpi-icon" style={{ background: '#fef3c7', color: '#b45309' }}>
+                <ClipboardList size={18} />
+              </div>
             </div>
-            <div className="ct-kpi-icon" style={{ background: '#fef3c7', color: '#b45309' }}>
-              <ClipboardList size={18} />
+          ) : (
+            <div
+              className="ct-kpi-card"
+              onClick={() => setAssetsSubTab('usage')}
+              style={{ cursor: 'pointer' }}
+              title="Click to view Low-Stock Reorder Queue"
+            >
+              <div>
+                <div className="ct-kpi-label">Low-Stock Alerts</div>
+                <div className="ct-kpi-value" style={{ color: kpis.lowStockCount > 0 ? '#dc2626' : '#059669' }}>
+                  {kpis.lowStockCount}
+                </div>
+                <div className="ct-kpi-sub">
+                  {kpis.lowStockCount > 0 ? 'Items at or below threshold' : 'All consumables healthy'}
+                </div>
+              </div>
+              <div className="ct-kpi-icon" style={{ background: kpis.lowStockCount > 0 ? '#fef2f2' : '#ecfdf5', color: kpis.lowStockCount > 0 ? '#dc2626' : '#059669' }}>
+                <Bell size={18} />
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="ct-kpi-card">
             <div>
@@ -1598,23 +1620,45 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
             <div>
               <div className="ct-kpi-label">Tracked Tool Units</div>
               <div className="ct-kpi-value" style={{ color: '#1d4ed8' }}>{kpis.totalAssets.toLocaleString()}</div>
-              <div className="ct-kpi-sub">{kpis.availableAssets} available for deployment</div>
+              <div className="ct-kpi-sub">
+                {kpis.availableAssets} available{kpis.inUseAssets > 0 ? ` · ${kpis.inUseAssets} in use` : ' for deployment'}
+              </div>
             </div>
             <div className="ct-kpi-icon" style={{ background: '#eff6ff', color: '#1d4ed8' }}>
               <Wrench size={18} />
             </div>
           </div>
 
-          <div className="ct-kpi-card">
-            <div>
-              <div className="ct-kpi-label">Dedicated Shipments</div>
-              <div className="ct-kpi-value" style={{ color: '#15803d' }}>{kpis.shipmentsCount}</div>
-              <div className="ct-kpi-sub">CT packing list dispatches</div>
+          {isDcAdmin ? (
+            <div className="ct-kpi-card">
+              <div>
+                <div className="ct-kpi-label">Dedicated Shipments</div>
+                <div className="ct-kpi-value" style={{ color: '#15803d' }}>{kpis.shipmentsCount}</div>
+                <div className="ct-kpi-sub">CT packing list dispatches</div>
+              </div>
+              <div className="ct-kpi-icon" style={{ background: '#f0fdf4', color: '#15803d' }}>
+                <Truck size={18} />
+              </div>
             </div>
-            <div className="ct-kpi-icon" style={{ background: '#f0fdf4', color: '#15803d' }}>
-              <Truck size={18} />
+          ) : (
+            <div
+              className="ct-kpi-card"
+              onClick={() => setAssetsSubTab('usage')}
+              style={{ cursor: 'pointer' }}
+              title="Click to view Usage & Trends"
+            >
+              <div>
+                <div className="ct-kpi-label">Consumed (30d)</div>
+                <div className="ct-kpi-value" style={{ color: '#0369a1' }}>
+                  {usageAnalytics.totalPiecesConsumed.toLocaleString()} <span style={{ fontSize: '13px', fontWeight: 700, color: '#64748b' }}>pcs</span>
+                </div>
+                <div className="ct-kpi-sub">{usageAnalytics.auditLog.length} logged usage &amp; adj. events</div>
+              </div>
+              <div className="ct-kpi-icon" style={{ background: '#e0f2fe', color: '#0369a1' }}>
+                <TrendingUp size={18} />
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
 
@@ -1627,7 +1671,7 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
               <div>
                 <h3 className="ct-panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <Search size={16} color="#0284c7" />
-                  <span>Search Tools &amp; Consumables Across All Sites</span>
+                  <span>{lockedSiteCode ? `Search ${lockedSiteCode} Tools & Consumables` : 'Search Tools & Consumables Across All Sites'}</span>
                 </h3>
                 <p className="ct-panel-desc">
                   Filter instantly by Part Number, Description, Asset Tag, Serial #, Ownership Tag (Apple-Owned), or Site
@@ -1880,13 +1924,15 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
               <div style={{ padding: '12px 18px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                 <div>
                   <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 800 }}>
-                    Combined Multi-Site Tools &amp; Consumables ({combinedInventoryRows.length} rows)
+                    {lockedSiteCode ? `${lockedSiteCode} Tools & Consumables` : 'Combined Multi-Site Tools & Consumables'} ({combinedInventoryRows.length} rows)
                   </h3>
                   <div style={{ fontSize: '12px', color: '#64748b' }}>
-                    Sorted A–Z by Site · All Service Tools &amp; Consumables tagged <strong>Apple-Owned</strong>
+                    {lockedSiteCode
+                      ? `Assigned branch inventory for ${lockedSiteCode} · Tools & Consumables`
+                      : 'Sorted A–Z by Site · All Service Tools & Consumables'}
                   </div>
                 </div>
-                {siteFilter !== 'ALL' && (
+                {!lockedSiteCode && siteFilter !== 'ALL' && (
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSiteFilter('ALL')}>
                     Show All Sites
                   </button>

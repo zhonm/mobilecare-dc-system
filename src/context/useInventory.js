@@ -2299,7 +2299,9 @@ export function useInventory({
           const cloudDeleted = reg?.snapshot_data?.deletedSerials || [];
           const updatedCloudDeleted = Array.from(new Set([...cloudDeleted, ...updatedDeleted, cleanSerial]));
 
-          queuedSavedRecordsUpsert({
+          // Flush deletion registry & master inventory immediately BEFORE broadcasting UNIT_DELETED
+          // so peers fetching from Supabase never read stale pre-deletion snapshots.
+          const registryUpsertPromise = queuedSavedRecordsUpsert({
             id: 'deleted_unit_serials_registry',
             record_type: 'deletion_registry',
             period_label: 'Deleted Unit Serials Registry',
@@ -2307,7 +2309,7 @@ export function useInventory({
             period_month: new Date().getMonth() + 1,
             snapshot_data: { deletedSerials: updatedCloudDeleted },
             updated_at: new Date().toISOString()
-          }, { debounceMs: 800 });
+          }, { immediate: true });
 
           try { await supabase.from('inventory_units').update({ is_deleted: true, status: 'deleted' }).eq('serial_number', cleanSerial); } catch (e) {}
           try { await supabase.from('inventory_units').delete().eq('serial_number', cleanSerial); } catch (e) {}
@@ -2315,7 +2317,7 @@ export function useInventory({
             try { await supabase.from('inventory_units').delete().eq('id', existing.id); } catch (e) {}
           }
 
-          queuedSavedRecordsUpsert({
+          const liveInvUpsertPromise = queuedSavedRecordsUpsert({
             id: 'live_master_dc_inventory',
             record_type: 'inventory_master',
             period_label: 'Live Master DC Inventory',
@@ -2323,19 +2325,19 @@ export function useInventory({
             period_month: new Date().getMonth() + 1,
             snapshot_data: { units: nextUnits },
             updated_at: new Date().toISOString()
-          }, { debounceMs: 1000 });
+          }, { immediate: true });
 
-          if (updatedRecords.length > 0) {
-            queuedSavedRecordsUpsert({
-              id: 'master_dc_intakes_registry',
-              record_type: 'intake_registry',
-              period_label: 'Master DC Intakes Registry',
-              period_year: new Date().getFullYear(),
-              period_month: new Date().getMonth() + 1,
-              snapshot_data: { records: updatedRecords },
-              updated_at: new Date().toISOString()
-            }, { debounceMs: 1000 });
-          }
+          const intakesRegistryPromise = queuedSavedRecordsUpsert({
+            id: 'master_dc_intakes_registry',
+            record_type: 'intake_registry',
+            period_label: 'Master DC Intakes Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            snapshot_data: { records: updatedRecords },
+            updated_at: new Date().toISOString()
+          }, { immediate: true });
+
+          await Promise.all([registryUpsertPromise, liveInvUpsertPromise, intakesRegistryPromise]);
 
           for (const rec of recordsToUpdateInDb) {
             try {
