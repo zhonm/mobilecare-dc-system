@@ -21,7 +21,24 @@ export const APPLE_GSX_SHIP_TO_MAP = {
   '0001815649': { code: 'ASP LAU', label: 'LA UNION', name: 'MOBILECARE - ROBINSONS PLACE LA UNION' },
   '0001272226': { code: 'ASP POD', label: 'PODIUM', name: 'MOBILECARE - THE PODIUM' },
   '0001103790': { code: 'ASP SMS', label: "S'MAISON", name: 'MOBILECARE - S MAISON' },
-  '0001128342': { code: 'ASP ZAM', label: 'ZAMBOANGA', name: 'MOBILECARE - KCC MALL DE ZAMBOANGA' }
+  '0001128342': { code: 'ASP ZAM', label: 'ZAMBOANGA', name: 'MOBILECARE - KCC MALL DE ZAMBOANGA' },
+  '0001754212': { code: 'ASP LIM', label: 'LIMA', name: 'MOBILECARE - LIMA ESTATE' },
+  '0001764730': { code: 'APP TRI', label: 'APP TRINOMA', name: 'MOBILECARE - APP TRINOMA' },
+  '0001645876': { code: 'APP MOA', label: 'APP MOA', name: 'MOBILECARE - APP MALL OF ASIA' },
+  '0001836095': { code: 'APP BHS', label: 'APP BHS', name: 'MOBILECARE - APP BONIFACIO HIGH STREET' },
+  '0001836102': { code: 'APP AUR', label: 'APP AURA', name: 'MOBILECARE - APP SM AURA' },
+  '0001645879': { code: 'APP GB3', label: 'APP GB3', name: 'MOBILECARE - APP GREENBELT 3' },
+  '0001603617': { code: 'APP PPM', label: 'APP PPM', name: 'MOBILECARE - APP POWER PLANT MALL' },
+  '0001764718': { code: 'APP ANX', label: 'APP ANNEX', name: 'MOBILECARE - APP THE ANNEX' },
+  '0001506282': { code: 'ASP VN', label: 'VERTIS NORTH', name: 'MOBILECARE - VERTIS NORTH' },
+  '0001815657': { code: 'APP FES', label: 'APP FESTIVAL', name: 'MOBILECARE - APP FESTIVAL MALL' },
+  '0001240088': { code: 'ASP MRK', label: 'SM MARIKINA', name: 'MOBILECARE - SM MARIKINA' },
+  '0001196666': { code: 'ASP NPM', label: 'NEWPOINT MALL', name: 'MOBILECARE - NEWPOINT MALL' },
+  '0001730389': { code: 'ASP NAG', label: 'NAGA', name: 'MOBILECARE - NAGA' },
+  '0001229790': { code: 'ASP ILO', label: 'FESTIVE WALK ILOILO', name: 'MOBILECARE - FESTIVE WALK ILOILO' },
+  '0001102534': { code: 'ASP CEB', label: 'CEBU', name: 'MOBILECARE - CEBU' },
+  '0001218985': { code: 'ASP CDO', label: 'CAGAYAN DE ORO', name: 'MOBILECARE - CAGAYAN DE ORO' },
+  '0001836101': { code: 'APP LAN', label: 'APP SM LANANG', name: 'MOBILECARE - APP SM LANANG' }
 };
 
 /**
@@ -50,6 +67,10 @@ export const SITE_COLOR_PALETTE = {
   'FESTIVE WALK ILOILO': { bg: '#FAF4DF', border: '#DFC77B', text: '#713F12', excelFill: 'FFFAF4DF' },
   'ASP ZAM': { bg: '#F4E8F1', border: '#D49FC7', text: '#701A75', excelFill: 'FFF4E8F1' },
   'ZAMBOANGA': { bg: '#F4E8F1', border: '#D49FC7', text: '#701A75', excelFill: 'FFF4E8F1' },
+  'ASP LIM': { bg: '#ECFDF5', border: '#6EE7B7', text: '#065F46', excelFill: 'FFECFDF5' },
+  'LIMA': { bg: '#ECFDF5', border: '#6EE7B7', text: '#065F46', excelFill: 'FFECFDF5' },
+  'APP TRI': { bg: '#EFF6FF', border: '#93C5FD', text: '#1E40AF', excelFill: 'FFEFF6FF' },
+  'APP TRINOMA': { bg: '#EFF6FF', border: '#93C5FD', text: '#1E40AF', excelFill: 'FFEFF6FF' },
   'DC-MDC': { bg: '#F1F5F9', border: '#94A3B8', text: '#0F172A', excelFill: 'FFF1F5F9' }
 };
 
@@ -285,7 +306,71 @@ const EXPLICIT_BRANCH_ALIASES = {
   'SM ILOILO': 'ASP ILO',
   'SM CITY ILOILO': 'ASP ILO',
   'ZAMBOANGA': 'ASP ZAM',
-  'KCC MALL DE ZAMBOANGA': 'ASP ZAM'
+  'KCC MALL DE ZAMBOANGA': 'ASP ZAM',
+  'ASP LIM': 'ASP LIM',
+  'ASP LIMA': 'ASP LIM',
+  'LIMA': 'ASP LIM',
+  'LIMA ESTATE': 'ASP LIM',
+  'THE OUTLETS AT LIPA': 'ASP LIM',
+  'OUTLETS AT LIPA': 'ASP LIM',
+  'LIPA': 'ASP LIM',
+  'APP TRI': 'APP TRI',
+  'APP TRINOMA': 'APP TRI',
+  'TRINOMA MALL': 'APP TRI',
+  'TRINOMA': 'APP TRI',
+  'APP MOA': 'APP MOA',
+  'SM MALL OF ASIA': 'APP MOA',
+  'MALL OF ASIA': 'APP MOA',
+  'MOA': 'APP MOA',
+  'APP BHS': 'APP BHS',
+  'BONIFACIO HIGH STREET': 'APP BHS',
+  'BHS': 'APP BHS',
+  'APP AUR': 'APP AUR',
+  'APP-AUR': 'APP AUR',
+  'SM AURA PREMIER': 'APP AUR',
+  'SM AURA': 'APP AUR',
+  'AURA': 'APP AUR',
+  'APP GB3': 'APP GB3',
+  'GREENBELT 3': 'APP GB3',
+  'GREENBELT': 'APP GB3',
+  'GB3': 'APP GB3',
+  'APP PPM': 'APP PPM',
+  'POWER PLANT MALL': 'APP PPM',
+  'POWER PLANT': 'APP PPM',
+  'ROCKWELL': 'APP PPM',
+  'PPM': 'APP PPM',
+  'APP ANX': 'APP ANX',
+  'THE ANNEX': 'APP ANX',
+  'ANNEX': 'APP ANX',
+  'SM NORTH EDSA': 'APP ANX',
+  'SM CITY NORTH EDSA': 'APP ANX',
+  'SMCITY NORTH EDSA': 'APP ANX',
+  'APP FES': 'APP FES',
+  'FESTIVAL MALL': 'APP FES',
+  'FESTIVAL': 'APP FES',
+  'ASP MRK': 'ASP MRK',
+  'SM CITY MARIKINA': 'ASP MRK',
+  'SM MARIKINA': 'ASP MRK',
+  'MARIKINA': 'ASP MRK',
+  'ASP NPM': 'ASP NPM',
+  'NEWPOINT MALL': 'ASP NPM',
+  'NEWPOINT': 'ASP NPM',
+  'NEPO CENTER': 'ASP NPM',
+  'ASP NAG': 'ASP NAG',
+  'NAGA': 'ASP NAG',
+  'ASP CEB': 'ASP CEB',
+  'ROBINSONS GALLERIA CEBU': 'ASP CEB',
+  'CEBU': 'ASP CEB',
+  'ASP COT': 'ASP COT',
+  'KCC MALL OF COTABATO': 'ASP COT',
+  'COTABATO': 'ASP COT',
+  'ASP CDO': 'ASP CDO',
+  'CAGAYAN DE ORO': 'ASP CDO',
+  'LIMKETKAI MALL': 'ASP CDO',
+  'LIMKETKAI': 'ASP CDO',
+  'APP LAN': 'APP LAN',
+  'SM LANANG': 'APP LAN',
+  'LANANG': 'APP LAN'
 };
 
 function getSiteMatchTerms(siteCode, siteName = '') {
@@ -306,7 +391,12 @@ function getSiteMatchTerms(siteCode, siteName = '') {
   if (noPrefix.length >= 4) terms.add(noPrefix);
 
   const dirAddr = normalizeBranchText(dirEntry?.address || '');
-  for (const landmark of ['ABREEZA', 'ILOILO', 'MAGNOLIA', 'MEGAMALL', 'GLORIETTA', 'PODIUM', 'VERTIS', 'ZAMBOANGA', 'LA UNION', 'MAISON']) {
+  for (const landmark of [
+    'ABREEZA', 'ILOILO', 'MAGNOLIA', 'MEGAMALL', 'GLORIETTA', 'PODIUM', 'VERTIS',
+    'ZAMBOANGA', 'LA UNION', 'MAISON', 'LIMA', 'LIPA', 'TRINOMA', 'MOA', 'AURA',
+    'GREENBELT', 'ROCKWELL', 'ANNEX', 'FESTIVAL', 'MARIKINA', 'NEWPOINT', 'NAGA',
+    'CEBU', 'COTABATO', 'LANANG'
+  ]) {
     if (dirAddr.includes(landmark) || fullName.includes(landmark)) {
       terms.add(landmark);
     }
@@ -435,26 +525,53 @@ export function resolveSiteCodeFromValue(
     if (hit) return hit;
   }
 
+  // Dynamic acceptance for any additional/future system site code present in the CSV/XLSX
+  const dynamicCode = String(rawSiteCode || '').trim().toUpperCase();
+  if (dynamicCode && knownCodes.has(dynamicCode)) {
+    return dynamicCode;
+  }
+
+  // Guard: If the row explicitly provided a Site Code or Receiving Site that could not be mapped,
+  // do NOT fall back to Sheet Name or Filename (prevents multi-site files like LIMA_AND_APP_TRINOMA
+  // from silently misassigning an unmapped branch to another branch named in the filename).
+  const hasExplicitRowSite = Boolean(
+    String(rawSiteCode || '').trim() ||
+    String(rawReceivingSite || '').trim() ||
+    String(rawValue || '').trim()
+  );
+  if (hasExplicitRowSite) {
+    return '';
+  }
+
   // Priority 3: Excel Worksheet Tab Name
   if (sheetName) {
     const sheetHit = matchInText(sheetName);
     if (sheetHit) return sheetHit;
   }
 
-  // Priority 4: Uploaded Filename
+  // Priority 4: Uploaded Filename (only when unambiguous — i.e., mentions a single site)
   if (filename) {
     const cleanFile = String(filename)
       .replace(/\.(?:csv|xlsx|xls)$/i, '')
       .replace(/[_.-]+/g, ' ')
       .trim();
+    const normFile = normalizeBranchText(cleanFile);
+    const fileSites = new Set();
+    for (const alias of Object.keys(EXPLICIT_BRANCH_ALIASES)) {
+      const aliasNorm = normalizeBranchText(alias);
+      const escaped = aliasNorm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+      if (new RegExp(`(?:^|[^A-Z0-9])${escaped}(?=$|[^A-Z0-9])`).test(normFile)) {
+        fileSites.add(EXPLICIT_BRANCH_ALIASES[alias]);
+      }
+    }
+    if (fileSites.size === 1) {
+      return Array.from(fileSites)[0];
+    }
+    if (fileSites.size > 1) {
+      return '';
+    }
     const fileHit = matchInText(cleanFile);
     if (fileHit) return fileHit;
-  }
-
-  // Dynamic acceptance for any additional/future system site code present in the CSV/XLSX
-  const dynamicCode = String(rawSiteCode || '').trim().toUpperCase();
-  if (dynamicCode && knownCodes.has(dynamicCode)) {
-    return dynamicCode;
   }
 
   return '';

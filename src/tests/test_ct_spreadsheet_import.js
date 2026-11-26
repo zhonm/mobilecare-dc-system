@@ -306,6 +306,55 @@ async function runTests() {
     assert.ok(futureTheme.excelFill.startsWith('FF'));
   }
 
+  // 9. Multi-site LIMA + APP TRINOMA detection & filename-fallback guard
+  assert.equal(resolveSiteCodeFromValue('LIMA', allDirSites, ''), 'ASP LIM');
+  assert.equal(
+    resolveSiteCodeFromValue('', allDirSites, 'LIMA_AND_APP_TRINOMA_IMPORT.xlsx', {
+      rawSiteCode: 'LIMA',
+      rawReceivingSite: 'LIMA — MOBILECARE - THE OUTLETS AT LIPA'
+    }),
+    'ASP LIM'
+  );
+  assert.equal(
+    resolveSiteCodeFromValue('', allDirSites, 'LIMA_AND_APP_TRINOMA_IMPORT.xlsx', {
+      rawSiteCode: 'APP TRINOMA',
+      rawReceivingSite: 'APP TRINOMA — MOBILECARE - TRINOMA MALL',
+      shipToId: '0001764730'
+    }),
+    'APP TRI'
+  );
+  // Explicit unknown site must NOT be hijacked by another site in the filename
+  assert.equal(
+    resolveSiteCodeFromValue('', allDirSites, 'UNKNOWN_AND_APP_TRINOMA_IMPORT.xlsx', {
+      rawSiteCode: 'UNKNOWN SITE',
+      rawReceivingSite: 'UNKNOWN SITE — SOME MALL'
+    }),
+    ''
+  );
+  // Ambiguous multi-site filename must NOT arbitrarily assign one site when row has no site
+  assert.equal(
+    resolveSiteCodeFromValue('', allDirSites, 'LIMA_AND_APP_TRINOMA_IMPORT.xlsx'),
+    ''
+  );
+
+  if (fs.existsSync('./LIMA_AND_APP_TRINOMA_IMPORT.xlsx')) {
+    const xlsxBuf = fs.readFileSync('./LIMA_AND_APP_TRINOMA_IMPORT.xlsx');
+    const xlsxWb = XLSX.read(xlsxBuf, { type: 'buffer' });
+    const xlsxRows = XLSX.utils.sheet_to_json(xlsxWb.Sheets[xlsxWb.SheetNames[0]], { defval: '' });
+    const limaTriParsed = parseSpreadsheetRows(xlsxRows, {
+      filename: 'LIMA_AND_APP_TRINOMA_IMPORT.xlsx',
+      catalogItems: [],
+      sites: allDirSites
+    });
+    assert.equal(limaTriParsed.isMultiSite, true);
+    assert.deepEqual([...limaTriParsed.detectedSites].sort(), ['APP TRI', 'ASP LIM']);
+    assert.equal(limaTriParsed.items.length, 92);
+    const limaRows = limaTriParsed.items.filter(r => r.site_code === 'ASP LIM');
+    const triRows = limaTriParsed.items.filter(r => r.site_code === 'APP TRI');
+    assert.equal(limaRows.length, 46);
+    assert.equal(triRows.length, 46);
+  }
+
   console.log('✅ All CT CSV/XLSX Spreadsheet Import tests passed!');
 }
 
