@@ -729,46 +729,52 @@ export function useCloudSync({
           }
         }
 
-        // Fetch inventory_units in parallel batches of 6 pages (6,000 rows/wave) instead of 26 sequential round-trips!
+        // Fetch inventory_units using primary-key keyset pagination (O(log N) per page via inventory_units_pkey).
+        // Avoids deep OFFSET sorts + 6-way parallel Seq Scans that saturate Postgres CPU and trigger 57014 timeouts.
         const rows = [];
         let useStarFallback = false;
-        const PARALLEL_PAGES = 6;
-        let pageBatchOffset = 0;
+        let lastId = null;
 
         while (true) {
-          const offsets = Array.from({ length: PARALLEL_PAGES }, (_, idx) => pageBatchOffset + idx * pageSize);
-          const waveResults = await Promise.all(
-            offsets.map(async (offset) => {
-              let response = await supabase
-                .from('inventory_units')
-                .select(useStarFallback ? '*' : INVENTORY_COLUMNS)
-                .order('created_at', { ascending: true })
-                .range(offset, offset + pageSize - 1);
-
-              if (!useStarFallback && response.error && (response.error.code === '42703' || response.error.message?.includes('does not exist'))) {
-                useStarFallback = true;
-                response = await supabase
-                  .from('inventory_units')
-                  .select('*')
-                  .order('created_at', { ascending: true })
-                  .range(offset, offset + pageSize - 1);
-              }
-              return response;
-            })
-          );
-
-          let reachedEnd = false;
-          for (const res of waveResults) {
-            if (res.error) return res;
-            const page = res.data || [];
-            rows.push(...page);
-            if (page.length < pageSize) {
-              reachedEnd = true;
-              break;
+          const buildQuery = (columns) => {
+            let query = supabase
+              .from('inventory_units')
+              .select(columns)
+              .order('id', { ascending: true })
+              .limit(pageSize);
+            if (lastId !== null) {
+              query = query.gt('id', lastId);
             }
+            return query;
+          };
+
+          let response = await buildQuery(useStarFallback ? '*' : INVENTORY_COLUMNS);
+
+          if (!useStarFallback && response.error && (response.error.code === '42703' || response.error.message?.includes('does not exist'))) {
+            useStarFallback = true;
+            response = await buildQuery('*');
           }
-          if (reachedEnd) break;
-          pageBatchOffset += PARALLEL_PAGES * pageSize;
+
+          if (response.error) return response;
+
+          const page = response.data || [];
+          rows.push(...page);
+          if (page.length < pageSize) break;
+
+          const nextCursor = page[page.length - 1]?.id;
+          if (!nextCursor || nextCursor === lastId) break;
+          lastId = nextCursor;
+        }
+
+        // Preserve created_at ascending order in memory (sub-10ms in JS vs multi-second DB Sort)
+        if (rows.length > 1) {
+          rows.sort((a, b) => {
+            const ta = a?.created_at || '';
+            const tb = b?.created_at || '';
+            if (ta < tb) return -1;
+            if (ta > tb) return 1;
+            return 0;
+          });
         }
 
         if (rows.length > 0) {
