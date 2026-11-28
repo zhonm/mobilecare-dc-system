@@ -2336,12 +2336,12 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                               )}
                               {asset.status === 'available' && (
                                 <button type="button" className="btn btn-secondary btn-sm" onClick={() => checkoutTool({ assetId: asset.id, assignedTo: assetAssigneeInput.trim() || asset.assigned_to || currentUser?.fullName || 'Shop Technician' })}>
-                                  Check Out
+                                  In Used
                                 </button>
                               )}
                               {(asset.status === 'in_use' || (isDcAdmin && asset.status === 'missing')) && (
                                 <button type="button" className="btn btn-secondary btn-sm" onClick={() => checkinTool({ assetId: asset.id })}>
-                                  Check In
+                                  Not Used
                                 </button>
                               )}
                               {isDcAdmin && asset.status === 'available' && (

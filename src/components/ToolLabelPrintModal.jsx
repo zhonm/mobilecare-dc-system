@@ -1,63 +1,34 @@
 import { useMemo } from 'react';
 import { X, Printer, QrCode } from 'lucide-react';
+import {
+  encodeCode128B,
+  encodeQrCode,
+  buildCode128SvgString,
+  buildQrSvgString
+} from '../utils/barcodeGenerator';
 
-/**
- * Deterministic compact 2D SVG matrix code (stylized QR-compatible visual identifier)
- * + Code-style bars encoded purely in SVG so no external CDN or canvas dep is required.
- */
-function buildDeterministicMatrix(seedText, size = 13) {
-  const str = String(seedText || 'MDC-TOOL');
-  let hash = 2166136261;
-  for (let i = 0; i < str.length; i += 1) {
-    hash ^= str.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  const grid = [];
-  for (let r = 0; r < size; r += 1) {
-    const row = [];
-    for (let c = 0; c < size; c += 1) {
-      const inFinderTL = r < 4 && c < 4;
-      const inFinderTR = r < 4 && c >= size - 4;
-      const inFinderBL = r >= size - 4 && c < 4;
-      if (inFinderTL || inFinderTR || inFinderBL) {
-        const lr = r < 4 ? r : r - (size - 4);
-        const lc = c < 4 ? c : c - (size - 4);
-        const border = lr === 0 || lr === 3 || lc === 0 || lc === 3;
-        const center = (lr === 1 || lr === 2) && (lc === 1 || lc === 2) && lr === lc;
-        row.push(border || center);
-      } else {
-        hash ^= (r * 31 + c * 17 + str.charCodeAt((r + c) % str.length));
-        hash = Math.imul(hash, 16777619);
-        row.push(((hash >>> ((r + c) % 16)) & 1) === 1);
-      }
-    }
-    grid.push(row);
-  }
-  return grid;
+function escapeHtml(val = '') {
+  return String(val ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
-function buildBarcodeBars(codeText = '') {
-  const clean = String(codeText || 'MDC');
-  const bars = [];
-  let x = 2;
-  for (let i = 0; i < clean.length; i += 1) {
-    const code = clean.charCodeAt(i);
-    const w1 = ((code >> 0) & 1) + 1;
-    const g1 = ((code >> 1) & 1) + 1;
-    const w2 = ((code >> 2) & 1) + 1.5;
-    const g2 = ((code >> 3) & 1) + 1;
-    bars.push({ x, w: w1 });
-    x += w1 + g1;
-    bars.push({ x, w: w2 });
-    x += w2 + g2;
-  }
-  return { bars, totalWidth: Math.max(x + 2, 120) };
+function getToolScanValues(asset) {
+  const assetTag = String(asset.asset_tag || '').trim() || 'MDC-TOOL';
+  const barcodeValue = String(asset.serial_number || assetTag).trim();
+  // QR encodes the primary system asset tag (matches Search & Scan-Out directly)
+  const qrValue = assetTag;
+  return { qrValue, barcodeValue };
 }
 
 function AssetLabelCard({ asset }) {
-  const payload = `${asset.asset_tag}|${asset.ownership_tag_id || ''}|${asset.admin_asset_tag || ''}|${asset.part_number}|${asset.serial_number || 'NO-SN'}`;
-  const matrix = useMemo(() => buildDeterministicMatrix(payload, 13), [payload]);
-  const barcode = useMemo(() => buildBarcodeBars(asset.serial_number || asset.ownership_tag_id || asset.admin_asset_tag || asset.asset_tag), [asset.serial_number, asset.ownership_tag_id, asset.admin_asset_tag, asset.asset_tag]);
+  const { qrValue, barcodeValue } = getToolScanValues(asset);
+  const qr = useMemo(() => encodeQrCode(qrValue), [qrValue]);
+  const barcode = useMemo(() => encodeCode128B(barcodeValue), [barcodeValue]);
+  const qrViewSize = qr.size + qr.quietZone * 2;
 
   return (
     <div
@@ -67,55 +38,96 @@ function AssetLabelCard({ asset }) {
         borderRadius: '8px',
         padding: '10px 12px',
         background: '#ffffff',
-        display: 'grid',
-        gridTemplateColumns: '68px 1fr',
-        gap: '10px',
-        alignItems: 'center',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '6px',
         pageBreakInside: 'avoid'
       }}
     >
-      <svg width="68" height="68" viewBox="0 0 13 13" shapeRendering="crispEdges" aria-label={`QR Label ${asset.asset_tag}`}>
-        <rect x="0" y="0" width="13" height="13" fill="#ffffff" />
-        {matrix.map((row, r) =>
-          row.map((on, c) => (on ? <rect key={`${r}-${c}`} x={c} y={r} width="1" height="1" fill="#0f172a" /> : null))
-        )}
-      </svg>
+      <div style={{ display: 'grid', gridTemplateColumns: '84px 1fr', gap: '10px', alignItems: 'center' }}>
+        <svg
+          width="84"
+          height="84"
+          viewBox={`0 0 ${qrViewSize} ${qrViewSize}`}
+          shapeRendering="crispEdges"
+          role="img"
+          aria-label={`QR Code ${qrValue}`}
+          style={{ display: 'block', background: '#ffffff' }}
+        >
+          <rect x="0" y="0" width={qrViewSize} height={qrViewSize} fill="#ffffff" />
+          {qr.matrix.map((row, r) =>
+            row.map((on, c) =>
+              on ? (
+                <rect
+                  key={`${r}-${c}`}
+                  x={c + qr.quietZone}
+                  y={r + qr.quietZone}
+                  width="1"
+                  height="1"
+                  fill="#000000"
+                />
+              ) : null
+            )
+          )}
+        </svg>
 
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: '10px', fontWeight: 700, color: '#475569', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-          MOBILECARE TOOL ASSET
-        </div>
-        <div className="font-mono" style={{ fontSize: '13px', fontWeight: 800, color: '#0f172a', marginTop: '1px', wordBreak: 'break-all' }}>
-          {asset.asset_tag}
-        </div>
-        {asset.ownership_tag_id && (
-          <div className="font-mono" style={{ fontSize: '10.5px', fontWeight: 700, color: '#0369a1', marginTop: '1px', wordBreak: 'break-all' }}>
-            {asset.ownership_tag || 'Apple-Owned'} · {asset.ownership_tag_id}
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: '9.5px', fontWeight: 700, color: '#475569', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+            MOBILECARE TOOL ASSET
           </div>
-        )}
-        {asset.admin_asset_tag && (
-          <div className="font-mono" style={{ fontSize: '11px', fontWeight: 700, color: '#0369a1', marginTop: '1px' }}>
-            Admin Tag: {asset.admin_asset_tag}
+          <div className="font-mono" style={{ fontSize: '13px', fontWeight: 800, color: '#0f172a', marginTop: '1px', wordBreak: 'break-all' }}>
+            {asset.asset_tag}
           </div>
-        )}
-        <div style={{ fontSize: '11.5px', fontWeight: 600, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {asset.part_number} · {asset.description}
+          {asset.ownership_tag_id && (
+            <div className="font-mono" style={{ fontSize: '10px', fontWeight: 700, color: '#0369a1', marginTop: '1px', wordBreak: 'break-all' }}>
+              {asset.ownership_tag || 'Apple-Owned'} · {asset.ownership_tag_id}
+            </div>
+          )}
+          {asset.admin_asset_tag && (
+            <div className="font-mono" style={{ fontSize: '10.5px', fontWeight: 700, color: '#0369a1', marginTop: '1px', wordBreak: 'break-all' }}>
+              Admin Tag: {asset.admin_asset_tag}
+            </div>
+          )}
+          <div style={{ fontSize: '11px', fontWeight: 600, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '2px' }}>
+            {asset.part_number} · {asset.description}
+          </div>
+          <div className="font-mono" style={{ fontSize: '10px', color: '#334155', marginTop: '2px' }}>
+            {asset.serial_number ? `SN: ${asset.serial_number}` : 'Unserialized Tool'} · Site: {asset.site_code}
+            {asset.assigned_to ? ` · Assigned: ${asset.assigned_to}` : ''}
+          </div>
         </div>
-        <div className="font-mono" style={{ fontSize: '10.5px', color: '#334155', marginTop: '2px' }}>
-          {asset.serial_number ? `SN: ${asset.serial_number}` : 'Unserialized Tool'} · Site: {asset.site_code}
-          {asset.assigned_to ? ` · Assigned: ${asset.assigned_to}` : ''}
-        </div>
+      </div>
+
+      {/* Full-width ISO/IEC 15417 Code 128B 1D Barcode */}
+      <div style={{ borderTop: '1px dashed #e2e8f0', paddingTop: '6px' }}>
         <svg
           width="100%"
-          height="18"
-          viewBox={`0 0 ${barcode.totalWidth} 18`}
-          preserveAspectRatio="none"
-          style={{ marginTop: '4px', display: 'block' }}
+          height="32"
+          viewBox={`0 0 ${barcode.totalWidth} 32`}
+          preserveAspectRatio="xMidYMid meet"
+          shapeRendering="crispEdges"
+          role="img"
+          aria-label={`Code 128 Barcode ${barcode.text}`}
+          style={{ display: 'block', background: '#ffffff' }}
         >
+          <rect x="0" y="0" width={barcode.totalWidth} height="32" fill="#ffffff" />
           {barcode.bars.map((b, idx) => (
-            <rect key={idx} x={b.x} y="0" width={b.w} height="18" fill="#0f172a" />
+            <rect key={idx} x={b.x} y="0" width={b.w} height="32" fill="#000000" />
           ))}
         </svg>
+        <div
+          className="font-mono"
+          style={{
+            fontSize: '9.5px',
+            fontWeight: 700,
+            color: '#0f172a',
+            textAlign: 'center',
+            letterSpacing: '0.08em',
+            marginTop: '2px'
+          }}
+        >
+          {barcode.text}
+        </div>
       </div>
     </div>
   );
@@ -125,43 +137,122 @@ export default function ToolLabelPrintModal({ assets = [], onClose }) {
   if (!assets || assets.length === 0) return null;
 
   const handlePrint = () => {
-    const win = window.open('', '_blank', 'width=860,height=640');
+    const win = window.open('', '_blank', 'width=900,height=700');
     if (!win) {
       window.print();
       return;
     }
+
     const cardsHtml = assets
-      .map(
-        (asset) => `
-          <div style="border:1.5px solid #0f172a;border-radius:8px;padding:10px 12px;margin-bottom:10px;page-break-inside:avoid;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-            <div style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;">MOBILECARE TOOL ASSET</div>
-            <div style="font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-variant-numeric:tabular-nums;font-size:14px;font-weight:800;color:#0f172a;margin:2px 0;">${asset.asset_tag}</div>
-            ${asset.ownership_tag_id ? `<div style="font-size:11px;font-weight:700;color:#0369a1;margin-bottom:2px;">${asset.ownership_tag || 'Apple-Owned'} · ${asset.ownership_tag_id}</div>` : ''}
-            ${asset.admin_asset_tag ? `<div style="font-size:11.5px;font-weight:700;color:#0369a1;margin-bottom:2px;">Admin Tag: ${asset.admin_asset_tag}</div>` : ''}
-            <div style="font-size:12px;font-weight:600;color:#1e293b;">${asset.part_number} — ${asset.description}</div>
-            <div style="font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-variant-numeric:tabular-nums;font-size:11px;color:#334155;margin-top:4px;">
-              ${asset.serial_number ? `SN: ${asset.serial_number}` : 'Unserialized Tool'} | Site: ${asset.site_code}${asset.assigned_to ? ` | Assigned: ${asset.assigned_to}` : ''}
+      .map((asset) => {
+        const { qrValue, barcodeValue } = getToolScanValues(asset);
+        const qrSvg = buildQrSvgString(qrValue, { size: 84, ariaLabel: `QR Code ${qrValue}` });
+        const barcodeSvg = buildCode128SvgString(barcodeValue, { height: 36 });
+
+        return `
+          <div class="label-card">
+            <div class="label-top">
+              ${qrSvg}
+              <div style="min-width:0;">
+                <div style="font-size:9.5px;font-weight:700;color:#475569;letter-spacing:0.05em;text-transform:uppercase;">MOBILECARE TOOL ASSET</div>
+                <div style="font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-variant-numeric:tabular-nums;font-size:13px;font-weight:800;color:#0f172a;margin-top:1px;word-break:break-all;">${escapeHtml(asset.asset_tag)}</div>
+                ${asset.ownership_tag_id ? `<div style="font-size:10px;font-weight:700;color:#0369a1;margin-top:1px;word-break:break-all;">${escapeHtml(asset.ownership_tag || 'Apple-Owned')} · ${escapeHtml(asset.ownership_tag_id)}</div>` : ''}
+                ${asset.admin_asset_tag ? `<div style="font-size:10.5px;font-weight:700;color:#0369a1;margin-top:1px;word-break:break-all;">Admin Tag: ${escapeHtml(asset.admin_asset_tag)}</div>` : ''}
+                <div style="font-size:11px;font-weight:600;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;">${escapeHtml(asset.part_number)} · ${escapeHtml(asset.description)}</div>
+                <div style="font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-variant-numeric:tabular-nums;font-size:10px;color:#334155;margin-top:2px;">
+                  ${asset.serial_number ? `SN: ${escapeHtml(asset.serial_number)}` : 'Unserialized Tool'} · Site: ${escapeHtml(asset.site_code)}${asset.assigned_to ? ` · Assigned: ${escapeHtml(asset.assigned_to)}` : ''}
+                </div>
+              </div>
             </div>
-          </div>`
-      )
+            <div class="label-barcode">
+              ${barcodeSvg}
+              <div class="barcode-caption">${escapeHtml(barcodeValue)}</div>
+            </div>
+          </div>`;
+      })
       .join('');
 
-    win.document.write(`<!doctype html><html><head><title>Tool Labels</title></head><body style="padding:18px;">${cardsHtml}<script>window.print();</script></body></html>`);
+    win.document.write(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Tool QR &amp; Barcode Asset Labels (${assets.length})</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+      body {
+        margin: 0;
+        padding: 18px;
+        background: #ffffff;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      }
+      .labels-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .label-card {
+        border: 1.5px solid #0f172a;
+        border-radius: 8px;
+        padding: 10px 12px;
+        background: #ffffff;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+      .label-top {
+        display: grid;
+        grid-template-columns: 84px 1fr;
+        gap: 10px;
+        align-items: center;
+      }
+      .label-barcode {
+        border-top: 1px dashed #e2e8f0;
+        padding-top: 6px;
+      }
+      .barcode-caption {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 9.5px;
+        font-weight: 700;
+        color: #0f172a;
+        text-align: center;
+        letter-spacing: 0.08em;
+        margin-top: 2px;
+      }
+      @media print {
+        body { padding: 8px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="labels-grid">${cardsHtml}</div>
+    <script>
+      window.addEventListener('load', function () {
+        setTimeout(function () { window.print(); }, 150);
+      });
+    </script>
+  </body>
+</html>`);
     win.document.close();
   };
 
   return (
     <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}>
-      <div className="modal-content" style={{ maxWidth: '640px', width: '95%' }}>
+      <div className="modal-content" style={{ maxWidth: '720px', width: '95%' }}>
         <div className="modal-header" style={{ background: '#0f172a' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <QrCode size={18} color="#38bdf8" />
             <div>
               <h3 style={{ color: '#fff', fontSize: '16px', margin: 0 }}>
-                Tool QR & Barcode Asset Labels ({assets.length})
+                Tool QR &amp; Barcode Asset Labels ({assets.length})
               </h3>
               <p style={{ color: '#94a3b8', fontSize: '12px', margin: 0 }}>
-                Print peel-and-stick asset labels for serialized and shop tools
+                Scannable ISO Code 128 barcodes &amp; QR codes for peel-and-stick tool tracking
               </p>
             </div>
           </div>
@@ -171,7 +262,7 @@ export default function ToolLabelPrintModal({ assets = [], onClose }) {
         </div>
 
         <div className="modal-body" style={{ padding: '18px', maxHeight: '65vh', overflowY: 'auto' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '12px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '12px' }}>
             {assets.map(asset => (
               <AssetLabelCard key={asset.id || asset.asset_tag} asset={asset} />
             ))}

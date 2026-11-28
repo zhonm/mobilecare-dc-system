@@ -210,12 +210,12 @@ export default function ConsumableToolDetailModal({
                             <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
                               {a.status === 'available' && (
                                 <button type="button" className="btn btn-secondary btn-sm" onClick={() => onCheckoutTool?.({ assetId: a.id, assignedTo: checkoutAssignee.trim() || 'Branch Tech' })}>
-                                  Check Out
+                                  In Used
                                 </button>
                               )}
                               {(a.status === 'in_use' || a.status === 'missing') && (
                                 <button type="button" className="btn btn-secondary btn-sm" onClick={() => onCheckinTool?.({ assetId: a.id })}>
-                                  Check In
+                                  Not Used
                                 </button>
                               )}
                               {a.status !== 'missing' && a.status !== 'shipped' && (
