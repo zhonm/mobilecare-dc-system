@@ -4,8 +4,7 @@ import autoTable from 'jspdf-autotable';
 import { sanitizeForSpreadsheet } from './security.js';
 import { getPartCategory, HARDWARE_CATEGORIES } from './categoryFilter.js';
 import { appendChartsSectionToPdf } from './pdfChartCapture.js';
-
-const USD_TO_PHP_RATE = 57;
+import { USD_TO_PHP_RATE } from '../constants/config.js';
 
 function resolveCategoryDisplayName(item) {
   if (item.category_name) return item.category_name;
@@ -117,7 +116,7 @@ export async function exportDashboardReportToExcel({
     // Subtitle / Metadata
     ws.mergeCells('A2:F2');
     const sCell = ws.getCell('A2');
-    sCell.value = `Generated: ${new Date().toLocaleString('en-US')}  |  Source: Fixably / GSX Masterlist Analysis  |  Currency Rate: 1 USD = 57 PHP`;
+    sCell.value = `Generated: ${new Date().toLocaleString('en-US')}  |  Source: Fixably / GSX Masterlist Analysis  |  Currency Rate: 1 USD = ${USD_TO_PHP_RATE} PHP`;
     sCell.font = { name: 'Arial', size: 8.5, italic: true, color: { argb: 'FF64748B' } };
     sCell.alignment = { horizontal: 'center', vertical: 'middle' };
     ws.getRow(2).height = 18;

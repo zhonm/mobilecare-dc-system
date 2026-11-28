@@ -1,5 +1,8 @@
 export const LIVE_MASTER_RECORD_ID = '00000000-0000-0000-0000-000000000001';
 
+// Market USD-to-PHP exchange rate used for dashboard, forecasting, and valuation reports
+export const USD_TO_PHP_RATE = 63.76;
+
 export const CANONICAL_SITE_CODES = [
   'APP BHS', 'APP GB3', 'APP PPM', 'ASP GL5', 'ASP SMS', 'APP MOA', 'ASP POD',
   'APP MEG', 'APP ANX', 'APP TRI', 'ASP VN', 'ASP NES', 'APP FES', 'ASP MRK',

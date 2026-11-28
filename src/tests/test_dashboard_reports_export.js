@@ -37,7 +37,7 @@ async function runTests() {
     totalCount: partsList.length,
     totalFilteredUnits: partsList.reduce((s, p) => s + p.totalUnits, 0),
     totalFilteredValUSD: partsList.reduce((s, p) => s + p.totalValUSD, 0),
-    totalFilteredValPHP: partsList.reduce((s, p) => s + p.totalValUSD * 57, 0),
+    totalFilteredValPHP: partsList.reduce((s, p) => s + p.totalValUSD * 63.76, 0),
     displayList: partsList,
     all: partsList
   };
@@ -70,7 +70,7 @@ async function runTests() {
     totalPartsCount: partsList.length,
     siteTotalUnits: 820,
     siteTotalValUSD: 154000,
-    siteTotalValPHP: 154000 * 57,
+    siteTotalValPHP: 154000 * 63.76,
     displayList: partsList,
     all: partsList
   };

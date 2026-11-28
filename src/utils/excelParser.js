@@ -13,7 +13,7 @@ import {
 import { sanitizeForSpreadsheet } from './security.js';
 import { resolvePartInfo, validateAppleSerialNumber, resolveCanonicalIPhoneModel } from './partResolver.js';
 import { getPartCategory } from './categoryFilter.js';
-import { getShipmentRiderName, getShipmentCourierDisplay, calculateDeclaredValuePHP, resolveItemStockingPrice, getPackingListFileName } from './shipmentHelpers.js';
+import { getShipmentRiderName, getShipmentCourierDisplay, DECLARED_VALUE_EXCHANGE_RATE, calculateDeclaredValuePHP, resolveItemStockingPrice, getPackingListFileName } from './shipmentHelpers.js';
 import { OFFICIAL_BRANCH_DIRECTORY } from '../constants/branchDirectory.js';
 import { normalizeSite, lookupSheet35StockPrice } from './siteTransfersReconciler.js';
 import { resolveSafeRegion, getCanonicalSiteSortIndex } from '../constants/config.js';
@@ -6697,7 +6697,7 @@ export async function exportPackingListXLSX(shipment = {}, items = [], site = {}
     const rowNum = 10 + idx;
     const row = ws.getRow(rowNum);
     const priceUSD = resolveItemStockingPrice(it, options.parts || options.partsCatalog);
-    const pricePHP = priceUSD * 85;
+    const pricePHP = priceUSD * DECLARED_VALUE_EXCHANGE_RATE;
     const boxNum = it.box_number ? (typeof it.box_number === 'number' ? it.box_number : parseInt(String(it.box_number).split('/')[0], 10) || 1) : 1;
 
     row.values = [

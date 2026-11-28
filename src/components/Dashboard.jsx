@@ -82,8 +82,7 @@ import {
   resolveItemStockingPrice
 } from '../utils/shipmentHelpers';
 import { filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
-
-const USD_TO_PHP_RATE = 57;
+import { USD_TO_PHP_RATE } from '../constants/config';
 
 // Helper function to calculate calendar days a part has been in DC stock
 function calculateDaysInDc(dateString) {

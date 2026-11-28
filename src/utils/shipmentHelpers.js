@@ -493,7 +493,7 @@ export const healShipmentItem = (item, serialDict, partsMapByPn) => {
   };
 };
 
-export const DECLARED_VALUE_EXCHANGE_RATE = 85;
+export const DECLARED_VALUE_EXCHANGE_RATE = 100;
 
 /**
  * Resolves the official stocking price in USD for a single item in a packing list or shipment.
@@ -587,7 +587,7 @@ export function resolveItemStockingPrice(item, partsCatalog = null) {
 
 /**
  * Calculates the total declared value in PHP for a list of shipment items.
- * Standard formula: sum(part stocking price in USD * 85 PHP).
+ * Standard formula: sum(part stocking price in USD * 100 PHP).
  */
 export function calculateDeclaredValuePHP(items = [], partsCatalog = null, rate = DECLARED_VALUE_EXCHANGE_RATE) {
   if (!Array.isArray(items) || items.length === 0) return 0;

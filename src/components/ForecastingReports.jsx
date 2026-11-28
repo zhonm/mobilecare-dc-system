@@ -22,6 +22,7 @@ import {
   getCategoryBadge
 } from '../utils/rawMasterlistScanner';
 import { getPartCategory } from '../utils/categoryFilter';
+import { USD_TO_PHP_RATE } from '../constants/config';
 import {
   BarChart,
   Bar,
@@ -155,7 +156,7 @@ const CustomSiteBarTooltip = ({ active, payload }) => {
         <span style={{ color: '#94a3b8' }}>Projected Cost:</span>
         <strong style={{ color: '#10b981' }}>${data.totalVal?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
         <span style={{ color: '#94a3b8' }}>PHP Est.:</span>
-        <strong style={{ color: '#fbbf24' }}>₱{((data.totalVal || 0) * 57).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong>
+        <strong style={{ color: '#fbbf24' }}>₱{((data.totalVal || 0) * USD_TO_PHP_RATE).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong>
       </div>
     </div>
   );
@@ -1212,7 +1213,7 @@ export default function ForecastingReports() {
             ${analytics.totalStockValuation.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </div>
           <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '4px' }}>
-            Est. ₱{(analytics.totalStockValuation * 57).toLocaleString(undefined, { maximumFractionDigits: 0 })} PHP
+            Est. ₱{(analytics.totalStockValuation * USD_TO_PHP_RATE).toLocaleString(undefined, { maximumFractionDigits: 0 })} PHP
           </div>
         </div>
 

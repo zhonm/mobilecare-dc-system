@@ -2,11 +2,10 @@ import rawDataAugust from '../data/rawMasterlistData_august.json' with { type: '
 import rawDataOctober from '../data/rawMasterlistData_october.json' with { type: 'json' };
 import rawData from '../data/rawMasterlistData.json' with { type: 'json' };
 import { isPartMatchingCategoryFilter } from './categoryFilter.js';
+import { USD_TO_PHP_RATE } from '../constants/config.js';
 
 // rawMasterlistData.json is the canonical September 2026 baseline dataset
 const rawDataSeptember = rawData;
-
-const USD_TO_PHP_RATE = 57;
 
 export const IPHONE_CATEGORIES = [
   { key: 'ALL', label: 'All iPhone Parts' },
@@ -126,7 +125,7 @@ export function scanMasterlistData(sourceData, options = {}) {
     return sourceData;
   }
 
-  const USD_TO_PHP = 57;
+  const USD_TO_PHP = USD_TO_PHP_RATE;
   let totalUnits = 0;
   let totalValUSD = 0;
   const partsMap = new Map();

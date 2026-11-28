@@ -6,6 +6,7 @@ import { getPartCategory, getCategoryBadgeStyle } from './categoryFilter.js';
 import { formatAuditEntityDisplay } from './appContextHelpers.js';
 import { getShipmentCourierDisplay, getShipmentRiderName, healShipmentItem, resolveSiteBranchCode, calculateDeclaredValuePHP, getPackingListFileName, resolvePackingListSiteCode } from './shipmentHelpers.js';
 import { appendChartsSectionToPdf } from './pdfChartCapture.js';
+import { USD_TO_PHP_RATE } from '../constants/config.js';
 
 export { getPackingListFileName, resolvePackingListSiteCode };
 
@@ -41,7 +42,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   const logoWidth = 58; // Larger MDC Distribution Center horizontal logo so "DISTRIBUTION CENTER" text is clearly legible (1538:472 = 3.2585 ratio)
   const logoHeight = 17.8; // Exact proportional height (58 / 3.2585 = 17.80mm)
 
-  // Calculate Total Declared Value in PHP (part price × 85 PHP)
+  // Calculate Total Declared Value in PHP (part price × 100 PHP)
   const totalDeclaredValuePHP = (typeof shipment.declared_value === 'number' && shipment.declared_value > 0)
     ? shipment.declared_value
     : calculateDeclaredValuePHP(items, options.parts || options.partsCatalog);
@@ -366,7 +367,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
       doc.setTextColor(15, 23, 42);
       doc.text(String(shipment.total_boxes || 1), totalValX, totalsY + boxRowHeight + (boxRowHeight * 0.7), { align: 'right' });
 
-      // Total Declared Value Row (PHP = part price × 85)
+      // Total Declared Value Row (PHP = part price × 100)
       doc.setFillColor(84, 89, 95);
       doc.rect(totalBoxX, totalsY + boxRowHeight * 2, 40, boxRowHeight, 'F');
       doc.rect(totalBoxX + 40, totalsY + boxRowHeight * 2, totalBoxWidth - 40, boxRowHeight, 'S');
@@ -1128,7 +1129,7 @@ export function exportStockTransfersToPDF(records = [], metadata = {}) {
   const topParts = allParts.slice(0, 5);
 
   const totalFeePHP = (mmShipments * 180) + (provShipments * 350);
-  const totalFeeUSD = totalFeePHP / 57;
+  const totalFeeUSD = totalFeePHP / USD_TO_PHP_RATE;
   const mmPct = totalTransfers > 0 ? (mmShipments / totalTransfers) * 100 : 0;
   const provPct = totalTransfers > 0 ? (provShipments / totalTransfers) * 100 : 0;
 
@@ -1180,7 +1181,7 @@ export function exportStockTransfersToPDF(records = [], metadata = {}) {
   const kpiData = [
     { label: 'TOTAL TRANSFERS', val: `${totalTransfers.toLocaleString()} events`, sub: 'Inter-hub movements', bg: [240, 249, 255], border: [186, 230, 253], text: [2, 132, 199] },
     { label: 'PHYSICAL UNITS MOVED', val: `${totalUnits.toLocaleString()} units`, sub: totalTransfers > 0 ? `Avg ${(totalUnits / totalTransfers).toFixed(2)} units/event` : 'Movement volume', bg: [238, 242, 255], border: [199, 210, 254], text: [67, 56, 202] },
-    { label: 'STOCK VALUATION', val: `$${totalValuation.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, sub: `Est. PHP ${(totalValuation * 57).toLocaleString(undefined, { maximumFractionDigits: 0 })} (~P57/$1)`, bg: [240, 253, 244], border: [187, 247, 208], text: [21, 128, 61] },
+    { label: 'STOCK VALUATION', val: `$${totalValuation.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, sub: `Est. PHP ${(totalValuation * USD_TO_PHP_RATE).toLocaleString(undefined, { maximumFractionDigits: 0 })} (~P${USD_TO_PHP_RATE}/$1)`, bg: [240, 253, 244], border: [187, 247, 208], text: [21, 128, 61] },
     { label: 'LOGISTICS NETWORK', val: `${Object.keys(originMap).length} Origins -> ${Object.keys(destMap).length} Hubs`, sub: 'Active transfer lanes', bg: [254, 243, 199], border: [253, 230, 138], text: [146, 64, 14] }
   ];
 
@@ -1788,7 +1789,7 @@ export function exportForecastingReportToPDF(forecastItems = [], metadata = {}) 
     {
       label: 'PROJECTED STOCK VALUATION',
       val: `$${totalValuation.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} USD`,
-      sub: `Est. PHP ${(totalValuation * 57).toLocaleString(undefined, { maximumFractionDigits: 0 })} (~P57/$1)`,
+      sub: `Est. PHP ${(totalValuation * USD_TO_PHP_RATE).toLocaleString(undefined, { maximumFractionDigits: 0 })} (~P${USD_TO_PHP_RATE}/$1)`,
       accent: [21, 128, 61] // Green
     },
     {

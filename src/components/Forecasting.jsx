@@ -8,6 +8,7 @@ import {
 import { exportForecastToExcel } from '../utils/excelParser';
 import { getPartCategory, getCategoryBadgeStyle } from '../utils/categoryFilter';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
+import { USD_TO_PHP_RATE } from '../constants/config';
 import ClearDataConfirmationModal from './ClearDataConfirmationModal';
 import {
   Download,
@@ -404,7 +405,7 @@ export default function Forecasting() {
                   ${executiveSummary.totalEstimatedSpend.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </div>
                 <div style={{ fontSize: '11px', color: '#64748b', marginTop: '1px' }}>
-                  Est. ₱{(executiveSummary.totalEstimatedSpend * 57).toLocaleString(undefined, { maximumFractionDigits: 0 })} PHP
+                  Est. ₱{(executiveSummary.totalEstimatedSpend * USD_TO_PHP_RATE).toLocaleString(undefined, { maximumFractionDigits: 0 })} PHP
                 </div>
               </div>
             </div>

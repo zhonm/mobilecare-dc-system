@@ -51,6 +51,7 @@ import {
   getShipmentCourierDisplay,
   getShipmentRiderName,
   resolveSiteBranchCode,
+  DECLARED_VALUE_EXCHANGE_RATE,
   calculateDeclaredValuePHP
 } from '../utils/shipmentHelpers';
 import { resolveSafeRegion } from '../constants/config';
@@ -532,7 +533,7 @@ export default function ScanOutPacking() {
     };
   }, []);
 
-  // Total Declared Value = sum of (part price × 85 PHP)
+  // Total Declared Value = sum of (part price × 100 PHP)
   const shipmentItems = currentShipment?.items;
   const totalDeclaredValuePHP = useMemo(() => {
     const items = shipmentItems;
@@ -2371,7 +2372,7 @@ export default function ScanOutPacking() {
               </span>
             </div>
             <div>
-              <div style={{ fontSize: '10px', color: '#a7f3d0' }}>Declared Value (85 PHP):</div>
+              <div style={{ fontSize: '10px', color: '#a7f3d0' }}>Declared Value ({DECLARED_VALUE_EXCHANGE_RATE} PHP):</div>
               <div style={{ fontSize: '14.5px', fontWeight: 800, color: '#34d399', fontFamily: 'var(--font-sans)', lineHeight: 1.2 }}>
                 ₱{totalDeclaredValuePHP.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>

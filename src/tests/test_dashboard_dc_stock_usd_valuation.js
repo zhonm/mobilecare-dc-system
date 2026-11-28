@@ -72,7 +72,7 @@ const groupedList = Array.from(groupedMap.values()).map(entry => {
   return {
     ...entry,
     totalValUSD: itemTotalVal,
-    totalValPHP: itemTotalVal * 57
+    totalValPHP: itemTotalVal * 63.76
   };
 });
 

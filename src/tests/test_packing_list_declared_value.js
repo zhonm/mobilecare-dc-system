@@ -72,8 +72,8 @@ console.log('  ✓ PASS: ZM661-30401 resolves to $379 USD');
 // --- Test 3: Total Declared Value Calculation ---
 console.log('\n--- Test 3: Total Declared Value Calculation ---');
 const totalPHP = calculateDeclaredValuePHP(testItems);
-// Expected: (99 + 379 + 379 + 99) * 85 = 956 * 85 = 81,260 PHP
-assert.strictEqual(totalPHP, 81260, 'Total Declared Value for DCOWNED#101926A must be exactly PHP 81,260.00');
+// Expected: (99 + 379 + 379 + 99) * 100 = 956 * 100 = 95,600 PHP
+assert.strictEqual(totalPHP, 95600, 'Total Declared Value for DCOWNED#101926A must be exactly PHP 95,600.00');
 console.log(`  ✓ PASS: calculateDeclaredValuePHP returned PHP ${totalPHP.toLocaleString('en-US', { minimumFractionDigits: 2 })} (matches UI preview!)`);
 
 // --- Test 4: PDF Generator Parity ---
@@ -93,13 +93,13 @@ for (let p = 1; p <= totalPages; p++) {
 
 // In jsPDF, text strings are embedded into the page stream
 const hasDeclaredValueHeader = renderedPdfText.includes('DECLARED VALUE');
-const hasCorrectValue = renderedPdfText.includes('81,260.00');
-const hasIncorrectValue = renderedPdfText.includes('64,260.00');
+const hasCorrectValue = renderedPdfText.includes('95,600.00');
+const hasOldValue = renderedPdfText.includes('81,260.00');
 
 assert.ok(hasDeclaredValueHeader, 'PDF must contain "DECLARED VALUE" block');
-assert.ok(hasCorrectValue, 'PDF must contain the correct declared value "81,260.00"');
-assert.strictEqual(hasIncorrectValue, false, 'PDF must NOT contain the incorrect value "64,260.00"');
-console.log('  ✓ PASS: Generated PDF contains "PHP 81,260.00" and does NOT contain "64,260.00"');
+assert.ok(hasCorrectValue, 'PDF must contain the correct declared value "95,600.00"');
+assert.strictEqual(hasOldValue, false, 'PDF must NOT contain the old 85x value "81,260.00"');
+console.log('  ✓ PASS: Generated PDF contains "PHP 95,600.00" and does NOT contain "81,260.00"');
 
 // --- Test 5: Excel (.xlsx) Export Parity ---
 console.log('\n--- Test 5: Excel (.xlsx) Export Parity ---');
@@ -108,8 +108,10 @@ const ws = workbook.getWorksheet('Packing List');
 assert.ok(ws, 'Worksheet "Packing List" must exist');
 
 const cellH7 = ws.getCell('H7').value;
-assert.strictEqual(cellH7, 81260, 'Excel cell H7 (DECLARED VALUE) must be exactly 81,260');
-console.log('  ✓ PASS: Excel cell H7 contains 81,260');
+assert.strictEqual(cellH7, 95600, 'Excel cell H7 (DECLARED VALUE) must be exactly 95,600');
+assert.strictEqual(ws.getCell('H10').value, 9900, 'Excel cell H10 (Battery 99 * 100) must be exactly 9,900');
+assert.strictEqual(ws.getCell('H11').value, 37900, 'Excel cell H11 (Display 379 * 100) must be exactly 37,900');
+console.log('  ✓ PASS: Excel cell H7 contains 95,600 and per-item PHP values match 100x rate');
 
 // --- Test 6: Item healing attaches stocking_price ---
 console.log('\n--- Test 6: Item healing attaches stocking_price ---');
@@ -121,12 +123,12 @@ console.log('  ✓ PASS: healShipmentItem attached stocking_price: 379');
 console.log('\n--- Test 7: 3-Item vs 4-Item Declared Value Parity ---');
 const items3 = testItems.slice(0, 3);
 const declaredVal3 = calculateDeclaredValuePHP(items3);
-assert.strictEqual(declaredVal3, 72845, '3 items must equal PHP 72,845.00 exactly');
+assert.strictEqual(declaredVal3, 85700, '3 items must equal PHP 85,700.00 exactly');
 const declaredVal4 = calculateDeclaredValuePHP(testItems);
-assert.strictEqual(declaredVal4, 81260, '4 items must equal PHP 81,260.00 exactly');
+assert.strictEqual(declaredVal4, 95600, '4 items must equal PHP 95,600.00 exactly');
 console.log(`  ✓ PASS: 3 items (without 2nd battery) = PHP ${declaredVal3.toLocaleString('en-US', { minimumFractionDigits: 2 })}`);
 console.log(`  ✓ PASS: 4 items (with 2nd battery) = PHP ${declaredVal4.toLocaleString('en-US', { minimumFractionDigits: 2 })}`);
-console.log('  ✓ PASS: Confirms PHP 72,845.00 occurred when 4th item was unsynced; synchronizing 4 items restores PHP 81,260.00');
+console.log('  ✓ PASS: Confirms PHP 85,700.00 occurred when 4th item was unsynced; synchronizing 4 items restores PHP 95,600.00');
 
 console.log('\n====================================================');
 console.log('RESULTS: ALL DECLARED VALUE TESTS PASSED (100%)');

@@ -64,12 +64,12 @@ console.log('\n--- 1. Executive Summary KPI Aggregations ---');
 const totalTransfers = mockTransfers.length;
 const totalUnits = mockTransfers.reduce((s, r) => s + r.transfer_quantity, 0);
 const totalVal = mockTransfers.reduce((s, r) => s + r.transfer_value, 0);
-const totalValPHP = totalVal * 57;
+const totalValPHP = totalVal * 63.76;
 
 assert.strictEqual(totalTransfers, 5, 'Total transfers count should be 5');
 assert.strictEqual(totalUnits, 27, 'Total units moved should be 27 (10+5+4+6+2)');
 assert.strictEqual(totalVal, 3953, 'Total valuation should be $3,953');
-assert.strictEqual(totalValPHP, 3953 * 57, 'Total PHP valuation should match 57x rate');
+assert.strictEqual(totalValPHP, 3953 * 63.76, 'Total PHP valuation should match 63.76x rate');
 console.log(`  ✓ PASS: Total Transfers: ${totalTransfers}, Units Moved: ${totalUnits}, USD: $${totalVal}, PHP: ₱${totalValPHP}`);
 
 // Test 2: Commodity Volume & Valuation Distribution
