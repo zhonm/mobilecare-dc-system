@@ -3,7 +3,7 @@ import seedData from '../data/seedData.json';
 import { supabase, clearStaleSupabaseAuthStorage } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { normalizeInventoryUnits, isProvincialSite } from '../utils/partResolver';
-import { resolveSafeRegion } from '../constants/config';
+import { resolveSafeRegion, normalizeCanonicalPartDescription } from '../constants/config';
 import { enrichSiteWithDirectory } from '../constants/branchDirectory.js';
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
 import {
@@ -38,7 +38,9 @@ import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import {
   generateAllocationsFromForecasts,
   deriveForecastItemsFromAllocations,
-  deriveForecastItemsFromMasterlist
+  deriveForecastItemsFromMasterlist,
+  sanitizeForecastItems,
+  sanitizeAllocations
 } from '../utils/allocationEngine';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { clearStoredUserSession } from '../utils/security';
@@ -2117,30 +2119,32 @@ export function useCloudSync({
 
               // Case 1: Snapshot has forecastItems
               if (Array.isArray(snap.forecastItems) && snap.forecastItems.length > 0) {
+                const cleanForecasts = sanitizeForecastItems(snap.forecastItems, snap.forecastingModel || 'linear');
                 const restoredAlloc = (snap.allocations && snap.allocations.length > 0)
-                  ? snap.allocations
-                  : generateAllocationsFromForecasts(snap.forecastItems, sites, snap.forecastingModel || 'linear');
+                  ? sanitizeAllocations(snap.allocations, sites, cleanForecasts, snap.forecastingModel || 'linear')
+                  : generateAllocationsFromForecasts(cleanForecasts, sites, snap.forecastingModel || 'linear');
 
                 startTransition(() => {
-                  setForecastItems(snap.forecastItems);
+                  setForecastItems(cleanForecasts);
                   setAllocations(restoredAlloc);
                 });
-                try { localStorage.setItem('mdc_forecast', JSON.stringify(snap.forecastItems)); } catch (e) {}
-                dbStorage.setItem('mdc_forecast', snap.forecastItems, { skipLocalStorage: true });
+                try { localStorage.setItem('mdc_forecast', JSON.stringify(cleanForecasts)); } catch (e) {}
+                dbStorage.setItem('mdc_forecast', cleanForecasts, { skipLocalStorage: true });
                 try { localStorage.setItem('mdc_allocations', JSON.stringify(restoredAlloc)); } catch (e) {}
                 dbStorage.setItem('mdc_allocations', restoredAlloc, { skipLocalStorage: true });
               }
               // Case 2: Snapshot has allocations but missing/empty forecastItems -> Derive forecastItems!
               else if (Array.isArray(snap.allocations) && snap.allocations.length > 0) {
-                const derivedForecast = deriveForecastItemsFromAllocations(snap.allocations, parts);
+                const cleanAllocations = sanitizeAllocations(snap.allocations, sites, [], snap.forecastingModel || 'linear');
+                const derivedForecast = sanitizeForecastItems(deriveForecastItemsFromAllocations(cleanAllocations, parts), snap.forecastingModel || 'linear');
                 startTransition(() => {
                   setForecastItems(derivedForecast);
-                  setAllocations(snap.allocations);
+                  setAllocations(cleanAllocations);
                 });
                 try { localStorage.setItem('mdc_forecast', JSON.stringify(derivedForecast)); } catch (e) {}
                 dbStorage.setItem('mdc_forecast', derivedForecast, { skipLocalStorage: true });
-                try { localStorage.setItem('mdc_allocations', JSON.stringify(snap.allocations)); } catch (e) {}
-                dbStorage.setItem('mdc_allocations', snap.allocations, { skipLocalStorage: true });
+                try { localStorage.setItem('mdc_allocations', JSON.stringify(cleanAllocations)); } catch (e) {}
+                dbStorage.setItem('mdc_allocations', cleanAllocations, { skipLocalStorage: true });
               }
               // Case 3: Snapshot has neither forecast nor allocations, but active masterlist exists for period -> Reconstitute from masterlist!
               else if (resolvedMasterlist && Array.isArray(resolvedMasterlist.partsSummary) && resolvedMasterlist.partsSummary.length > 0) {
@@ -5572,7 +5576,7 @@ export function useCloudSync({
 
             return {
               part_number: p.part_number,
-              description: p.description,
+              description: normalizeCanonicalPartDescription(p.description, p.part_number),
               iphone_model: p.iphone_model || '',
               stocking_price: p.stocking_price || 0,
               safety_stock_pct: p.safety_stock_pct || 0.05,

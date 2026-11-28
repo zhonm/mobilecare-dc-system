@@ -8,7 +8,9 @@ import {
   allocatePartToSites,
   getRowParityOffset,
   deriveForecastItemsFromAllocations,
-  deriveForecastItemsFromMasterlist
+  deriveForecastItemsFromMasterlist,
+  sanitizeForecastItems,
+  sanitizeAllocations
 } from '../utils/allocationEngine';
 import { calculateItemForecast } from '../utils/forecastEngine';
 import { isExplicitlyCleared } from '../utils/appContextHelpers';
@@ -42,7 +44,7 @@ export function useForecastingAndAllocation({
       const saved = localStorage.getItem('mdc_forecast');
       if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) return sanitizeForecastItems(parsed, 'linear');
       }
       // Bi-directional recovery: If forecast is empty but allocations exists, derive from allocations
       const savedAlloc = localStorage.getItem('mdc_allocations');
@@ -79,7 +81,7 @@ export function useForecastingAndAllocation({
       const saved = localStorage.getItem('mdc_allocations');
       if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) return sanitizeAllocations(parsed, sites, [], 'linear');
       }
       // If allocations is empty but forecast is present, generate immediately
       const savedForecast = localStorage.getItem('mdc_forecast');

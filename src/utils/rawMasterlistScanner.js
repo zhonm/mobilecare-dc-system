@@ -2,7 +2,7 @@ import rawDataAugust from '../data/rawMasterlistData_august.json' with { type: '
 import rawDataOctober from '../data/rawMasterlistData_october.json' with { type: 'json' };
 import rawData from '../data/rawMasterlistData.json' with { type: 'json' };
 import { isPartMatchingCategoryFilter } from './categoryFilter.js';
-import { USD_TO_PHP_RATE } from '../constants/config.js';
+import { USD_TO_PHP_RATE, normalizeCanonicalPartDescription } from '../constants/config.js';
 
 // rawMasterlistData.json is the canonical September 2026 baseline dataset
 const rawDataSeptember = rawData;
@@ -418,12 +418,13 @@ export function scanKgbMasterlistData(kgbRecords, options = {}) {
     const r = kgbRecords[i];
     if (!r) continue;
 
-    const desc = String(
-      r.productDescription || r.product_description || r.description || r.raw_part_description || r['Product Description'] || ''
-    ).trim();
     const pn = String(
       r.productCode || r.product_code || r.partNumber || r.part_number || r.raw_part_number || r['Product Code'] || ''
     ).trim().toUpperCase();
+    const desc = normalizeCanonicalPartDescription(
+      r.productDescription || r.product_description || r.description || r.raw_part_description || r['Product Description'] || '',
+      pn
+    );
     const site = String(
       r.rawLocation || r.siteName || r.location_name || r.raw_site_name || r.site_name || r['Location Name'] || 'Branch Site'
     ).trim();

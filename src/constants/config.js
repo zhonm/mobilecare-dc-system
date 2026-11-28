@@ -135,9 +135,31 @@ export const CANONICAL_BATTERY_DESCS = [
   'Battery, iPhone 17',
   'Battery, iPhone Air',
   'Battery, pSIM, iPhone 17 Pro',
-  'Battery, pSIM, iPhone 17 Pro Max',
-  'SVC,IPHONE 14 PRO MAX, BATTERY'
+  'Battery, pSIM, iPhone 17 Pro Max'
 ];
+
+/**
+ * Normalizes non-standard SVC aliases for canonical iPhone parts back to their
+ * standard catalog description (e.g. "SVC,IPHONE 14 PRO MAX, BATTERY" -> "Battery, iPhone 14 Pro Max").
+ * Prevents duplicate/conflicting rows sharing part number 661-30397 from overwriting
+ * standard iPhone 14 Pro Max Battery forecasts and allocations.
+ */
+export function normalizeCanonicalPartDescription(desc = '', partNumber = '') {
+  const cleanDesc = String(desc || '').trim();
+  const cleanPn = String(partNumber || '').trim().toUpperCase();
+  const upperDesc = cleanDesc.toUpperCase();
+
+  // Normalize any SVC alias for iPhone 14 Pro Max Battery (661-30397)
+  if (
+    /^SVC\s*,\s*IPHONE\s*14\s*PRO\s*MAX\s*,\s*BATTERY$/i.test(cleanDesc) ||
+    /^SVC\s*,\s*BATTERY\s*,\s*IPHONE\s*14\s*PRO\s*MAX$/i.test(cleanDesc) ||
+    (cleanPn === '661-30397' && upperDesc.includes('SVC') && upperDesc.includes('BATTERY'))
+  ) {
+    return 'Battery, iPhone 14 Pro Max';
+  }
+
+  return cleanDesc;
+}
 
 export const CANONICAL_BATTERY_SHARE_DESCS = [
   'Battery, iPhone 13',

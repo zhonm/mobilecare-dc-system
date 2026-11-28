@@ -16,7 +16,7 @@ import { getPartCategory } from './categoryFilter.js';
 import { getShipmentRiderName, getShipmentCourierDisplay, DECLARED_VALUE_EXCHANGE_RATE, calculateDeclaredValuePHP, resolveItemStockingPrice, getPackingListFileName } from './shipmentHelpers.js';
 import { OFFICIAL_BRANCH_DIRECTORY } from '../constants/branchDirectory.js';
 import { normalizeSite, lookupSheet35StockPrice } from './siteTransfersReconciler.js';
-import { resolveSafeRegion, getCanonicalSiteSortIndex } from '../constants/config.js';
+import { resolveSafeRegion, getCanonicalSiteSortIndex, normalizeCanonicalPartDescription } from '../constants/config.js';
 
 export function isForecastingMatrixSheet(rows) {
   for (let r = 0; r < Math.min(6, rows.length); r++) {
@@ -242,8 +242,7 @@ export const CANONICAL_BATTERY_DESCS = [
   'Battery, iPhone 17',
   'Battery, iPhone Air',
   'Battery, pSIM, iPhone 17 Pro',
-  'Battery, pSIM, iPhone 17 Pro Max',
-  'SVC,IPHONE 14 PRO MAX, BATTERY'
+  'Battery, pSIM, iPhone 17 Pro Max'
 ];
 
 export const CANONICAL_BATTERY_SHARE_DESCS = [
@@ -291,14 +290,14 @@ export const CANONICAL_SEPTEMBER_2026_FORECASTS = {
   'Display, iPhone 17e': 0,
   'Display, iPhone Air': 2,
 
-  // Batteries (20 Models -> Total: 438 units, $40,899.00)
+  // Batteries (19 Models -> Total: 438 units, $40,899.00)
   'Battery, iPhone 13': 234,
   'Battery, iPhone 13 Pro': 24,
   'Battery, iPhone 13 Pro Max': 31,
   'Battery, iPhone 14': 9,
   'Battery, iPhone 14 Plus': 3,
   'Battery, iPhone 14 Pro': 25,
-  'Battery, iPhone 14 Pro Max': 35,
+  'Battery, iPhone 14 Pro Max': 36,
   'Battery, iPhone 15': 15,
   'Battery, iPhone 15 Plus': 3,
   'Battery, iPhone 15 Pro': 25,
@@ -310,8 +309,7 @@ export const CANONICAL_SEPTEMBER_2026_FORECASTS = {
   'Battery, iPhone 17': 6,
   'Battery, iPhone Air': 1,
   'Battery, pSIM, iPhone 17 Pro': 0,
-  'Battery, pSIM, iPhone 17 Pro Max': 1,
-  'SVC,IPHONE 14 PRO MAX, BATTERY': 1
+  'Battery, pSIM, iPhone 17 Pro Max': 1
 };
 
 export const CANONICAL_AUGUST_2026_FORECASTS = {
@@ -1068,7 +1066,7 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
 
       // 1. Left Table: Battery
       const pnBat = String(row[0] || '').trim();
-      const descBat = String(row[1] || '').trim();
+      const descBat = normalizeCanonicalPartDescription(row[1], pnBat);
       if (pnBat && descBat && isTargetIPhonePart(descBat, pnBat, filterScope)) {
         const rawVals = leftMonthCols.map(mc => parseInt(row[mc.colIdx]) || 0);
         let targetValue = 0;
@@ -1183,7 +1181,7 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
       if (!row || row.length === 0) continue;
 
       const pn = String(row[pnCol] || '').trim();
-      const desc = String(row[descCol] || '').trim();
+      const desc = normalizeCanonicalPartDescription(row[descCol], pn);
       if (!pn && !desc) continue;
 
       if (!isTargetIPhonePart(desc, pn, filterScope)) continue;
@@ -1239,7 +1237,50 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
     }
   }
 
-  return { forecastItems, parts };
+  // Merge any duplicate part numbers (e.g. standard + SVC alias for 661-30397)
+  // so that neither row overwrites the other downstream
+  const mergedForecastMap = new Map();
+  forecastItems.forEach(item => {
+    const key = String(item.part_number || '').trim().toUpperCase() || item.description.trim().toLowerCase();
+    if (!mergedForecastMap.has(key)) {
+      mergedForecastMap.set(key, { ...item });
+    } else {
+      const existing = mergedForecastMap.get(key);
+      const maxLen = Math.max(existing.ytd_monthly_counts?.length || 0, item.ytd_monthly_counts?.length || 0);
+      const mergedCounts = Array.from({ length: maxLen }, (_, idx) =>
+        (Number(existing.ytd_monthly_counts?.[idx]) || 0) + (Number(item.ytd_monthly_counts?.[idx]) || 0)
+      );
+      const mergedForecast = mergedCounts.length > 0
+        ? calculateLinearRegressionForecast(mergedCounts, mergedCounts.length + 1)
+        : (Number(existing.computed_forecast) || 0) + (Number(item.computed_forecast) || 0);
+      const rec = calculateRecommendedOrder(mergedForecast, 0.05);
+      mergedForecastMap.set(key, {
+        ...existing,
+        description: normalizeCanonicalPartDescription(existing.description, existing.part_number),
+        ytd_monthly_counts: mergedCounts,
+        computed_forecast: mergedForecast,
+        final_forecast: mergedForecast,
+        safety_stock_units: rec.safetyUnits,
+        recommended_order: rec.recommendedOrder
+      });
+    }
+  });
+
+  const mergedPartsMap = new Map();
+  parts.forEach(p => {
+    const key = String(p.part_number || '').trim().toUpperCase() || p.description.trim().toLowerCase();
+    if (!mergedPartsMap.has(key)) {
+      mergedPartsMap.set(key, {
+        ...p,
+        description: normalizeCanonicalPartDescription(p.description, p.part_number)
+      });
+    }
+  });
+
+  return {
+    forecastItems: Array.from(mergedForecastMap.values()),
+    parts: Array.from(mergedPartsMap.values())
+  };
 }
 
 /**
@@ -1318,7 +1359,7 @@ export function parseAllocationSheet(rawRows, existingSites = [], existingPartsO
     }
 
     const pn = String(row[pnCol] || '').trim();
-    const desc = String(row[descCol] || '').trim();
+    const desc = normalizeCanonicalPartDescription(row[descCol], pn);
     if (!pn && !desc) continue;
     if (seenPns.has(pn)) continue; // Avoid duplicate parts from lower share tables
 
@@ -1511,7 +1552,7 @@ export function processRawUsageSheet(
     }
 
     const cleanPn = rawPn ? rawPn.toUpperCase() : `PART-${r}`;
-    const cleanDesc = rawDesc.trim();
+    const cleanDesc = normalizeCanonicalPartDescription(rawDesc, cleanPn);
 
     // Site matching
     const matchedSite = activeServiceSites.find(s =>

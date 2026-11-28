@@ -5,7 +5,8 @@ import {
   CANONICAL_BATTERY_DESCS,
   CANONICAL_BATTERY_SHARE_DESCS,
   resolveSafeRegion,
-  getCanonicalSiteSortIndex
+  getCanonicalSiteSortIndex,
+  normalizeCanonicalPartDescription
 } from '../constants/config.js';
 
 // Number of Display rows in the canonical Excel block.
@@ -1105,7 +1106,7 @@ export function deriveForecastItemsFromMasterlist(masterlistData, _options = {})
       id: `fc-ml-${cleanPn}-${idx}`,
       part_id: `part-ml-${cleanPn}`,
       part_number: p.part_number || cleanPn,
-      description: desc,
+      description: normalizeCanonicalPartDescription(desc, cleanPn),
       category_id: catId,
       stocking_price: price,
       computed_forecast: qty,
@@ -1118,5 +1119,211 @@ export function deriveForecastItemsFromMasterlist(masterlistData, _options = {})
         : (p.monthlyBreakdown ? Object.values(p.monthlyBreakdown) : [])
     };
   });
+}
+
+/**
+ * Normalizes and deduplicates forecastItems so legacy "SVC,IPHONE 14 PRO MAX, BATTERY"
+ * rows are consolidated into the standard "Battery, iPhone 14 Pro Max" (661-30397) row
+ * without losing monthly history or forecast quantities.
+ */
+export function sanitizeForecastItems(forecastList = [], activeModel = 'linear') {
+  if (!Array.isArray(forecastList) || forecastList.length === 0) return forecastList || [];
+
+  const result = [];
+  let idx14Pm = -1;
+
+  for (const item of forecastList) {
+    if (!item) continue;
+    const cleanPn = String(item.part_number || '').trim().toUpperCase();
+    const normDesc = normalizeCanonicalPartDescription(item.description, cleanPn);
+    const is14PmBatt =
+      cleanPn === '661-30397' ||
+      normDesc.toLowerCase() === 'battery, iphone 14 pro max';
+
+    if (!is14PmBatt) {
+      result.push(item);
+      continue;
+    }
+
+    const normalizedItem = {
+      ...item,
+      part_id: item.part_id || 'part-661-30397',
+      part_number: cleanPn || '661-30397',
+      description: 'Battery, iPhone 14 Pro Max',
+      category_id: 'cat-battery'
+    };
+
+    if (idx14Pm === -1) {
+      idx14Pm = result.length;
+      result.push(normalizedItem);
+    } else {
+      const existing = result[idx14Pm];
+      const countsA = Array.isArray(existing.ytd_monthly_counts) ? existing.ytd_monthly_counts : [];
+      const countsB = Array.isArray(normalizedItem.ytd_monthly_counts) ? normalizedItem.ytd_monthly_counts : [];
+      const maxLen = Math.max(countsA.length, countsB.length);
+      const mergedCounts = Array.from({ length: maxLen }, (_, i) =>
+        (Number(countsA[i]) || 0) + (Number(countsB[i]) || 0)
+      );
+
+      const mergedForCalc = { ...existing, ytd_monthly_counts: mergedCounts };
+      const computed = mergedCounts.length > 0
+        ? calculateItemForecast(mergedForCalc, activeModel, mergedCounts.length)
+        : (Number(existing.computed_forecast) || 0) + (Number(normalizedItem.computed_forecast) || 0);
+
+      const hasOverrideA = existing.admin_override !== null && existing.admin_override !== undefined && existing.admin_override !== '';
+      const hasOverrideB = normalizedItem.admin_override !== null && normalizedItem.admin_override !== undefined && normalizedItem.admin_override !== '';
+      const resolvedOverride = hasOverrideA ? existing.admin_override : (hasOverrideB ? normalizedItem.admin_override : null);
+      const finalVal = resolvedOverride !== null ? parseInt(resolvedOverride, 10) : computed;
+
+      result[idx14Pm] = {
+        ...existing,
+        part_id: 'part-661-30397',
+        part_number: '661-30397',
+        description: 'Battery, iPhone 14 Pro Max',
+        category_id: 'cat-battery',
+        stocking_price: existing.stocking_price || normalizedItem.stocking_price || 99,
+        exchange_price: existing.exchange_price || normalizedItem.exchange_price || 51,
+        ytd_monthly_counts: mergedCounts,
+        computed_forecast: computed,
+        admin_override: resolvedOverride,
+        final_forecast: finalVal,
+        safety_stock_units: Math.ceil(finalVal * 0.05),
+        recommended_order: finalVal
+      };
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Normalizes and deduplicates allocations so legacy "SVC,IPHONE 14 PRO MAX, BATTERY"
+ * rows are consolidated into the standard "Battery, iPhone 14 Pro Max" (661-30397) row,
+ * and repairs missing branch allocations if the matching forecast item has > 0 demand.
+ */
+export function sanitizeAllocations(allocList = [], sitesList = [], forecastList = [], activeModel = 'linear') {
+  if (!Array.isArray(allocList) || allocList.length === 0) return allocList || [];
+
+  const activeServiceSites = (sitesList || []).filter(s =>
+    !s.is_dc &&
+    !s.code?.toUpperCase().includes('DC') &&
+    !s.code?.toUpperCase().includes('MOBILEC') &&
+    !s.name?.toLowerCase().includes('distribution') &&
+    s.code !== 'DC-MDC'
+  );
+
+  const result = [];
+  let idx14Pm = -1;
+
+  for (const item of allocList) {
+    if (!item) continue;
+    const cleanPn = String(item.part_number || '').trim().toUpperCase();
+    const normDesc = normalizeCanonicalPartDescription(item.description, cleanPn);
+    const is14PmBatt =
+      cleanPn === '661-30397' ||
+      normDesc.toLowerCase() === 'battery, iphone 14 pro max';
+
+    if (!is14PmBatt) {
+      result.push(item);
+      continue;
+    }
+
+    const normalizedItem = {
+      ...item,
+      part_id: item.part_id || 'part-661-30397',
+      part_number: cleanPn || '661-30397',
+      description: 'Battery, iPhone 14 Pro Max',
+      category_id: 'cat-battery'
+    };
+
+    if (idx14Pm === -1) {
+      idx14Pm = result.length;
+      result.push(normalizedItem);
+    } else {
+      const existing = result[idx14Pm];
+      const mergedSiteQty = { ...(existing.site_quantities || {}) };
+      if (normalizedItem.site_quantities && typeof normalizedItem.site_quantities === 'object') {
+        Object.entries(normalizedItem.site_quantities).forEach(([k, v]) => {
+          mergedSiteQty[k] = (Number(mergedSiteQty[k]) || 0) + (Number(v) || 0);
+        });
+      }
+      const mergedTotalAlloc = (Number(existing.total_allocated_qty) || 0) + (Number(normalizedItem.total_allocated_qty) || 0);
+      const mergedForecastQty = (Number(existing.forecasted_qty) || 0) + (Number(normalizedItem.forecasted_qty) || 0);
+      const price = existing.stocking_price || normalizedItem.stocking_price || 99;
+      const totalCost = mergedTotalAlloc * price;
+      const split = calculateWeeklySplit(mergedTotalAlloc, totalCost, idx14Pm + 4);
+
+      result[idx14Pm] = {
+        ...existing,
+        part_id: 'part-661-30397',
+        part_number: '661-30397',
+        description: 'Battery, iPhone 14 Pro Max',
+        category_id: 'cat-battery',
+        stocking_price: price,
+        exchange_price: existing.exchange_price || normalizedItem.exchange_price || 51,
+        forecasted_qty: mergedForecastQty,
+        total_allocated_qty: mergedTotalAlloc,
+        total_stock_cost: totalCost,
+        w1_qty: split.w1_qty,
+        w2_qty: split.w2_qty,
+        w3_qty: split.w3_qty,
+        w4_qty: split.w4_qty,
+        w1_cost: split.w1_cost,
+        w2_cost: split.w2_cost,
+        w3_cost: split.w3_cost,
+        w4_cost: split.w4_cost,
+        site_quantities: mergedSiteQty,
+        remarks: getOrderRemark(mergedTotalAlloc)
+      };
+    }
+  }
+
+  // Self-heal: if 661-30397 exists with 0 allocation but has a positive forecast, regenerate its site distribution
+  if (idx14Pm >= 0 && activeServiceSites.length > 0) {
+    const row = result[idx14Pm];
+    const matchedForecast = (forecastList || []).find(f =>
+      String(f?.part_number || '').trim().toUpperCase() === '661-30397' ||
+      normalizeCanonicalPartDescription(f?.description, f?.part_number).toLowerCase() === 'battery, iphone 14 pro max'
+    );
+    const targetQty = matchedForecast
+      ? (matchedForecast.final_forecast ?? matchedForecast.computed_forecast ?? calculateItemForecast(matchedForecast, activeModel))
+      : (row.forecasted_qty || 0);
+
+    if (targetQty > 0 && (Number(row.total_allocated_qty) || 0) === 0) {
+      const allocResults = allocatePartToSites(targetQty, matchedForecast || row, activeServiceSites, row);
+      const sq = {};
+      let tAlloc = 0;
+      allocResults.forEach(res => {
+        sq[res.siteId] = res.allocatedQty;
+        const sObj = activeServiceSites.find(s => s.id === res.siteId);
+        if (sObj?.code) sq[sObj.code] = res.allocatedQty;
+        tAlloc += res.allocatedQty;
+      });
+      const price = row.stocking_price || matchedForecast?.stocking_price || 99;
+      const totalCost = tAlloc * price;
+      const split = calculateWeeklySplit(tAlloc, totalCost, idx14Pm + 4);
+      const repaired = {
+        ...row,
+        forecasted_qty: targetQty,
+        stocking_price: price,
+        total_allocated_qty: tAlloc,
+        total_stock_cost: totalCost,
+        w1_qty: split.w1_qty,
+        w2_qty: split.w2_qty,
+        w3_qty: split.w3_qty,
+        w4_qty: split.w4_qty,
+        w1_cost: split.w1_cost,
+        w2_cost: split.w2_cost,
+        w3_cost: split.w3_cost,
+        w4_cost: split.w4_cost,
+        site_quantities: sq,
+        remarks: getOrderRemark(tAlloc)
+      };
+      repaired.weekly_site_quantities = calculateWeeklySiteAllocations(repaired, activeServiceSites, idx14Pm + 4);
+      result[idx14Pm] = repaired;
+    }
+  }
+
+  return result;
 }
 
