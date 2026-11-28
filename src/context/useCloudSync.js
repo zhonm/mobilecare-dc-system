@@ -678,8 +678,8 @@ export function useCloudSync({
                 return { data: cachedUnits, error: null, fromCache: true };
               }
 
-              // Incremental Delta Sync: only fetch rows updated after localInvUpdatedAt when no hard-deletes occurred
-              if (totalDbCount === null || totalDbCount >= cachedUnits.length) {
+              // Incremental Delta Sync: only fetch rows updated after localInvUpdatedAt when remote timestamp actually advanced
+              if (remoteUpdatedAt > localInvUpdatedAt && (totalDbCount === null || totalDbCount >= cachedUnits.length)) {
                 const deltaRows = [];
                 let deltaError = null;
                 for (let offset = 0; ; offset += pageSize) {
@@ -753,6 +753,12 @@ export function useCloudSync({
           if (!useStarFallback && response.error && (response.error.code === '42703' || response.error.message?.includes('does not exist'))) {
             useStarFallback = true;
             response = await buildQuery('*');
+          }
+
+          // Retry once after brief backoff on transient 500 / timeout errors so one momentary DB hiccup doesn't restart the whole sync
+          if (response.error && (response.status >= 500 || response.error.code === '57014' || /timeout|fetch|network/i.test(response.error.message || ''))) {
+            await new Promise((resolve) => setTimeout(resolve, 600));
+            response = await buildQuery(useStarFallback ? '*' : INVENTORY_COLUMNS);
           }
 
           if (response.error) return response;
